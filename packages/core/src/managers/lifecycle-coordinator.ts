@@ -49,50 +49,70 @@ export class LifecycleCoordinator {
     const managedAgent = this.deps.registry.get(id);
     if (!managedAgent) return;
 
-    this.deps.clearAgentScope(id);
+    // Every synchronous step is best-effort. A throwing teardown hook used to abort this method
+    // before `registry.delete`, leaving a half-destroyed agent still registered (a retry hit the
+    // same failure) AND skipping the async teardown that releases extensions, background work,
+    // persistence and the log sink. Failure detail is already reported per phase on the bus.
+    const attempt = (fn: () => void): void => {
+      try {
+        fn();
+      } catch {
+        // continue: one failed hook must not strand the rest of the teardown
+      }
+    };
 
+    attempt(() => this.deps.clearAgentScope(id));
     // Force-kill MCP child processes synchronously to prevent orphans on exit.
-    managedAgent.getMcpManager()?.forceKill();
+    attempt(() => managedAgent.getMcpManager()?.forceKill());
     // A debounced memory-index refresh can outlive the agent and write after teardown.
-    managedAgent.getMemoryManager?.()?.dispose();
+    attempt(() => managedAgent.getMemoryManager?.()?.dispose());
     // A completed list schedules a 3s auto-clear that notifies listeners; after destroy that
     // would publish `session:todos` from a removed agent.
-    managedAgent.getTodoManager?.()?.dispose();
+    attempt(() => managedAgent.getTodoManager?.()?.dispose());
 
     // Before the abort: the compaction `finally` and any queued pump unwind asynchronously and must
     // see "destroyed", not "stopped", or they resume a run on an agent that is being removed.
-    managedAgent.markDestroyed();
-    managedAgent.sessionLease.beginDrain();
-    managedAgent.abort(SUBAGENT_ABORT_REASONS.agentDestroyed);
+    attempt(() => managedAgent.markDestroyed());
+    attempt(() => managedAgent.sessionLease.beginDrain());
+    attempt(() => managedAgent.abort(SUBAGENT_ABORT_REASONS.agentDestroyed));
 
     // Destroy all subagents first.
-    for (const childId of [...managedAgent.childIds]) {
-      this.destroy(childId);
+    const childIds = [...managedAgent.childIds];
+    for (const childId of childIds) {
+      attempt(() => this.destroy(childId));
     }
 
     // Remove from the tree before deleting the registry entry.
-    if (managedAgent.parentId) {
-      this.deps.registry.unlinkChild(managedAgent.parentId, id);
+    const parentId = managedAgent.parentId;
+    if (parentId) {
+      attempt(() => this.deps.registry.unlinkChild(parentId, id));
       // The row is gone from the parent's task list (the emit below), so its phase record has no
       // reader. Children are NOT destroyed at task end by default (`autoDestroy: false`, the preview
       // stays), which is why the phase usually lives until the session switch — but a host that does
       // destroy one must not leave the record behind.
-      if (managedAgent.parentTaskId) {
-        const parent = this.deps.registry.get(managedAgent.parentId);
-        if (parent) clearTaskRuns(parent, managedAgent.parentTaskId);
-      }
-      managedAgent.emitEvent(
-        "subagent:destroyed",
-        { subagentId: id, parentTaskToolCallId: managedAgent.parentTaskId },
-        { parentId: managedAgent.parentId }
-      );
+      attempt(() => {
+        if (managedAgent.parentTaskId) {
+          const parent = this.deps.registry.get(parentId);
+          if (parent) clearTaskRuns(parent, managedAgent.parentTaskId);
+        }
+        managedAgent.emitEvent(
+          "subagent:destroyed",
+          { subagentId: id, parentTaskToolCallId: managedAgent.parentTaskId },
+          { parentId }
+        );
+      });
     }
 
     // Emit the interceptable session:shutdown first, then deactivate/destroy all extensions. The
     // flush is chained after teardown: landing the sink while a deactivate() flush could still be
     // pending loses the final batch. Releasing earlier also sends final extension work into a
     // retained buffer nothing can drain.
-    const runner = managedAgent.getExtensionRunner();
+    let runner: ReturnType<typeof managedAgent.getExtensionRunner>;
+    try {
+      runner = managedAgent.getExtensionRunner();
+    } catch {
+      runner = null;
+    }
     const teardown = (async () => {
       try {
         // A switch can still be between its awaits. Let it finish before closing persistence,
@@ -178,14 +198,25 @@ export class LifecycleCoordinator {
     // be removed, and `resolveMeta` cannot answer for a retained log afterwards.
     // Optional-call: structural hosts (validators, embedded harnesses) drive this coordinator with
     // a fake that has no envelope accessor; attribution is an improvement, not a requirement.
-    this.deps.retainLog?.(id, managedAgent.log, managedAgent.getEventContext?.());
-    this.deps.registry.delete(id);
+    try {
+      this.deps.retainLog?.(id, managedAgent.log, managedAgent.getEventContext?.());
+    } finally {
+      // The registry entry must go even if the log snapshot throws: keeping it means a retry runs
+      // this same teardown against an already-destroyed agent.
+      this.deps.registry.delete(id);
+    }
   }
 
   /** Destroy all root agents (and therefore their subagents). */
   reset(): void {
     for (const agent of this.deps.registry.roots()) {
-      this.destroy(agent.id);
+      // One root's failure must not prevent the remaining roots from being destroyed; `destroy`
+      // already contains its own steps, but `roots()` itself can hand back a half-removed tree.
+      try {
+        this.destroy(agent.id);
+      } catch {
+        // continue with the next root
+      }
     }
   }
 

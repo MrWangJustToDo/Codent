@@ -108,7 +108,7 @@ export interface AgentLogFileSinkOptions {
 /** One persistence failure, as reported by the sink's {@link AgentLogFileSinkOptions.onPersistError}. */
 export interface LogPersistErrorInfo {
   /** Which gate rejected the bytes. */
-  stage: "schema" | "serialize" | "write" | "write-sync";
+  stage: "open" | "schema" | "serialize" | "write" | "write-sync";
   error: string;
   /** Buffered lines the retry cap had to drop because of this failure (0 on the first failure). */
   dropped: number;

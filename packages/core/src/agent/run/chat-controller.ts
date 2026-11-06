@@ -550,7 +550,15 @@ export class AgentChatController {
     return true;
   }
 
-  async sendMessage(content: string | ContentPart[]): Promise<SendMessageOutcome> {
+  /**
+   * @param options.awaitTurn - When `false`, resolve as soon as the pump is ENQUEUED. Protocol
+   *   dispatch uses this: a command's receipt means "accepted", not "the run ended". Defaults to
+   *   `true`, which the internal pump-driving callers and the validators rely on.
+   */
+  async sendMessage(
+    content: string | ContentPart[],
+    options: { awaitTurn?: boolean } = {}
+  ): Promise<SendMessageOutcome> {
     // User-authored text must not forge compaction checkpoint markers (see
     // assertNotCompactionSummaryInput in agent/compaction).
     assertNotCompactionSummaryInput(content);
@@ -572,7 +580,8 @@ export class AgentChatController {
     this.applyCancelledIncompleteTools();
     this.channel.addUserMessage(content);
     this.persistMessages("user-message");
-    await this.enqueueRunOnce();
+    if (options.awaitTurn === false) this.startRun();
+    else await this.enqueueRunOnce();
     return "sent";
   }
 
@@ -647,7 +656,8 @@ export class AgentChatController {
 
   async addToolResult(
     toolCallId: string,
-    output: Record<string, unknown>
+    output: Record<string, unknown>,
+    options: { awaitTurn?: boolean } = {}
   ): Promise<"accepted" | "switching" | "rejected"> {
     // A client-tool answer (`ask_user`) belongs to the question the leaving turn asked.
     if (this.dropIfSwitching("add-tool-result")) return "switching";
@@ -687,7 +697,8 @@ export class AgentChatController {
     // between the answer and the resumed pump's persist, leaving an unanswered `ask_user` on disk
     // while the host already reported the answer sent.
     this.persistMessages("user-message");
-    await this.enqueueRunOnce();
+    if (options.awaitTurn === false) this.startRun();
+    else await this.enqueueRunOnce();
     return "accepted";
   }
 
@@ -768,6 +779,20 @@ export class AgentChatController {
     };
     this.runChain = this.runChain.then(run, run);
     return this.runChain;
+  }
+
+  /**
+   * Fire the queued pump without waiting for the turn to finish.
+   *
+   * A command's receipt means "accepted", not "the run ended". Awaiting the pump made `send` and
+   * `addToolResult` hang for the whole agent loop — a `--remote-session` client behind the ~300s
+   * HTTP header timeout then reported a failure for a message the agent was already answering, and
+   * a host that retries on failure duplicated it. The pump owns its own failure path
+   * (`agent:stream-error` + terminal finalize), so its rejection is not the command's to report;
+   * the catch only prevents an unhandled rejection.
+   */
+  private startRun(): void {
+    void this.enqueueRunOnce().catch(() => undefined);
   }
 
   private drainSteerIntoChannel(): boolean {

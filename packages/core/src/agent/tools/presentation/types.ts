@@ -45,8 +45,6 @@ export interface ToolPresentation {
    * {@link ToolPresentation.keepRow} to own the row.
    */
   text?: (output: unknown) => string | undefined;
-  /** Header input text; `compact` marks compact display (callers shorten further). */
-  input?: (input: unknown, opts: { compact: boolean }) => string | undefined;
   /** Declarative label source (input field name) for hosts that cannot call `label`. */
   labelKey?: string;
 }

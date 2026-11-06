@@ -1236,6 +1236,10 @@ export class ExtensionRunner {
       this.turnContextSections.setSectionNotice(instance.api.id, name, body);
     }
     instance.disabledSections = [...(disabledSections?.keys() ?? [])];
+    // A disabled instance is not a broken one: keeping the previous activation's error made the
+    // management panel read "inactive + failed to activate (…)" forever, as if the state were
+    // current. A teardown failure is reported through the returned message and the bus event.
+    if (teardownError === undefined) instance.error = undefined;
     this.options.onExtensionDisabled?.(instance.api.id, notice);
     return teardownError === undefined
       ? { ok: true, message: `Extension "${id}" disabled` }

@@ -79,24 +79,18 @@ export interface LogFileSink {
   dir?: string;
 }
 
-/** A sink that does nothing — used when the environment cannot write. */
-function inertSink(): LogFileSink {
-  const noop = (): void => {};
-  return { handleEntry: noop, flush: async () => {}, flushSync: noop, detach: async () => {} };
-}
-
-/** Build a JSONL file sink writing to `options.dir`. */
-export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSink {
+/** Build a JSONL file sink writing to `options.dir`, or null when the environment cannot append. */
+export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSink | null {
   let env: ResolvedCoreEnv;
   try {
     // The owning runtime's env when supplied; ambient only for standalone/legacy callers.
     env = options.env ?? getEnv();
   } catch {
-    return inertSink(); // CoreEnv not registered
+    return null; // CoreEnv not registered
   }
   const envFs = env.fs;
   const appendFile = envFs.appendFile;
-  if (!appendFile) return inertSink(); // no append support
+  if (!appendFile) return null; // no append support
 
   const dir = options.dir;
   // Age-based retention for the whole log root (once per process per workspace). The active file is

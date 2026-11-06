@@ -29,7 +29,7 @@
 import { isTerminalStatus } from "../../runtime-types/agent-status.js";
 
 import type { EmitAgentTelemetryFn } from "../../runtime-types/agent-events.js";
-import type { AgentStateEventType, AgentTransitionEvent } from "../../runtime-types/agent-state.js";
+import type { AgentState, AgentStateEventType, AgentTransitionEvent } from "../../runtime-types/agent-state.js";
 import type { AgentStatus } from "../../runtime-types/agent-status.js";
 
 export type CompactionKind = "auto" | "manual" | "reactive";
@@ -73,6 +73,16 @@ export interface CompactionControllerDeps {
   setStatus: (status: AgentStatus, event?: AgentStateEventType) => void;
   /** The single state writer; compaction is a run phase, not a status of its own. */
   transition?: (event: AgentTransitionEvent) => AgentStatus;
+  /**
+   * The state axes, when `transition` owns the state.
+   *
+   * The restore guard must read the run phase (`run === "compacting"`), not the projected status:
+   * a failure that lands while the lease owns the run keeps `run: "compacting"` and sets
+   * `outcome: "error"`, and `projectAgentStatus` reports `error` for that combination. Reading the
+   * projection here then skipped the restore, `compaction-end` was never dispatched, and the agent
+   * stayed wedged (a new run and a new compaction both rejected).
+   */
+  getAgentState?: () => AgentState;
   /**
    * Clear the last error when a compaction restores a terminal status to `idle`.
    *
@@ -313,9 +323,16 @@ export class CompactionController {
   }
 
   private restoreStatusFor(kind: CompactionKind, previous: AgentStatus | undefined): void {
-    // Only an owner may restore, and only from the status it published. A cancel (aborted), a
+    // Only an owner may restore, and only from the phase it published. A cancel (aborted), a
     // session switch (reset) or a newer run (running) already moved on.
-    if (this.deps.getStatus() !== "compacting") return;
+    //
+    // Ownership is the run phase, NOT the projection: an error that lands during compaction keeps
+    // `run: "compacting"` (the lease still owns it) while the projection becomes `error`. Using the
+    // projection here made a failed compaction skip its own restore forever — `prepare` and the next
+    // `compaction-start` were both rejected, so every following turn ended in error.
+    const state = this.deps.getAgentState?.();
+    const ownsPhase = state ? state.run === "compacting" : this.deps.getStatus() === "compacting";
+    if (!ownsPhase) return;
     if (this.deps.transition) {
       const terminalPrevious =
         previous !== undefined && isTerminalStatus(previous) && previous !== "waiting" && previous !== "awaiting_user";

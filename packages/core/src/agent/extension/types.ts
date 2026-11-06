@@ -321,7 +321,8 @@ export type EventInterceptor<TEvent extends InterceptableEvent> = (
 export interface ToolBeforePayload {
   toolName: string;
   args: unknown;
-  sessionId: string;
+  /** Disk session owning this call; omitted when unknown (never falls back to the agent id). */
+  sessionId?: string;
 }
 
 export interface ToolBeforeEvent extends InterceptableEvent<ToolBeforePayload> {

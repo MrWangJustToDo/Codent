@@ -171,6 +171,13 @@ export function createLogExtension(options: LogExtensionOptions): LogExtension {
   // instance so a disposed extension never runs on `exit`.
   let unregisterExitFlush: (() => void) | null = null;
   let started = false;
+  /**
+   * Workspace keys this process already found unwritable.
+   *
+   * Without it every agent's bind re-runs `createJsonlFileSink` (still null) and re-reports the
+   * same "cannot append" failure. A workspace does not become writable mid-process.
+   */
+  const unavailableSinks = new Set<string>();
 
   const flushSinksSync = (): void => {
     for (const log of sinks.keys()) log.flushSync();
@@ -188,6 +195,7 @@ export function createLogExtension(options: LogExtensionOptions): LogExtension {
       sinks.get(log)?.();
 
       const key = sinkKey(sinkOptions);
+      if (unavailableSinks.has(key)) return () => {};
       let entry = workspaceSinks.get(key);
       if (!entry) {
         // The owner set is filled below; the callback resolves it lazily so a failure is reported
@@ -197,7 +205,7 @@ export function createLogExtension(options: LogExtensionOptions): LogExtension {
           refs: 0,
           reporters: new Map(),
         };
-        candidate.sink = createJsonlFileSink({
+        const created = createJsonlFileSink({
           ...sinkOptions,
           ...(options.onPersistError
             ? {
@@ -209,6 +217,27 @@ export function createLogExtension(options: LogExtensionOptions): LogExtension {
               }
             : {}),
         });
+        // No sink means the env cannot append (CoreEnv optional capability). Do NOT attach a no-op:
+        // it drained the pending buffer into nothing, reported `hasSink()` as true, and left the
+        // operator with a healthy-looking session and no log file. Report once and leave the seam
+        // unbound so the entries stay buffered and the destroy-time warning can fire.
+        if (!created) {
+          unavailableSinks.add(key);
+          // The host reporter resolves the owning agent from the registry, but the FIRST bind
+          // happens during construction (the agent is not registered yet), so the diagnostic can
+          // be dropped. A console line is the seam's documented last resort for exactly this case.
+          console.warn(
+            `[agent-log] ${sinkOptions.dir} is not writable by this CoreEnv (no appendFile); log entries stay unbound`
+          );
+          options.onPersistError?.(log, {
+            stage: "open",
+            error: "this CoreEnv cannot append to the agent log",
+            dropped: 0,
+            consecutiveFailures: 1,
+          });
+          return () => {};
+        }
+        candidate.sink = created;
         entry = candidate;
         workspaceSinks.set(key, entry);
       }

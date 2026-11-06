@@ -12,7 +12,7 @@ import type { ChatMiddleware } from "@tanstack/ai";
 
 export interface ExtensionsMiddlewareDeps {
   getExtensionRunner: () => ExtensionRunner | null;
-  getSessionId: () => string;
+  getSessionId: () => string | undefined;
   /** Shared with the authorization pipeline so `tool:before:*` runs once per call. */
   getToolBeforeHooks?: () => ToolBeforeHookLedger;
   emitEvent?: EmitAgentTelemetryFn;

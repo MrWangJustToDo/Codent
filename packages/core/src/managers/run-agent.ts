@@ -228,7 +228,11 @@ export function buildAgentRunner(
     createExtensionsMiddleware({
       getExtensionRunner: deps.getExtensionRunner,
       getToolBeforeHooks: deps.getToolBeforeHooks,
-      getSessionId: () => session.getSessionData()?.id ?? deps.agentId,
+      // Session identity from the same accessor the event envelope uses: a subagent resolves the
+      // parent session it was spawned in (not its agent id), and a root falls back to the
+      // pre-adoption `initialSessionId`. This is what keeps `tool:before:*` agreeing with the
+      // `agent:tool-start` envelope for the same call.
+      getSessionId: () => managed.getEventSessionId(),
       emitEvent,
       getAbortSignal: () => run.currentAbortController?.signal,
       // A pre-forked `task` emits its own start on admission; skip the eager one so a
@@ -351,8 +355,12 @@ export async function ensureAgentRunner(_manager: AgentManager, managed: Managed
     return existing;
   }
 
-  managed.setRunnerConfigKey(configKey);
+  // Commit the key only after the build succeeds. Writing it first meant a throwing build left a
+  // NEW key beside the OLD runner: the next call saw a key match and returned a runner built for the
+  // previous tool/config set, with no retry. The old key + old runner is a coherent pair; the new key
+  // is only true once a new runner exists.
   const runner = buildAgentRunner(managed, textAdapter, _manager);
+  managed.setRunnerConfigKey(configKey);
   managed.setRunner(runner);
   return runner;
 }

@@ -771,6 +771,7 @@ export class ManagedAgent {
     });
     this.compactions = new CompactionController({
       getStatus: () => this.getStatus(),
+      getAgentState: () => this.agentState,
       transition: (event) => this.transitionStatus(event),
       setStatus: (status, trigger) => this.setStatus(status, trigger),
       setError: (error) => this.setError(error),
@@ -784,6 +785,7 @@ export class ManagedAgent {
       getError: () => this.getError(),
       getAbortReason: () => this.run.getAbortReason(),
       finalizeRun: (reason) => this.finalizeRun(reason),
+      captureFinalIteration: () => this.run.setLastIterationState(this.run.getIterationState()),
       discardPreforkRuns: (cause) => this.discardPreforkRuns(cause),
       emitEvent: (type, ...args) => this.emitEvent(type, ...args),
       usage: this.usage,
@@ -1949,13 +1951,17 @@ export class ManagedAgent {
     // the retained iteration channel before the idempotency guard rejected the finalize.
     if (!this.run.canFinalizeTurn()) return;
     // Keep the reading before the reset: the turn may have ended exactly at its budget, and the
-    // stop reason is classified AFTER finalize (ACP). The status flip inside the finalize is what
-    // publishes `lastIteration`, so both writes must land before it runs.
+    // stop reason is classified AFTER finalize (ACP). `captureFinalIteration` already put it on the
+    // terminal frame; this stays as the fallback for a direct `finalizeRun` caller.
     this.run.setLastIterationState(this.run.getIterationState());
     // A terminal turn (or an abort) must not leave the retained `iteration` channel
     // reporting the last model turn of the run.
     this.resetIterationProgress();
     finalizeManagedAgentRun(this, reason);
+    // Belt-and-suspenders for callers that reached `finalizeRun` without `captureFinalIteration`
+    // (e.g. the pump's direct stop path). `publishStateChange` de-dupes an unchanged L1 signature,
+    // so the normal path does not add a second frame.
+    this.emitStateChange();
   }
 
   /** Call at the start of a chat pump or detached run so finalize can run once for that turn. */
@@ -2044,7 +2050,7 @@ export class ManagedAgent {
       getExtensionModel: () => this.config.model || this.getModelInfo()?.id,
       getExtensionMaxOutputTokens: () => this.config.extensionLlm?.maxOutputTokens,
       consumeExtensionBudget: (extensionId: string) => this.consumeExtensionLlmBudget(extensionId),
-      refundExtensionBudget: () => this.refundExtensionLlmBudget(),
+      refundExtensionBudget: (runToken: string | null) => this.refundExtensionLlmBudget(runToken),
     };
 
     this.extensionRuntime = {
@@ -2092,13 +2098,13 @@ export class ManagedAgent {
    * Keyed by the run's abort signal rather than reset by the run lifecycle: a fresh controller means a
    * fresh run, and no lifecycle wiring is needed for a limit that is only ever read here.
    */
-  private consumeExtensionLlmBudget(extensionId: string): void {
+  private consumeExtensionLlmBudget(extensionId: string): string | null {
     // Keyed by the user turn (`currentRunId`), not by the abort controller: tool phases mint a new
     // controller inside one turn (which reset the counter mid-turn), and an idle call has no run to
     // charge. Idle completions are bounded by the output-token cap instead — a command the user typed
     // is not a runaway loop.
     const runId = this.getCurrentRunId();
-    if (runId === null) return;
+    if (runId === null) return null;
     if (this.extensionLlmBudget.runId !== runId) {
       this.extensionLlmBudget = { runId, count: 0, reported: false };
     }
@@ -2118,11 +2124,15 @@ export class ManagedAgent {
       );
     }
     this.extensionLlmBudget.count += 1;
+    return runId;
   }
 
   /** Return one budget slot after an attempt that was not billed (see `refundExtensionBudget`). */
-  private refundExtensionLlmBudget(): void {
-    if (this.extensionLlmBudget.runId === null) return;
+  private refundExtensionLlmBudget(runToken: string | null): void {
+    // The completion can outlive the turn that charged it. Refunding unconditionally decremented
+    // whatever run happened to hold the counter, so a stale failure bought the NEW turn an extra
+    // call — the exact cross-run leak the token exists to stop.
+    if (runToken === null || this.extensionLlmBudget.runId !== runToken) return;
     if (this.extensionLlmBudget.count > 0) this.extensionLlmBudget.count -= 1;
   }
 
@@ -2150,10 +2160,12 @@ export class ManagedAgent {
       warn: (message) => this.emitDiagnostic("tool", message, { level: "warn" }),
       onToolsChanged: () => {
         this.setRunnerConfigKey(undefined);
-        // A tool that lands or leaves changes what `toModelOutput` produces; cached projections
-        // are keyed by content, not formatter identity, so they must be dropped here (the one
-        // choke point both register and unregister pass through).
-        this.toolCompactCache.clear();
+        // Do NOT clear `toolCompactCache` here. A projection belongs to the implementation that
+        // PRODUCED the result, and the cache key is (toolCallId, messageIndex, content) with an exact
+        // source compare — so a new call misses and a replaced tool is picked up on its own. Clearing
+        // instead re-projected the whole history through the NEW definition: after an extension
+        // shadowed `read_file`, earlier read results were formatted by the extension's
+        // `toModelOutput` (and vice versa on disable), rewriting the model-visible prefix.
         if (options.publishCatalog !== false) this.publishToolPresentationCatalog();
       },
       agentId: this.id,
@@ -2177,7 +2189,7 @@ export class ManagedAgent {
       warn: (message) => this.emitDiagnostic("tool", message, { level: "warn" }),
       onToolsChanged: () => {
         this.setRunnerConfigKey(undefined);
-        this.toolCompactCache.clear();
+        // See `registerTool`: historical projections stay with the implementation that produced them.
       },
     });
     // Batch point: disabling one extension unregisters N tools, and a catalog publish each time
@@ -2188,12 +2200,10 @@ export class ManagedAgent {
   /**
    * Namespace an extension owner id to this agent.
    *
-   * The tool and presentation registries are process-global while an agent's tools are its own,
-   * so a bare extension id is not a unique owner: two agents loading the same extension share it,
-   * and a disable on one would release the other's claim. Scoping the id here is what keeps the
-   * two apart, and it is needed for the paths where no extension is involved either — the
-   * `defineServerTool` default owner (the tool name, `createTools()` re-run per agent) collides
-   * the same way, breaking the descriptor of every agent's `read_file` but the last created.
+   * Each agent owns its tool registry, so a bare extension id can still be ambiguous for the
+   * paths that feed one `defineServerTool` object to two agents: the default owner is the tool
+   * name, and `createTools()` runs per agent. Two agents would then share an owner string and a
+   * disable on one would release the other's claim. Scoping the id keeps them apart.
    *
    * `:` separates the two halves; a generated agent id is unique per agent, so the scoped id is
    * too. Owner ids are matched by string equality only — nothing parses them back apart.
@@ -2506,7 +2516,9 @@ export class ManagedAgent {
         toolCallId,
         toolName,
         args,
-        sessionId: this.getSessionData()?.id ?? "",
+        // Same accessor as the event envelope: parent session for a subagent, initialSessionId
+        // during bootstrap, omitted only when neither is known.
+        sessionId: this.getEventSessionId(),
       })
     );
   }

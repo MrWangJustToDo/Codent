@@ -236,7 +236,7 @@ Match is on the literal prefix, so \`tool:before:run_*\` works too.
 | \`session:bootstrap\` | \`{ cwd, sessionId }\` — awaited initialization hook, after bootstrap. |
 | \`session:shutdown\` | \`{ sessionId }\` — fires on teardown. |
 | \`before_agent_start\` | \`{ prompt, sessionId }\` — once per user turn, before turn context is collected. **Observe-only**: there is no field to append prompt or context here; use \`registerContextProvider\` for model-visible text. |
-| \`tool:before:<name>\` | \`{ toolName, args, sessionId }\`. Set \`event.skip = true\` to cancel (add \`event.reason\` to explain), or \`event.modifiedArgs = …\` to rewrite the arguments. The rewrite is **refused** for approval-gated tools and for \`task\`: their approval/safety decision (or the pre-forked child) was already made from the original arguments, so the call runs unchanged and the refusal is logged. |
+| \`tool:before:<name>\` | \`{ toolName, args, sessionId? }\` — \`sessionId\` is the disk session that owns the call (the parent session for a subagent) and is **omitted** when the host has no session store yet. Set \`event.skip = true\` to cancel (add \`event.reason\` to explain), or \`event.modifiedArgs = …\` to rewrite the arguments. The rewrite is **refused** for approval-gated tools and for \`task\`: their approval/safety decision (or the pre-forked child) was already made from the original arguments, so the call runs unchanged and the refusal is logged. |
 | \`tool:after:<name>\` | \`{ toolName, args, result, durationMs }\`. Set \`event.payload.modifiedResult = …\` to replace the result the model receives. |
 | \`tool:error:<name>\` | \`{ toolName, args, error }\`. Observe-only; use it to log or alert. |
 

@@ -49,6 +49,13 @@ const PLAN_MUTATIONS = new Set<AgentSessionCommand["type"]>([
   // the host could not observe.
   "mode.set",
   "mode.toggle",
+  // These three also write persisted session state without sending a message. `rename` rewrites the
+  // title, `model.set` / `effort.set` persist the connection + depth. Letting them through during a
+  // switch wrote the LEAVING session's identity while the persist was refused, then the restore
+  // overwrote the live value — a divergence the host could not observe.
+  "rename",
+  "model.set",
+  "effort.set",
 ]);
 
 export async function dispatchLocalAgentSessionCommand(
@@ -78,7 +85,9 @@ export async function dispatchLocalAgentSessionCommand(
         // `dropped` also covers a destroyed agent; name that cause instead of telling the host to
         // retry after a switch that will never happen.
         if (managed.isDestroyed?.() === true) return { ok: false, code: "failed", error: "Agent has been destroyed" };
-        const outcome = await chat.sendMessage(command.content);
+        // `awaitTurn: false`: the command receipt is "accepted". The resumed pump streams over the
+        // session channels; awaiting it here made a remote `POST /command` hang until the turn ended.
+        const outcome = await chat.sendMessage(command.content, { awaitTurn: false });
         if (outcome === "dropped") return { ok: false, code: "failed", error: SESSION_SWITCHING_ERROR };
         return { ok: true };
       }
@@ -129,7 +138,7 @@ export async function dispatchLocalAgentSessionCommand(
       case "addToolResult": {
         if (!chat) return { ok: false, code: "failed", error: "Chat controller not initialized" };
         if (managed.isDestroyed?.() === true) return { ok: false, code: "failed", error: "Agent has been destroyed" };
-        const accepted = await chat.addToolResult(command.toolCallId, command.output);
+        const accepted = await chat.addToolResult(command.toolCallId, command.output, { awaitTurn: false });
         if (accepted === "switching") return { ok: false, code: "failed", error: SESSION_SWITCHING_ERROR };
         if (accepted === "rejected") {
           return {
@@ -263,7 +272,10 @@ export async function dispatchLocalAgentSessionCommand(
           const inject = await cmd.injectMessage(args, message, commandContext);
           if (inject && inject.trim().length > 0) {
             if (!chat) return { ok: false, code: "failed", error: "Chat controller not initialized" };
-            if ((await chat.sendMessage(inject)) === "dropped") {
+            // Same acceptance contract as the `send` command: the injected turn streams through the
+            // session channels; awaiting it here made `/skill` / `/remember` over a remote session
+            // block for the whole agent loop (and hit the HTTP header timeout the receipt fix removed).
+            if ((await chat.sendMessage(inject, { awaitTurn: false })) === "dropped") {
               return { ok: false, code: "failed", error: SESSION_SWITCHING_ERROR };
             }
           }

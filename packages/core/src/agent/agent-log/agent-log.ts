@@ -387,6 +387,11 @@ export class AgentLog {
     // `attachSink` flushes the previous sink before re-pointing the seam (see its note): this is
     // the fallback path (embedded hosts call it directly), so the pending batch is landed there.
     const sink = createJsonlFileSink(options);
+    // A null sink means the env cannot append. Leave the seam UNBOUND instead of attaching a no-op:
+    // an inert sink drained the pending buffer into nothing, made `hasSink()` report true, and
+    // suppressed both the "no sink was bound before teardown" warning and any persist error. An
+    // unbound seam keeps the entries buffered (bounded) so a later sink can still receive them.
+    if (!sink) return () => {};
     this.attachSink(sink);
     return () => {
       void sink.detach().catch(() => undefined);

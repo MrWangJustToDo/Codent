@@ -33,6 +33,15 @@ export interface RunFinalizerDeps {
   getAbortReason?: () => string | undefined;
   /** Turn-level finalization (agent:stop / persistence / memory extraction); idempotent. */
   finalizeRun: (reason: RunFinalizeReason) => void;
+  /**
+   * Snapshot the turn's iteration reading BEFORE the terminal state frame is published.
+   *
+   * `applyRunOutcome` emits `agent:state`, and `lastIteration` is read from the run coordinator;
+   * setting it only in `finalizeRun` (which runs after `applyRunOutcome`) made the terminal frame
+   * carry the PREVIOUS turn's value for push consumers (remote reducer / ACP). One frame with the
+   * settled reading is also what makes the remote path deterministic across SSE chunks.
+   */
+  captureFinalIteration?: () => void;
   discardPreforkRuns: (cause: PreforkDiscardCause) => void;
   emitEvent: EmitAgentTelemetryFn;
   usage: UsageTracker;
@@ -82,6 +91,10 @@ export class RunFinalizer {
    * a turn end); everything after the loop's decision lives here.
    */
   finalizeChat(input: ChatRunFinalizeInput): AgentRunOutcomeKind {
+    // Capture the iteration reading BEFORE the terminal state frame. `applyRunOutcome` publishes
+    // `agent:state`, and `finalizeRun` runs after it — so writing `lastIteration` there gave push
+    // consumers (remote reducer / ACP) the PREVIOUS turn's value on the frame they react to.
+    this.deps.captureFinalIteration?.();
     // A wait is not a turn end: the pump that answers it is what joins an eager `task`.
     if (!input.waitingForUser) {
       this.deps.discardPreforkRuns("run-finish");
@@ -129,6 +142,8 @@ export class RunFinalizer {
 
   /** Detached/subagent terminal path: no chat turn summary; status then turn finalize. */
   finalizeDetached(input: { kind: RunFinalizeReason; messages: UIMessage[]; errorMessage?: string }): void {
+    // Same ordering as `finalizeChat`: the detached terminal frame must carry this run's reading.
+    this.deps.captureFinalIteration?.();
     this.deps.status.applyRunOutcome({
       kind: input.kind,
       messages: input.messages,

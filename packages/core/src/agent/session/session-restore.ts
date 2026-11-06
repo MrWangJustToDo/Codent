@@ -92,7 +92,7 @@ export async function saveSessionUIMessages(
 export async function restoreManagedSession(
   host: SessionHost,
   sessionId: string,
-  options: { repairRuntime?: boolean } = {}
+  options: { repairRuntime?: boolean; silent?: boolean } = {}
 ): Promise<SessionData> {
   // The caller's session lifecycle stops a live pump before this helper is entered; the
   // production switch owns that ordering in exactly one place.
@@ -262,17 +262,22 @@ export async function restoreManagedSession(
       host.setDisplayName?.(session.name);
     }
     const mode = host.getModeState().snapshot();
-    host.emitEvent("session:restore", {
-      sessionId,
-      messageCount: uiMessages.length,
-      tokenEstimate: session.contextTokens ?? host.usage.getContextFillTokens() ?? 0,
-      planPhase: mode.planPhase,
-      autoMode: mode.auto,
-      model: session.model,
-      ...(session.reasoningEffort ? { reasoningEffort: session.reasoningEffort } : {}),
-      ...(modelFallback ? { modelFallback: true } : {}),
-      ...(mediaMissing > 0 ? { mediaMissing } : {}),
-    });
+    // `silent` is the failed-/resume recovery: it re-opens the session that never left, and a
+    // `session:restore` row there read as "the switch succeeded" in the timeline while the command
+    // had returned an error. The failure itself is already reported by the caller.
+    if (!options.silent) {
+      host.emitEvent("session:restore", {
+        sessionId,
+        messageCount: uiMessages.length,
+        tokenEstimate: session.contextTokens ?? host.usage.getContextFillTokens() ?? 0,
+        planPhase: mode.planPhase,
+        autoMode: mode.auto,
+        model: session.model,
+        ...(session.reasoningEffort ? { reasoningEffort: session.reasoningEffort } : {}),
+        ...(modelFallback ? { modelFallback: true } : {}),
+        ...(mediaMissing > 0 ? { mediaMissing } : {}),
+      });
+    }
     // A miss is not only a diagnostic: the transcript still holds a `media://` ref no provider can
     // fetch, so the wire seam must substitute a placeholder from the next run on. `0` clears it.
     host.setMediaHydrationMisses?.(mediaMissing);

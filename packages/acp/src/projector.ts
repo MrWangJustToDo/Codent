@@ -445,8 +445,21 @@ export class AcpProjector {
       case "extension-ui":
         this.onExtensionUi(event.payload as { type: string; message?: string; level?: string });
         break;
-      default:
+      // Channels ACP does not project (the snapshot/state channel carries what it needs, and the
+      // rest have no protocol frame). Listed explicitly so the default below is a COMPILE error for
+      // a newly added channel instead of a silent no-op on this host.
+      case "plan":
+      case "mcp":
+      case "iteration":
+      case "jobs":
+      case "queues":
+      case "tool-presentation":
         break;
+      default: {
+        const uncovered: never = event;
+        void uncovered;
+        break;
+      }
     }
   }
 
@@ -1066,6 +1079,17 @@ export class AcpProjector {
       const message =
         typeof error === "string" ? error : ((error as { message?: string } | undefined)?.message ?? undefined);
       this.finishCompaction("failed", message);
+    } else if (type === "compaction:manual-complete") {
+      // A manual `/compact` has been reported here since the manual event names were split out of
+      // `auto`. Without this, a manual compaction driven outside the slash-command path (another
+      // host/plane on the same agent) left `manualCompaction` latched true forever, so `onState`
+      // then ignored the end of every following AUTO compaction and the client kept a stale row.
+      this.finishManualCompaction("completed");
+    } else if (type === "compaction:manual-error") {
+      const error = data.error;
+      const message =
+        typeof error === "string" ? error : ((error as { message?: string } | undefined)?.message ?? undefined);
+      this.finishManualCompaction("failed", message);
     }
   }
 
@@ -1089,8 +1113,9 @@ export class AcpProjector {
       return;
     }
     if (!this.compaction) return;
-    // A manual `/compact` has no lifecycle event: its command result is the outcome, and it may
-    // restore the PREVIOUS status (often `idle`) on failure. Wait for `finishManualCompaction`.
+    // A manual `/compact` is closed by its own lifecycle event (`compaction:manual-*`) or by the
+    // slash command's result. Wait for `finishManualCompaction`: it may restore the PREVIOUS status
+    // (often `idle`) on failure, so leaving `compacting` here is not the outcome.
     if (this.manualCompaction) return;
     // Leaving `compacting` without a summary `end`: aborted mid-summary, or failed before its first
     // chunk. Neither produces an `end`, and both would otherwise leave the row open forever.
@@ -1122,9 +1147,14 @@ export class AcpProjector {
 
   /** Close a manual compaction from the command's own result (`ok`/`error`). */
   finishManualCompaction(status: "completed" | "failed" | "cancelled", error?: string): void {
+    const wasManual = this.manualCompaction;
     this.manualCompaction = false;
     // Already closed by the summary stream's `end`: do not re-emit a completed row.
     if (!this.compaction && status === "completed") return;
+    // A duplicate signal (the lifecycle event and the slash-command result both close the row) has
+    // nothing left to close: without this, a failed manual compaction emitted a SECOND failed row
+    // under a fresh id.
+    if (!wasManual && !this.compaction) return;
     this.finishCompaction(status, error);
   }
 

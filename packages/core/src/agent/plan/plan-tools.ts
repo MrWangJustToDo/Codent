@@ -1,3 +1,5 @@
+import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";
+
 import { BUILTIN_TOOL_NAMES, isBuiltinToolName } from "../tools/catalog/tool-names.js";
 import { getBuiltinToolPresentation } from "../tools/presentation/builtin.js";
 
@@ -34,6 +36,12 @@ export const PLAN_MODE_EXCLUDED_NON_EDIT_TOOL_NAMES: ReadonlySet<string> = new S
  * as well).
  */
 export function isWorkspaceEditingTool(toolName: string, resolve = getBuiltinToolPresentation): boolean {
+  // The engine's synthesized discovery tool is not a tool of this workspace at all: it is not in
+  // `ToolsRecord`, so it declares no presentation, and the fail-closed rule below ("undeclared =
+  // editing") would block it during planning/ready. That made every lazy tool (background output,
+  // memory, skills, LSP) advertised but unreachable in exactly the read-only phases where they are
+  // useful — a fail-closed rule applied to a name that can never write.
+  if (toolName === DISCOVERY_TOOL_NAME) return false;
   const presentation = resolve(toolName);
   if (!presentation) return true;
   return presentation.category === "edits";

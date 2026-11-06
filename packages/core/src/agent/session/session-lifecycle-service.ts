@@ -8,7 +8,7 @@
 
 import { errorMessage } from "../../utils/errors.js";
 
-import { isRestoreReadFailure } from "./session-restore.js";
+import { isRestoreReadFailure, markRestoreReadFailure } from "./session-restore.js";
 
 import type { SessionSwitchReason } from "../../runtime-types/agent-event-payloads.js";
 import type { SessionRuntime } from "../../runtime-types/session-runtime.js";
@@ -326,6 +326,16 @@ export class SessionLifecycleService {
   }
 
   private async resumeInner(sessionId: string, reason: SessionSwitchReason): Promise<SessionData> {
+    // A failed `/resume` must be a no-op. The target is READ only after `unloadCurrent`, so an
+    // unknown id used to abort the run that was still on screen and leave the user with a dead turn
+    // plus a "not found" error. Existence is the cheap preflight; a present-but-corrupt log still
+    // fails after unload, where `recoverLeavingSession` reopens the departure.
+    const store = this.rt.transcript.getSessionStore();
+    if (store && !(await store.exists(sessionId))) {
+      // Tag it as a READ failure: nothing was unloaded or adopted, so the caller must not try to
+      // "recover" by reloading the leaving transcript from disk.
+      throw markRestoreReadFailure(new Error(`Session not found: ${sessionId}`));
+    }
     if (!this.rt.lease.claim(sessionId)) {
       throw new Error(`Session "${sessionId}" is already active in another live session and cannot be resumed here.`);
     }
@@ -434,7 +444,7 @@ export class SessionLifecycleService {
     // reloads (and the disk record is authoritative because writes were drained before the load).
     if (isRestoreReadFailure(cause)) return;
     try {
-      await this.rt.transcript.sessionPersistence.restore(leavingId, { repairRuntime: false });
+      await this.rt.transcript.sessionPersistence.restore(leavingId, { repairRuntime: false, silent: true });
     } catch (error) {
       // Best-effort: the host still gets the original failure, and the in-memory state is already
       // the departure's (the target was never adopted). The report is itself contained so a broken

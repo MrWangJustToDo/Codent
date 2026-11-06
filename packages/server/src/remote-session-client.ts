@@ -17,6 +17,7 @@ import { applyEvent, type ToolBufferMap } from "./remote-session-reducer.js";
 
 import type {
   AgentSession,
+  AgentSessionChannel,
   AgentSessionCommand,
   AgentSessionCommandResult,
   AgentSessionCommandResultFor,
@@ -219,6 +220,14 @@ export async function createRemoteSession(
   });
 }
 
+/** One attached observer of the shared SSE stream. `channels: null` means "every channel". */
+interface RemoteSubscriberEntry {
+  readonly handler: AgentSessionSubscriber;
+  readonly channels: Set<string> | null;
+  readonly wantsSummary: boolean;
+  errors: number;
+}
+
 export class RemoteSessionClient implements AgentSession {
   readonly id: string;
   private readonly baseUrl: string;
@@ -256,6 +265,24 @@ export class RemoteSessionClient implements AgentSession {
    */
   private terminated = false;
   private terminatedReason = "";
+
+  /**
+   * Every subscriber shares ONE SSE connection.
+   *
+   * The reducer caches (`summaryCache`, `toolBufferCache`) are per-client state, so two connections
+   * each applying the same frame appended a `tool` chunk twice and let `summary.reset` overwrite a
+   * newer stream — correct-looking with one subscriber, corrupt with two. A single loop applies each
+   * frame once and fans it out; the channel query is the union of what the live subscribers asked
+   * for.
+   */
+  private readonly sseSubscribers = new Set<RemoteSubscriberEntry>();
+  private sseLoop: Promise<void> | null = null;
+  private sseConnection: AbortController | null = null;
+  /** Channels the OPEN connection requested; null = every channel. */
+  private sseChannels: string[] | null = null;
+  private sseStopped = true;
+  /** Set when a subscriber widens the union: reconnect now instead of after the backoff. */
+  private sseRestartRequested = false;
 
   constructor(options: RemoteSessionClientOptions) {
     this.id = options.agentId;
@@ -359,11 +386,11 @@ export class RemoteSessionClient implements AgentSession {
       }
       return result;
     } catch (error) {
-      // Transport failure. The server resolves `send`-style commands only when
-      // the whole run has finished, so a run outlasting the HTTP headers
-      // timeout (~300s, UND_ERR_HEADERS_TIMEOUT) lands here. The run keeps
-      // going server-side and streams over SSE; rejecting instead would crash
-      // fire-and-forget callers with an unhandled rejection.
+      // Transport failure. `send` / `addToolResult` now resolve on ACCEPTANCE — core enqueues the
+      // pump and returns — so a long run no longer lands here. Commands that legitimately await
+      // work (`/compact`, `session.resume`, `plan.execute`) can still outlast the ~300s header
+      // timeout; that work keeps going server-side and streams over SSE, so this stays a
+      // recoverable failure instead of a rejection.
       const message = errorMessage(error);
       console.error(`[RemoteSessionClient] dispatch transport error: ${message}`);
       return { ok: false, code: "failed", error: message };
@@ -457,150 +484,258 @@ export class RemoteSessionClient implements AgentSession {
   }
 
   subscribe(handler: AgentSessionSubscriber, options?: AgentSessionSubscribeOptions): () => void {
-    const wantsSummary = !options?.channels || options.channels.includes("summary");
-    if (wantsSummary) this.summarySubscribers.add(handler);
-    const stopController = new AbortController();
-    let attempt = 0;
-    let stopped = false;
+    const channels = options?.channels && options.channels.length > 0 ? new Set<string>(options.channels) : null;
+    const entry: RemoteSubscriberEntry = {
+      handler,
+      channels,
+      wantsSummary: channels === null || channels.has("summary"),
+      errors: 0,
+    };
+    const hadSubscribers = this.sseSubscribers.size > 0;
+    this.sseSubscribers.add(entry);
+    if (entry.wantsSummary) this.summarySubscribers.add(handler);
 
+    // The open stream is already filtered server-side, so a subscriber that needs a channel outside
+    // the union must force a reconnect. The last unsubscribe stops the shared loop below.
+    const widening = this.sseConnection !== null && !this.coversChannels(this.desiredChannels(), this.sseChannels);
+    if (widening) {
+      this.sseRestartRequested = true;
+      this.sseConnection?.abort();
+    }
+    if (hadSubscribers && !widening) {
+      // The server replays retained channels only to a NEW SSE connection. This subscriber joined an
+      // already-open stream that already covers its channels, so replay the cached snapshot locally —
+      // the same contract as `LocalAgentSession.subscribe` (a second subscriber still gets initial
+      // state without a snapshot refetch).
+      this.replayRetainedTo(entry);
+    }
+    this.startSseLoop();
+
+    return () => {
+      if (!this.sseSubscribers.delete(entry)) return;
+      this.summarySubscribers.delete(handler);
+      if (this.sseSubscribers.size === 0) this.stopSseLoop();
+    };
+  }
+
+  /** Replay the cached retained channels to one late subscriber (no network round-trip). */
+  private replayRetainedTo(entry: RemoteSubscriberEntry): void {
+    const snapshot = this.snapshot;
+    const deliver = (channel: AgentSessionChannel, payload: unknown): void => {
+      this.deliverToEntry(entry, { channel, payload, ts: Date.now() } as AgentSessionEvent);
+    };
+    deliver("state", {
+      status: snapshot.status,
+      state: snapshot.state,
+      name: snapshot.name,
+      error: snapshot.error,
+      pendingApprovalCount: snapshot.pendingApprovalCount,
+      retry: snapshot.retry,
+      model: snapshot.model,
+      modelInfo: snapshot.modelInfo,
+      reasoningEffort: snapshot.reasoningEffort,
+      lastStreamDurationMs: snapshot.lastStreamDurationMs,
+      lastFinishReason: snapshot.lastFinishReason,
+      lastIteration: snapshot.lastIteration,
+      sessionId: snapshot.activeSessionId,
+    });
+    deliver("messages", snapshot.messages);
+    deliver("usage", snapshot.usage);
+    deliver("todos", { items: snapshot.todos, title: snapshot.todosTitle });
+    deliver("plan", snapshot.plan);
+    deliver("mode", { mode: snapshot.mode, autoMode: snapshot.autoMode });
+    deliver("extensions", snapshot.extensions);
+    deliver("mcp", { servers: snapshot.mcp.servers });
+    deliver("interaction", snapshot.interactions);
+    deliver("iteration", snapshot.iteration);
+    deliver("jobs", snapshot.jobs);
+    deliver("subagents", { subagents: snapshot.subagents });
+    deliver("queues", snapshot.queues);
+    deliver("tool-presentation", { descriptors: snapshot.toolDescriptors });
+  }
+
+  private deliverToEntry(entry: RemoteSubscriberEntry, event: AgentSessionEvent): void {
+    if (entry.channels && !entry.channels.has(event.channel)) return;
+    try {
+      entry.handler(event);
+    } catch (error) {
+      entry.errors += 1;
+      if (entry.errors === 1) {
+        console.error("[RemoteSessionClient] session subscriber threw; the event was dropped", error);
+      }
+    }
+  }
+
+  /** Channel set the shared stream must carry for the current subscribers; null = everything. */
+  private desiredChannels(): string[] | null {
+    const union = new Set<string>();
+    for (const entry of this.sseSubscribers) {
+      if (!entry.channels) return null;
+      for (const channel of entry.channels) union.add(channel);
+    }
+    return union.size > 0 ? [...union] : null;
+  }
+
+  private coversChannels(required: string[] | null, open: string[] | null): boolean {
+    if (open === null) return true;
+    if (required === null) return false;
+    return required.every((channel) => open.includes(channel));
+  }
+
+  private startSseLoop(): void {
+    const reviving = this.sseStopped;
+    // Flip the stop flag BEFORE the "already running" check. A subscriber can arrive while the
+    // previous loop is shutting down: flipping first lets that loop continue (or the finally below
+    // restarts one if it already exited). Without this, an unsubscribe→subscribe in the same tick
+    // left the new subscriber with no connection at all.
+    this.sseStopped = false;
+    if (this.sseLoop) {
+      // `stopSseLoop` aborted the loop, so a reviving subscriber must reconnect immediately and the
+      // abort must not be logged as a transport error.
+      if (reviving) this.sseRestartRequested = true;
+      return;
+    }
+    this.sseRestartRequested = false;
+    const loop = this.runSseLoop()
+      .catch((error) => {
+        // The loop contains its own transient failures; a rejection here is a bug (not a dead
+        // stream) and must not become an unhandled rejection in a host process.
+        console.error("[RemoteSessionClient] SSE loop failed", error);
+      })
+      .finally(() => {
+        if (this.sseLoop === loop) this.sseLoop = null;
+        // A subscriber that arrived during shutdown has nobody left to start it. Never restart a
+        // session the server has already reported gone: that would spin immediate retries forever.
+        if (this.sseSubscribers.size > 0 && !this.sseStopped && !this.terminated) this.startSseLoop();
+      });
+    this.sseLoop = loop;
+  }
+
+  private stopSseLoop(): void {
+    this.sseStopped = true;
+    this.sseRestartRequested = false;
+    this.sseConnection?.abort();
+    this.sseConnection = null;
+  }
+
+  /**
+   * Fan one already-applied frame out to the subscribers whose filter matches it.
+   *
+   * A subscriber is host code (a store setter, a UI update). It used to be called directly from the
+   * reader loop, so a throw propagated into the transport catch and read as a dead connection: the
+   * client resynced and reconnected every backoff interval while the event had ALREADY been applied
+   * to `this.snapshot`, so the UI stayed stale. Contain it per subscriber, like the local `Emitter`.
+   */
+  private deliverToSubscribers(event: AgentSessionEvent): void {
+    for (const entry of this.sseSubscribers) {
+      this.deliverToEntry(entry, event);
+    }
+  }
+
+  private async runSseLoop(): Promise<void> {
+    let attempt = 0;
+    let firstConnect = true;
     const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-    /**
-     * Deliver one frame to the subscriber **without letting it kill the stream**.
-     *
-     * A subscriber is host code (a store setter, a UI update). It used to be called directly from
-     * the reader loop, so a throw propagated into the transport catch and read as a dead
-     * connection: the client resynced (`:467`) and reconnected every backoff interval, while the
-     * event had ALREADY been applied to `this.snapshot` — the UI stayed stale and the two
-     * diverged. One bad setter became a resync storm. Local sessions drop the same failure (their
-     * `Emitter` isolates it), so this is also what makes the two planes behave the same.
-     */
-    let subscriberErrors = 0;
-    const deliver = (event: AgentSessionEvent): void => {
+    while (!this.sseStopped && this.sseSubscribers.size > 0) {
+      const connection = new AbortController();
+      this.sseConnection = connection;
       try {
-        handler(event);
-      } catch (error) {
-        subscriberErrors += 1;
-        if (subscriberErrors === 1) {
-          console.error("[RemoteSessionClient] session subscriber threw; the event was dropped", error);
+        // The snapshot is often already fresh: host.create returns it inline and host.connect()
+        // fires an eager refresh (deduped via resync()). Skip the redundant first resync; reconnects
+        // always resync to heal frames missed while the stream was down.
+        if (!firstConnect || this.isSnapshotStale()) await this.resync();
+        firstConnect = false;
+        const channels = (this.sseChannels = this.desiredChannels());
+        const query = channels?.length ? `?channels=${channels.join(",")}` : "";
+        const url = joinUrl(this.baseUrl, `/api/agent/${this.id}/events${query}`);
+        const response = await this.fetchImpl(url, {
+          headers: { Accept: "text/event-stream" },
+          signal: connection.signal,
+        });
+        if (!response.ok || !response.body) {
+          throw new Error(`SSE failed: HTTP ${response.status}`);
         }
-      }
-    };
 
-    const connectLoop = async (): Promise<void> => {
-      let firstConnect = true;
-      while (!stopped && !stopController.signal.aborted) {
-        // Per-connection controller so the liveness watchdog can kill a dead
-        // stream without tearing down the whole subscription.
-        const connection = new AbortController();
-        const onStop = () => connection.abort();
-        stopController.signal.addEventListener("abort", onStop, { once: true });
+        attempt = 0;
+        let lastActivityAt = Date.now();
+        const watchdog = setInterval(() => {
+          if (Date.now() - lastActivityAt > HEARTBEAT_TIMEOUT_MS) {
+            connection.abort(); // dead stream — catch below schedules a reconnect
+          }
+        }, 5_000);
+        connection.signal.addEventListener("abort", () => clearInterval(watchdog), { once: true });
 
         try {
-          // The snapshot is often already fresh: host.create returns it inline
-          // and host.connect() fires an eager refresh (deduped via resync()).
-          // A redundant resync re-downloads the whole transcript — skip it on
-          // the very first connect. Reconnects always resync to heal any
-          // frames missed while the stream was down.
-          if (!firstConnect || this.isSnapshotStale()) await this.resync();
-          firstConnect = false;
-          const channels = options?.channels?.length ? `?channels=${options.channels.join(",")}` : "";
-          const url = joinUrl(this.baseUrl, `/api/agent/${this.id}/events${channels}`);
-          const response = await this.fetchImpl(url, {
-            headers: { Accept: "text/event-stream" },
-            signal: connection.signal,
-          });
-          if (!response.ok || !response.body) {
-            throw new Error(`SSE failed: HTTP ${response.status}`);
-          }
-
-          attempt = 0;
-          let lastActivityAt = Date.now();
-
-          const watchdog = setInterval(() => {
-            if (Date.now() - lastActivityAt > HEARTBEAT_TIMEOUT_MS) {
-              connection.abort(); // dead stream — catch below schedules a reconnect
-            }
-          }, 5_000);
-          connection.signal.addEventListener("abort", () => clearInterval(watchdog), { once: true });
-
-          try {
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = "";
-            while (!connection.signal.aborted) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              lastActivityAt = Date.now();
-              buffer += decoder.decode(value, { stream: true });
-              const parts = buffer.split("\n\n");
-              buffer = parts.pop() ?? "";
-              for (const part of parts) {
-                const event = parseSseBlock(part);
-                if (!event) continue; // heartbeat comments / keep-alives land here
-                if (event.channel === "messages") {
-                  // Wire encoding is a full/patch envelope (messages-delta.ts);
-                  // merge into the cached array and hand subscribers the full
-                  // merged list — same contract as LocalAgentSession.
-                  const result = applyMessagesPayloadForTests(this.snapshot.messages, event.payload);
-                  if (result.unknownKind) {
-                    // Unrecognized envelope — rebuild from snapshot + seeds.
-                    void this.resync().catch(() => {});
-                    continue;
-                  }
-                  if (result.messages !== this.snapshot.messages) {
-                    this.snapshot = { ...this.snapshot, messages: result.messages };
-                    this.snapshotVersion += 1;
-                  }
-                  deliver({ ...event, payload: this.snapshot.messages });
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          while (!connection.signal.aborted) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            lastActivityAt = Date.now();
+            buffer += decoder.decode(value, { stream: true });
+            const parts = buffer.split("\n\n");
+            buffer = parts.pop() ?? "";
+            for (const part of parts) {
+              const event = parseSseBlock(part);
+              if (!event) continue; // heartbeat comments / keep-alives land here
+              if (event.channel === "messages") {
+                // Wire encoding is a full/patch envelope (messages-delta.ts); merge into the cached
+                // array and hand subscribers the full merged list — same contract as LocalAgentSession.
+                const result = applyMessagesPayloadForTests(this.snapshot.messages, event.payload);
+                if (result.unknownKind) {
+                  void this.resync().catch(() => {});
                   continue;
                 }
-                this.snapshot = applyEvent(this.snapshot, event, this.summaryCache, this.toolBufferCache);
-                this.snapshotVersion += 1;
-                if (event.channel === "tool-presentation") {
-                  this.setToolDescriptors(this.snapshot.toolDescriptors);
+                if (result.messages !== this.snapshot.messages) {
+                  this.snapshot = { ...this.snapshot, messages: result.messages };
+                  this.snapshotVersion += 1;
                 }
-                deliver(event);
+                this.deliverToSubscribers({ ...event, payload: this.snapshot.messages });
+                continue;
               }
+              this.snapshot = applyEvent(this.snapshot, event, this.summaryCache, this.toolBufferCache);
+              this.snapshotVersion += 1;
+              if (event.channel === "tool-presentation") {
+                this.setToolDescriptors(this.snapshot.toolDescriptors);
+              }
+              this.deliverToSubscribers(event);
             }
-          } finally {
-            clearInterval(watchdog);
-            stopController.signal.removeEventListener("abort", onStop);
           }
-        } catch (error) {
-          if (stopped || stopController.signal.aborted) return;
+        } finally {
+          clearInterval(watchdog);
+        }
+      } catch (error) {
+        if (this.sseStopped || this.sseSubscribers.size === 0) return;
+        if (!this.sseRestartRequested) {
           if (this.terminated) {
-            // Session no longer exists server-side — stop reconnecting. The host
-            // evicts terminated clients, so a stale journal mapping heals into a
-            // fresh session on the next command instead of spamming retries.
+            // Session no longer exists server-side — stop reconnecting. The host evicts terminated
+            // clients, so a stale journal mapping heals into a fresh session instead of retrying.
             console.error(`[RemoteSessionClient] SSE stopped — ${this.terminatedReason}`);
             return;
           }
           console.error("[RemoteSessionClient] SSE error — reconnecting", error);
-        } finally {
-          // Also covers a failed resync()/fetch(): the `onStop` listener is registered before the
-          // try, and the reader-loop finally alone skipped this path — one leaked listener and
-          // one pinned AbortController per reconnect attempt while the server is down.
-          stopController.signal.removeEventListener("abort", onStop);
         }
-
-        if (stopped || stopController.signal.aborted) return;
-        const delay = Math.min(RECONNECT_BASE_MS * 2 ** attempt, RECONNECT_MAX_MS);
-        attempt += 1;
-        await sleep(delay);
+      } finally {
+        if (this.sseConnection === connection) this.sseConnection = null;
       }
-    };
 
-    void connectLoop();
-
-    return () => {
-      stopped = true;
-      stopController.abort();
-      if (wantsSummary) this.summarySubscribers.delete(handler);
-    };
+      if (this.sseStopped || this.sseSubscribers.size === 0) return;
+      if (this.sseRestartRequested) {
+        // The channel union widened: reopen immediately with the new query, no backoff.
+        this.sseRestartRequested = false;
+        attempt = 0;
+        continue;
+      }
+      const delay = Math.min(RECONNECT_BASE_MS * 2 ** attempt, RECONNECT_MAX_MS);
+      attempt += 1;
+      await sleep(delay);
+    }
   }
 
   async close(): Promise<void> {
+    this.stopSseLoop();
     await this.fetchImpl(joinUrl(this.baseUrl, `/api/agent/${this.id}`), { method: "DELETE" });
   }
 }

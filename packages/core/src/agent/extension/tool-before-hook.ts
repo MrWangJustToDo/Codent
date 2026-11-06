@@ -21,7 +21,8 @@ export interface ToolBeforeHookInput {
   toolCallId: string;
   toolName: string;
   args: unknown;
-  sessionId: string;
+  /** Omitted when the agent has no disk session (see `ToolBeforePayload.sessionId`). */
+  sessionId?: string;
 }
 
 /** Emit the interceptable event once and return its verdict. */
@@ -34,7 +35,7 @@ export async function emitToolBeforeHook(
     payload: {
       toolName: input.toolName,
       args: input.args,
-      sessionId: input.sessionId,
+      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     },
     defaultReturn: undefined,
   };

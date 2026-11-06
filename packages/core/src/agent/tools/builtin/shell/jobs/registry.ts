@@ -28,7 +28,7 @@ import type { CommandJobLogWriter } from "./output-log.js";
 import type { PersistedCommandJob } from "./store.js";
 import type { ResolvedCoreEnv } from "../../../../../env";
 import type { CommandJobStatus } from "../../../../../env/types.js";
-import type { SessionJobSummary } from "../../../../../runtime-types/session-payloads.js";
+import type { SessionJobStatus, SessionJobSummary } from "../../../../../runtime-types/session-payloads.js";
 
 /**
  * Re-export of the CoreEnv union (`env/types.ts`), which is the one the host contract and the
@@ -37,6 +37,28 @@ import type { SessionJobSummary } from "../../../../../runtime-types/session-pay
  * two hand-synced unions waiting to drift when the contract grows a state.
  */
 export type { CommandJobStatus };
+
+/**
+ * Project the CoreEnv job status onto the shared background-work vocabulary.
+ *
+ * The two unions are structurally identical today — which is exactly why a direct assignment used
+ * to compile silently. This switch makes drift a compile error: adding a state to `CommandJobStatus`
+ * without deciding its `SessionJobStatus` counterpart now fails here instead of landing in another
+ * source's rows unchanged.
+ */
+function toSessionJobStatus(status: CommandJobStatus): SessionJobStatus {
+  switch (status) {
+    case "running":
+    case "exited":
+    case "killed":
+    case "failed":
+      return status;
+    default: {
+      const unreachable: never = status;
+      return unreachable;
+    }
+  }
+}
 
 export interface CommandJobRecord {
   id: string;
@@ -396,7 +418,7 @@ export class CommandJobRegistry {
         jobId: job.id,
         kind: COMMAND_JOB_KIND,
         label: job.command,
-        status: job.status,
+        status: toSessionJobStatus(job.status),
         exitCode: job.exitCode,
         startedAt: job.startedAt,
         endedAt: job.endedAt,

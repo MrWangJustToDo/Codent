@@ -179,6 +179,41 @@ assert.equal(postUnsub, countAfterUnsub, "unsubscribed handler must not receive 
   const bus = managed.getEventBus();
   assert.ok(bus, "managed agent has a scoped unified bus");
 
+  // Regression: two subscribers share ONE SSE connection, so each frame reaches the reducer once.
+  // With a connection per subscriber, both applied the same `tool:chunk` and appended it twice to
+  // the shared `toolBufferCache` (the UI and the remount seed then showed duplicated output).
+  {
+    const secondSubscriber = client.subscribe(() => {}, { channels: ["tool", "state"] });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    bus.emit("tool:chunk", {
+      kind: "chunk",
+      chunk: { toolCallId: "e2e-dedupe", type: "stdout", chunk: "once" },
+    });
+    await waitFor("dedupe chunk applied", () => client.getToolBuffers()["e2e-dedupe"]?.stdout === "once");
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(
+      client.getToolBuffers()["e2e-dedupe"]?.stdout,
+      "once",
+      "one frame must be applied once, not once per subscriber"
+    );
+    secondSubscriber();
+  }
+
+  // Regression: unsubscribing the last subscriber and subscribing again in the SAME tick must
+  // revive the shared loop. The old loop is still winding down (`sseLoop` non-null), so a naive
+  // "already running" check left the new subscriber with no connection at all.
+  {
+    const reviveClient = new RemoteSessionClient({ baseUrl, agentId: client.getSnapshot().agentId });
+    const firstSeen = [];
+    const first = reviveClient.subscribe((event) => firstSeen.push(event.channel), { channels: ["state"] });
+    await waitFor("first subscriber live", () => firstSeen.includes("state"));
+    first();
+    const secondSeen = [];
+    const second = reviveClient.subscribe((event) => secondSeen.push(event.channel), { channels: ["state"] });
+    await waitFor("re-subscribe revives the shared loop", () => secondSeen.includes("state"));
+    second();
+  }
+
   // Command stream: run_command → per-agent AgentStreamHub → tool:chunk / tool:clear.
   // Here we drive the scoped bus directly to exercise the full session projection + SSE hop.
   bus.emit("tool:chunk", {

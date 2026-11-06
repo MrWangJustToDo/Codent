@@ -141,8 +141,26 @@ const countEvent = (type, entries = root.entries) => entries.filter((entry) => e
 
 /** Rows a reader would call machinery: status bookkeeping, auto approvals, empty thinking. */
 function noiseRows() {
+  // Keep in sync with `MECHANICAL_STATE_EVENTS` in
+  // packages/core/src/agent/log/event-log-specialized.ts. The handler REFUSES to write a row for
+  // these, so a current-build log has none; a row here is the regression this check exists for.
+  // Counting every `data.event` row instead would flag the transitions the policy deliberately
+  // keeps (error / aborted / ask_user pause), turning a healthy session with one failure into
+  // `preChangeBuild` and a false `--check` failure.
+  const MECHANICAL_STATE_EVENTS = new Set([
+    "prepare",
+    "stream-chunk",
+    "settle",
+    "reset",
+    "compaction-start",
+    "compaction-end",
+    "teardown",
+  ]);
   const status = root.entries.filter(
-    (entry) => entry.event === "agent:status" && typeof entry.data?.trigger === "string"
+    (entry) =>
+      entry.event === "agent:status" &&
+      typeof entry.data?.event === "string" &&
+      MECHANICAL_STATE_EVENTS.has(entry.data.event)
   );
   const autoApprovals = root.entries.filter(
     (entry) =>

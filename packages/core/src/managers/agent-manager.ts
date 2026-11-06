@@ -301,11 +301,28 @@ export class AgentManager {
     if (this.buildsInFlight > 0) {
       await new Promise<void>((resolve) => this.buildWaiters.push(resolve));
     }
-    this.lifecycle.reset();
-    await this.lifecycle.settleTeardowns();
-    this.logExtension.dispose();
-    this.busScope.dispose();
-    this.tornDown = true;
+    // Each stage runs even when an earlier one throws. Without this, one failing agent teardown
+    // skipped `settleTeardowns` and left the log extension + root bus scope alive on a manager that
+    // reported itself disposed (`tornDown` was only set at the end).
+    try {
+      this.lifecycle.reset();
+    } finally {
+      try {
+        await this.lifecycle.settleTeardowns();
+      } finally {
+        try {
+          this.logExtension.dispose();
+        } finally {
+          try {
+            this.busScope.dispose();
+          } finally {
+            // Set in a finally: a throwing bus disposal must not leave the manager in a state where
+            // `disposed` is true, `tornDown` is false, and a retry re-runs the whole teardown.
+            this.tornDown = true;
+          }
+        }
+      }
+    }
   }
 
   // ============================================================================
@@ -477,8 +494,15 @@ export class AgentManager {
           await this.lifecycle.settleTeardowns();
         } else {
           await managed.disposeBuiltResources();
-          this.releaseConstructionLog(managed.id);
-          this.releaseAgentScope(managed.id);
+          // Release only what THIS build created. The `registered` flag already keeps `destroy`
+          // away from a healthy agent with the same id; the scope/log release needs the same guard,
+          // because `busScope.of(id)` returns the LIVE agent's cached scope for that id — deleting
+          // it by id would silently cut off a healthy agent's session projection and subagent
+          // up-flow while the registry still looked complete.
+          if (!this.agents.has(managed.id)) {
+            this.releaseConstructionLog(managed.id);
+            this.releaseAgentScope(managed.id);
+          }
         }
       }
       throw error;
@@ -658,6 +682,17 @@ export class AgentManager {
    */
   releaseSessionOwnership(sessionId: string, agentId: string): void {
     this.sessionOwnership.release(sessionId, agentId);
+  }
+
+  /**
+   * The agent holding `sessionId` in the shared ownership table, or undefined.
+   *
+   * Exposed so the session host reads the SAME table the manager claims into. Recomputing
+   * `sharedSessionOwnership(env)` from a resolved env copy is a different table for a remote env
+   * (`sourceEnv` identity), which made the delete guard inert exactly where it was needed.
+   */
+  getSessionOwner(sessionId: string): string | undefined {
+    return this.sessionOwnership.ownerOf(sessionId);
   }
 
   /**

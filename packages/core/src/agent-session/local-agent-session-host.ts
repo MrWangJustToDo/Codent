@@ -50,6 +50,11 @@ export interface LocalAgentSessionHostManager extends LocalAgentSessionManager {
    * minimal manager surface stays minimal.
    */
   releaseSessionOwnership?(sessionId: string, agentId: string): void;
+  /**
+   * The agent holding this disk session in the shared workspace table, if any. Optional so the
+   * minimal manager surface stays minimal; the delete guard is best-effort without it.
+   */
+  getSessionOwner?(sessionId: string): string | undefined;
 }
 
 export interface CreateLocalAgentSessionHostOptions {
@@ -299,6 +304,15 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
     // lookup always misses. It is kept only as a cheap exact-hit probe; the lookup that actually
     // resolves a disk id to its owning agent is `sessionOwningAgent` below.
     const live = this.manager.getAgent(sessionId) ?? this.sessionOwningAgent(sessionId);
+    // Ownership is per WORKSPACE, not per manager. Another live runtime in this process (a second
+    // key / host over the same root) can hold the id; deleting it would tombstone the file and make
+    // every later save in that agent a silent no-op while its transcript still looked alive.
+    // Read the manager's OWN table: `sharedSessionOwnership(this.storeEnv)` is a different table
+    // for a remote env (keyed by `sourceEnv` identity), so recomputing it was inert there.
+    const ownerId = this.manager.getSessionOwner?.(sessionId);
+    if (ownerId !== undefined && ownerId !== live?.id) {
+      throw new Error(`Session "${sessionId}" is active in another live session and cannot be deleted here.`);
+    }
     if (live) {
       // Do NOT release the disk-session claim here. `destroy` below releases it at the END of
       // teardown (after the pump is aborted, writes drained, log flushed). Releasing first opened

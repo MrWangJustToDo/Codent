@@ -40,7 +40,10 @@ export class AgentLogBinding {
     const log = this.deps.getLog();
     const sinkOptions = { dir: AGENT_LOG_DIR, env: this.deps.getCoreEnv() };
     this.detachHandle = this.deps.attachViaManager?.(log, sinkOptions) ?? log.attachFileSink(sinkOptions);
-    this.everBound = true;
+    // The attach may legitimately return a no-op handle when the env cannot append; `hasSink()` is
+    // the truth, not "we called attach". Otherwise a later destroy reports nothing dropped while the
+    // buffered bootstrap diagnostics silently die with the object.
+    this.everBound = log.hasSink();
     registerActiveAgentLog(log);
   }
 

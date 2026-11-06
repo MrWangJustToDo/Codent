@@ -50,7 +50,7 @@ export {
 } from "./compaction-prompt.js";
 export { collectIncompleteTodos } from "./compaction-todos.js";
 
-// Keep policy (token-budget vs legacy turn counting)
+// Keep policy (token-budget only; the turn-counting policy was removed)
 export {
   DEFAULT_RESERVE_TOKENS,
   KEEP_RECENT_WINDOW_CAP,

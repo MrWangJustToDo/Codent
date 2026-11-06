@@ -51,14 +51,22 @@ export interface ExtensionCompletionHost {
    * diagnostics must not land in the session a `/new` or `/resume` switched to mid-completion.
    */
   captureEpoch?(): Epoch;
-  /** Count one call against the current run's budget; throws {@link ExtensionLlmError} when spent. */
-  consumeExtensionBudget(extensionId: string): void;
+  /**
+   * Count one call against the current run's budget; throws {@link ExtensionLlmError} when spent.
+   *
+   * Returns the run the slot was charged to (null when there is no run: an idle command is bounded
+   * by the output cap instead), so a refund can be tied to the same run.
+   */
+  consumeExtensionBudget(extensionId: string): string | null;
   /**
    * Give one slot back after an attempt that was neither billed nor completed (a transport failure
    * before the provider answered). Without it, transient 502s exhaust the run's budget and the real
    * work never runs.
+   *
+   * The token is the value `consumeExtensionBudget` returned: a completion can outlive its turn, and
+   * refunding the CURRENT run's counter with an old failure's slot gave the new turn an extra call.
    */
-  refundExtensionBudget?(): void;
+  refundExtensionBudget?(runToken: string | null): void;
   /** The effective model id the session is running. */
   getExtensionModel(): string | undefined;
   /** Per-agent output-token cap (a ceiling, not a default), when the host configured one. */
@@ -245,7 +253,7 @@ export async function completeExtensionQuery(
   // request that is never issued exhausts a run's allowance across repeated cancels.
   if (signal?.aborted) throw abortReason(signal);
 
-  host.consumeExtensionBudget(extensionId);
+  const budgetRun = host.consumeExtensionBudget(extensionId);
 
   try {
     const result = await runSideTextQuery(adapter, {
@@ -295,8 +303,8 @@ export async function completeExtensionQuery(
       });
     } else if (!billed && stillCurrent()) {
       // Nothing was billed, so the slot goes back: a burst of transient failures must not spend the
-      // run's allowance. A stale completion must not refund the NEW run's budget either.
-      host.refundExtensionBudget?.();
+      // run's allowance. The run token keeps a stale completion from refunding the NEW run's budget.
+      host.refundExtensionBudget?.(budgetRun);
     }
     throw error;
   }
