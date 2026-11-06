@@ -164,7 +164,11 @@ export function finalizeManagedAgentRun(host: RunLifecycleHost, reason: RunFinal
       abortSignal: host.run.currentAbortController?.signal,
     });
   }
-  host.emitEvent("agent:stop", { reason });
+  const cause = host.run.getAbortReason?.();
+  host.emitEvent("agent:stop", {
+    reason,
+    ...(cause ? { cause } : {}),
+  });
   // Clear the run scope in a LATER task, not now.
   //
   // Teardown outlives the run it tears down: a cancelled tool's `onAfterToolCall` —

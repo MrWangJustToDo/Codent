@@ -36,6 +36,8 @@ export class RunCoordinator {
   pendingAbortControllers: AbortController[] = [];
   private externalAbortListener: ((event: Event) => void) | null = null;
   private externalAbortSignal: AbortSignal | null = null;
+  /** Abort reason of the current turn, read by the finalizer to distinguish cancel/switch/destroy. */
+  private lastAbortReason: string | undefined;
 
   setupAbortController(abortSignal: AbortSignal | undefined, setup: AbortControllerSetup): void {
     this.cancelAbortController();
@@ -105,6 +107,7 @@ export class RunCoordinator {
    */
   abort(reason?: unknown): void {
     const effective = typeof reason === "string" && reason.length > 0 ? reason : undefined;
+    if (effective !== undefined) this.lastAbortReason = effective;
     let pending = this.pendingAbortControllers.pop();
     while (pending) {
       pending.abort(effective);
@@ -131,6 +134,8 @@ export class RunCoordinator {
    */
   beginRun(): RunToken {
     if (this.currentRunToken) this.currentRunToken.valid = false;
+    // A new turn has no abort cause until something aborts it.
+    this.lastAbortReason = undefined;
     const state: RunTokenState = { id: ++this.runTokenSeq, valid: true };
     this.currentRunToken = state;
     return {
@@ -351,6 +356,11 @@ export class RunCoordinator {
     return this.currentRunId;
   }
 
+  /** Abort reason of the current/last finished turn (`user-cancelled`, `session-switch`, …). */
+  getAbortReason(): string | undefined {
+    return this.lastAbortReason;
+  }
+
   resetRunState(): void {
     this.promptlessTurn = false;
     // A parked turn never reaches `finalizeManagedAgentRun`, so its deferred clear does not run.
@@ -358,6 +368,7 @@ export class RunCoordinator {
     // the abandoned run; the bus resolves runId from here, so it must be empty again.
     this.currentRunId = null;
     this.abort();
+    this.lastAbortReason = undefined;
     this.pendingAbortControllers = [];
     this.cancelAbortController();
     this.currentAbortController = null;

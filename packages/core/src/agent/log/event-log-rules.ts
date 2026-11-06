@@ -244,7 +244,9 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
       // A parked turn is not a finished one: "Turn complete" on an approval wait is how the
       // majority-paused summaries ended up describing turns that had not ended.
       const headline =
-        d.paused === true ? "Turn paused (waiting for input)" : `Turn complete${d.outcome ? ` (${d.outcome})` : ""}`;
+        d.paused === true
+          ? "Turn paused (waiting for input)"
+          : `Turn complete${d.outcome ? ` (${d.outcome}${typeof d.cause === "string" ? `, ${d.cause}` : ""})` : ""}`;
       const phases = d.phases ?? "?";
       const toolCalls = d.toolCalls ?? "?";
       const inTokens = d.inputTokens ?? "?";
@@ -267,7 +269,11 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
   "agent:stop": {
     level: "info",
     category: "agent",
-    formatMessage: (event) => `Agent stop (${p(event).reason ?? "unknown"})`,
+    formatMessage: (event) => {
+      const d = p(event);
+      const cause = typeof d.cause === "string" ? `, ${d.cause}` : "";
+      return `Agent stop (${d.reason ?? "unknown"}${cause})`;
+    },
   },
   "agent:status": SPECIALIZED_EVENT_LOG,
   "extension:log": SPECIALIZED_EVENT_LOG,

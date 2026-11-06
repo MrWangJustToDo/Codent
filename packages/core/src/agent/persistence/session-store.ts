@@ -69,6 +69,27 @@ const sessionSaveLocks = new Map<string, Promise<void>>();
 const deletedSessionPaths = new Set<string>();
 
 /** What we remember about the last durable write, to compute the next delta. */
+const sessionStoreEnvIds = new WeakMap<object, number>();
+let nextSessionStoreEnvId = 0;
+
+/**
+ * Process-wide key prefix for a store's workspace.
+ *
+ * Local workspaces are identified by `rootPath`; a remote env is one client connection, so its
+ * environment identity is the discriminator (two servers commonly report `/workspace`). Without
+ * this, a delete tombstone from one remote would block the other's saves for the rest of the
+ * process.
+ */
+function storeEnvScope(env: ResolvedCoreEnv): string {
+  if (!env.remote) return `local:${env.rootPath}`;
+  let id = sessionStoreEnvIds.get(env);
+  if (id === undefined) {
+    id = ++nextSessionStoreEnvId;
+    sessionStoreEnvIds.set(env, id);
+  }
+  return `remote:${id}:${env.rootPath}`;
+}
+
 interface LastSaved {
   /** Message ids in order at the last write (prefix check for append-only). */
   ids: string[];
@@ -605,7 +626,7 @@ export class SessionStore {
 
   /** Process-wide map key: the log path alone is relative to the workspace. */
   private getLogKey(id: string): string {
-    return `${this.env.rootPath}\0${this.getLogPath(id)}`;
+    return `${storeEnvScope(this.env)}\0${this.getLogPath(id)}`;
   }
 
   private async ensureDir(): Promise<void> {

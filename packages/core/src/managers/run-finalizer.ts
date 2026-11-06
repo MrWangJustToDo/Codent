@@ -29,6 +29,8 @@ export interface RunFinalizerDeps {
   /** The state axes; the outcome reads these instead of re-deriving from status strings. */
   getAgentState?: () => AgentState;
   getError: () => string;
+  /** Abort reason of the turn, carried into `turn:summary` for cancel/switch/destroy attribution. */
+  getAbortReason?: () => string | undefined;
   /** Turn-level finalization (agent:stop / persistence / memory extraction); idempotent. */
   finalizeRun: (reason: RunFinalizeReason) => void;
   discardPreforkRuns: (cause: PreforkDiscardCause) => void;
@@ -108,8 +110,10 @@ export class RunFinalizer {
 
     const totalUsage = this.deps.usage.getTotal();
     const delta = (now: number, before: number) => Math.max(0, now - before);
+    const cause = this.deps.getAbortReason?.();
     this.deps.emitEvent("turn:summary", {
       ...(input.kind !== "waiting" ? { outcome: input.kind } : { paused: true as const }),
+      ...(cause ? { cause } : {}),
       phases: input.phases,
       toolCalls: delta(countToolCalls(input.messages), input.toolCallsBefore),
       inputTokens: delta(totalUsage.inputTokens, input.usageBefore.inputTokens),

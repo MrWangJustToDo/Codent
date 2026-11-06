@@ -43,6 +43,12 @@ const PLAN_MUTATIONS = new Set<AgentSessionCommand["type"]>([
   "plan.save",
   "plan.load",
   "plan.complete",
+  // `mode.set` / `mode.toggle` also mutate persisted session state (plan phase, auto flag,
+  // reasoning effort). Letting them through during a switch wrote the LEAVING session's policy to
+  // memory while the persist was refused, and the subsequent restore overwrote it — a divergence
+  // the host could not observe.
+  "mode.set",
+  "mode.toggle",
 ]);
 
 export async function dispatchLocalAgentSessionCommand(
@@ -69,17 +75,22 @@ export async function dispatchLocalAgentSessionCommand(
     switch (command.type) {
       case "send": {
         if (!chat) return { ok: false, code: "failed", error: "Chat controller not initialized" };
+        // `dropped` also covers a destroyed agent; name that cause instead of telling the host to
+        // retry after a switch that will never happen.
+        if (managed.isDestroyed?.() === true) return { ok: false, code: "failed", error: "Agent has been destroyed" };
         const outcome = await chat.sendMessage(command.content);
         if (outcome === "dropped") return { ok: false, code: "failed", error: SESSION_SWITCHING_ERROR };
         return { ok: true };
       }
       case "steer": {
         if (!chat) return { ok: false, code: "failed", error: "Chat controller not initialized" };
+        if (managed.isDestroyed?.() === true) return { ok: false, code: "failed", error: "Agent has been destroyed" };
         if (!chat.steer(command.content)) return { ok: false, code: "failed", error: SESSION_SWITCHING_ERROR };
         return { ok: true };
       }
       case "followUp": {
         if (!chat) return { ok: false, code: "failed", error: "Chat controller not initialized" };
+        if (managed.isDestroyed?.() === true) return { ok: false, code: "failed", error: "Agent has been destroyed" };
         if (!chat.followUp(command.content)) return { ok: false, code: "failed", error: SESSION_SWITCHING_ERROR };
         return { ok: true };
       }
@@ -89,6 +100,7 @@ export async function dispatchLocalAgentSessionCommand(
       }
       case "forceSubmit": {
         if (!chat) return { ok: false, code: "failed", error: "Chat controller not initialized" };
+        if (managed.isDestroyed?.() === true) return { ok: false, code: "failed", error: "Agent has been destroyed" };
         if (!chat.forceSubmit(command.content)) return { ok: false, code: "failed", error: SESSION_SWITCHING_ERROR };
         return { ok: true };
       }
@@ -102,18 +114,44 @@ export async function dispatchLocalAgentSessionCommand(
       }
       case "respondApproval": {
         if (!chat) return { ok: false, code: "failed", error: "Chat controller not initialized" };
+        if (managed.isDestroyed?.() === true) return { ok: false, code: "failed", error: "Agent has been destroyed" };
         const accepted = await chat.respondToToolApproval(command.approvalId, command.approved, command.reason);
-        if (!accepted) return { ok: false, code: "failed", error: SESSION_SWITCHING_ERROR };
+        if (accepted === "switching") return { ok: false, code: "failed", error: SESSION_SWITCHING_ERROR };
+        if (accepted === "not-pending") {
+          return {
+            ok: false,
+            code: "failed",
+            error: "Approval is no longer pending (already answered, auto-approved, or the turn ended).",
+          };
+        }
         return { ok: true };
       }
       case "addToolResult": {
         if (!chat) return { ok: false, code: "failed", error: "Chat controller not initialized" };
+        if (managed.isDestroyed?.() === true) return { ok: false, code: "failed", error: "Agent has been destroyed" };
         const accepted = await chat.addToolResult(command.toolCallId, command.output);
-        if (!accepted) return { ok: false, code: "failed", error: SESSION_SWITCHING_ERROR };
+        if (accepted === "switching") return { ok: false, code: "failed", error: SESSION_SWITCHING_ERROR };
+        if (accepted === "rejected") {
+          return {
+            ok: false,
+            code: "failed",
+            error: "Tool result rejected: the call is not an unanswered client tool (or it was already answered).",
+          };
+        }
         return { ok: true };
       }
       case "setClientToolWaiting": {
-        managed.setClientToolWaiting(command.active);
+        if (managed.isDestroyed?.() === true) return { ok: false, code: "failed", error: "Agent has been destroyed" };
+        const outcome = managed.setClientToolWaiting(command.active);
+        if (outcome === "switching") return { ok: false, code: "failed", error: SESSION_SWITCHING_ERROR };
+        if (outcome === "compacting") {
+          return {
+            ok: false,
+            code: "failed",
+            error: "Cannot change the client-tool wait while a compaction is running.",
+          };
+        }
+        if (outcome === "destroyed") return { ok: false, code: "failed", error: "Agent has been destroyed" };
         return { ok: true };
       }
       case "compact": {
@@ -140,19 +178,19 @@ export async function dispatchLocalAgentSessionCommand(
       }
       case "mode.set": {
         const mode = managed.setAgentMode(command.mode);
-        settleApprovalsIfAutoApproved(managed, chat);
+        await settleApprovalsIfAutoApproved(managed, chat);
         return { ok: true, data: { mode } };
       }
       case "mode.toggle": {
         const mode = managed.cycleAgentMode();
-        settleApprovalsIfAutoApproved(managed, chat);
+        await settleApprovalsIfAutoApproved(managed, chat);
         return { ok: true, data: { mode } };
       }
       case "plan.execute": {
         const result = managed.beginPlanExecution({ sendSteer: command.sendSteer });
         // Entering plan execution turns the same auto-approve policy on (`todosSeeded`), so a run
         // parked on an approval must be released by the same rule — not only by a mode switch.
-        if (result.ok) settleApprovalsIfAutoApproved(managed, chat);
+        if (result.ok) await settleApprovalsIfAutoApproved(managed, chat);
         return result.ok
           ? { ok: true, data: result }
           : { ok: false, code: "failed", error: result.error ?? "plan execute failed" };
@@ -361,13 +399,14 @@ export async function dispatchLocalAgentSessionCommand(
  * (Shift+Tab) did not do it even in the TUI. One definition: the policy decides, the chat controller
  * settles.
  */
-function settleApprovalsIfAutoApproved(
+async function settleApprovalsIfAutoApproved(
   managed: ManagedAgent,
   chat: ReturnType<ManagedAgent["getChatController"]>
-): void {
+): Promise<void> {
   if (!chat || !managed.shouldAutoApprovePendingTools()) return;
-  // Not awaited: the returned promise is the PUMP, which runs the approved tools and the model turn
-  // after them. A mode switch must return as soon as the decisions are recorded, or every caller of
-  // `mode.set` (ACP's `set_config_option`, the TUI's `/mode`) would block for the rest of the run.
-  void chat.approvePendingApprovals().catch(() => undefined);
+  // Await the DECISIONS, not the pump: `authorizeAndResume` records answers through
+  // `authorizeToolCall` (which may await the command analyzer) and then enqueues the pump without
+  // awaiting it. A caller that resolves before the decisions are durable made a remote client see
+  // "auto enabled" with the old approval still pending.
+  await chat.authorizeAndResume().catch(() => undefined);
 }

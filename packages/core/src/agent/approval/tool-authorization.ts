@@ -71,14 +71,15 @@ export class ToolAuthorizationService {
   /**
    * One pass over every pending approval through the authorization pipeline.
    *
-   * `ask` stays pending for the user; the caller does not enqueue a pump for it.
+   * `ask` stays pending for the user; the caller does not enqueue a pump for it. Returns whether
+   * any decision was recorded (the resume path enqueues exactly once when this is true).
    */
-  async authorizePendingApprovals(): Promise<void> {
+  async authorizePendingApprovals(): Promise<boolean> {
     // Nothing read before the switch is safe to write after it.
-    if (this.deps.isSessionSwitching()) return;
+    if (this.deps.isSessionSwitching()) return false;
 
     const facts = this.deps.getPolicyFacts?.();
-    if (!facts) return;
+    if (!facts) return false;
     let handled = false;
     for (const part of this.deps.getMessages().flatMap((message) => message.parts)) {
       if (part.type !== "tool-call") continue;
@@ -111,8 +112,10 @@ export class ToolAuthorizationService {
       // cannot skip it. (The old order skipped analysis entirely in auto.) Results are reused by
       // the later analysis stage.
       const analyzed =
-        isCommand && input?.command ? await this.evaluateCommand({ ...input, command: input.command }) : undefined;
-      if (this.deps.isSessionSwitching()) return;
+        isCommand && input?.command
+          ? await this.evaluateCommand({ ...input, command: input.command }, facts)
+          : undefined;
+      if (this.deps.isSessionSwitching()) return false;
       const hardPolicy =
         analyzed?.action === "deny"
           ? {
@@ -162,7 +165,7 @@ export class ToolAuthorizationService {
             }
           : {}),
       });
-      if (this.deps.isSessionSwitching()) return;
+      if (this.deps.isSessionSwitching()) return false;
 
       // Re-read after the await: the user may have answered while the analyzer was running.
       const live = findApprovalPart(this.deps.getMessages(), approval.id);
@@ -218,9 +221,13 @@ export class ToolAuthorizationService {
     }
 
     if (handled) this.deps.settle();
+    return handled;
   }
 
-  private async evaluateCommand(input: RunCommandApprovalInput): Promise<CommandApprovalDecision> {
+  private async evaluateCommand(
+    input: RunCommandApprovalInput,
+    facts: AgentPolicyFacts
+  ): Promise<CommandApprovalDecision> {
     if (this.deps.evaluateCommandSafety) return this.deps.evaluateCommandSafety(input);
     const env = this.deps.getCoreEnv();
     // One basis for analysis and execution. `cwd` decides whether a relative path is inside the
@@ -230,7 +237,13 @@ export class ToolAuthorizationService {
     const cwd = input.cwd ? env.path.resolve(env.rootPath, input.cwd) : undefined;
     const ctx = await createAnalysisContext(env, cwd ? { cwd } : undefined);
     const report = await analyzeCommand(input.command, ctx);
-    return evaluateCommandApproval(report, { agentKind: "root", envOverrides: input.env });
+    // The verdict must use the SAME identity the call executes under. A delegated `general` child
+    // can reach `run_command` but has no approval UI, so a root verdict (`ask`) would park a call
+    // nobody can answer; the subagent verdict turns that into a denial with a readable reason.
+    return evaluateCommandApproval(report, {
+      agentKind: facts.isSubagent ? "subagent" : "root",
+      envOverrides: input.env,
+    });
   }
 }
 

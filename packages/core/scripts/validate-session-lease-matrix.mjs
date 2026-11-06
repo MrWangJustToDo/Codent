@@ -90,6 +90,21 @@ function activeLease(sessionId, options = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// 2b. Switching away from a reused (reserved) empty session releases its reservation
+// ---------------------------------------------------------------------------
+{
+  const { lease, calls } = activeLease("ses_reserved", { claim: { reserved: true } });
+  calls.reservation.length = 0;
+  assert.equal(lease.claim("ses_next"), true);
+  lease.commit();
+  assert.deepEqual(
+    calls.reservation,
+    ["ses_reserved"],
+    "a committed switch away from the reused session releases its bootstrap reservation"
+  );
+}
+
+// ---------------------------------------------------------------------------
 // 3. Failed resume: B released, A kept, generation unchanged
 // ---------------------------------------------------------------------------
 {

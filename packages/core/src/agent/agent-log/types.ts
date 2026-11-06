@@ -33,11 +33,13 @@ export interface LogScope {
   profile: AgentProfileId;
   /** The parent `task` tool call that owns this child, when applicable. */
   taskCallId?: string;
+  /** Stable agent identity in the shared workspace timeline (root or child). */
+  agentId?: string;
 }
 
 /** Log entry */
 export interface LogEntry {
-  /** Profile/task attribution; root session and agent identity come from the sink path. */
+  /** Profile/task/agent attribution; the workspace timeline is shared across sessions. */
   scope: LogScope;
   /** Unique log ID */
   id: string;

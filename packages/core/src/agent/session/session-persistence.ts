@@ -73,8 +73,8 @@ export class SessionPersistence {
   }
 
   /** Restore the store snapshot + agent state; called inside `ManagedAgent.restoreSession`. */
-  async restore(sessionId: string): Promise<SessionData> {
-    return restoreManagedSession(this.host, sessionId);
+  async restore(sessionId: string, options?: { repairRuntime?: boolean }): Promise<SessionData> {
+    return restoreManagedSession(this.host, sessionId, options);
   }
 
   /**

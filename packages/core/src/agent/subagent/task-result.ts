@@ -213,6 +213,9 @@ export async function finalizeSubagentTask(input: FinalizeSubagentTaskInput): Pr
       subagentManaged.usage.getTotalCostUsd(),
       subagentManaged.usage.getBilledInputTokens()
     );
+    // A background task can settle while no turn will persist it (wake is refused for aborted /
+    // error / planning). Write the state now so the cost is not lost until the user types.
+    parentManaged.persistSession();
   }
 
   // Run facts every terminal branch carries: a failed or cancelled child spent the same tokens and

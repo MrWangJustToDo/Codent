@@ -44,6 +44,8 @@ export class SessionLease {
   private leavingId: string | undefined;
   private generation = 0;
   private reserved = false;
+  /** Whether the session being LEFT was reserved by this lease (released at commit). */
+  private leavingReserved = false;
 
   constructor(
     private readonly ownerId: string,
@@ -88,7 +90,10 @@ export class SessionLease {
     if (this.state === "restoring" && this.sessionId === sessionId) return true;
 
     if (!this.ports.acquire(sessionId, this.ownerId)) return false;
-    if (this.state === "active" || this.state === "draining") this.leavingId = this.sessionId;
+    if (this.state === "active" || this.state === "draining") {
+      this.leavingId = this.sessionId;
+      this.leavingReserved = this.reserved;
+    }
     this.sessionId = sessionId;
     this.reserved = options.reserved === true;
     this.state = "claimed";
@@ -113,8 +118,13 @@ export class SessionLease {
     }
     if (this.leavingId !== undefined && this.leavingId !== this.sessionId) {
       this.ports.release(this.leavingId, this.ownerId);
+      // The departure may have been a reused empty session this lease reserved at bootstrap. A
+      // committed switch away from it must release that reservation, or it stays invisible to
+      // `getLatestEmpty()` for the rest of the TTL.
+      if (this.leavingReserved) this.ports.releaseReservation?.(this.leavingId);
     }
     this.leavingId = undefined;
+    this.leavingReserved = false;
     this.state = "active";
     this.generation += 1;
     this.ports.onCommit?.(this.sessionId, this.generation);
@@ -144,7 +154,8 @@ export class SessionLease {
       if (this.reserved) this.ports.releaseReservation?.(target);
       this.sessionId = this.leavingId;
       this.leavingId = undefined;
-      this.reserved = false;
+      this.reserved = this.leavingReserved;
+      this.leavingReserved = false;
       this.state = "active";
       return;
     }
@@ -171,6 +182,7 @@ export class SessionLease {
     this.sessionId = undefined;
     this.leavingId = undefined;
     this.reserved = false;
+    this.leavingReserved = false;
     this.state = "released";
   }
 }

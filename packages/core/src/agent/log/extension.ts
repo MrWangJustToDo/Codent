@@ -55,8 +55,12 @@ export type { EventLogPolicy, EventLogResolver, EventLogRule } from "./event-log
 interface SharedSinkEntry {
   sink: LogFileSink;
   refs: number;
-  /** Every log currently writing through this sink (used to attribute persist failures). */
-  owners: Set<AgentLog>;
+  /**
+   * Per-log persist-error reporters. A shared sink must report through the manager that owns a
+   * LIVE log, not whichever manager happened to create the sink (that manager's registry may not
+   * contain the failing log, and its diagnostic would be dropped).
+   */
+  reporters: Map<AgentLog, (info: LogPersistErrorInfo) => void>;
 }
 
 /**
@@ -191,15 +195,16 @@ export function createLogExtension(options: LogExtensionOptions): LogExtension {
         const candidate: SharedSinkEntry = {
           sink: undefined as unknown as LogFileSink,
           refs: 0,
-          owners: new Set(),
+          reporters: new Map(),
         };
         candidate.sink = createJsonlFileSink({
           ...sinkOptions,
           ...(options.onPersistError
             ? {
                 onPersistError: (info: LogPersistErrorInfo) => {
-                  const owner = candidate.owners.values().next().value;
-                  if (owner) options.onPersistError?.(owner, info);
+                  // Resolve at failure time: the first attached log may already be detached.
+                  const report = candidate.reporters.values().next().value;
+                  report?.(info);
                 },
               }
             : {}),
@@ -208,13 +213,16 @@ export function createLogExtension(options: LogExtensionOptions): LogExtension {
         workspaceSinks.set(key, entry);
       }
       entry.refs += 1;
-      entry.owners.add(log);
+      if (options.onPersistError) {
+        const reporter = (info: LogPersistErrorInfo): void => options.onPersistError?.(log, info);
+        entry.reporters.set(log, reporter);
+      }
       const shared = entry;
 
       const detach = (): void => {
         if (sinks.get(log) !== detach) return; // superseded — nothing of ours to release
         sinks.delete(log);
-        shared.owners.delete(log);
+        shared.reporters.delete(log);
         log.detachSink(shared.sink.handleEntry);
         shared.refs -= 1;
         if (shared.refs <= 0) {

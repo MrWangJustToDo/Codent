@@ -20,6 +20,7 @@
 import { parse as parseYaml } from "yaml";
 
 import { getEnv, type ResolvedCoreEnv } from "../../env";
+import { writeFileAtomic } from "../../utils/atomic-write.js";
 import { truncateToUtf8Bytes } from "../../utils/bytes.js";
 import { compareCodeUnits } from "../../utils/code-unit-order.js";
 import { splitFrontmatter } from "../../utils/frontmatter.js";
@@ -365,9 +366,10 @@ export class MemoryManager {
       this.cachedIndex = indexContent;
     }
 
-    // Write the index file
+    // Write the index file atomically: two roots over one workspace may refresh concurrently, and
+    // a reader must never observe a half-written `MEMORY.md` (it is injected into the prompt).
     try {
-      await this.env.fs.writeFile(this.indexPath, this.cachedIndex);
+      await writeFileAtomic(this.env.fs, this.indexPath, this.cachedIndex);
     } catch {
       // Failed to write MEMORY.md index
     }

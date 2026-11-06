@@ -177,7 +177,7 @@ export class AgentLog {
 
       // The one builder every writer passes through: redact direct writers too, not just the bridge.
       if (options?.data) entry.data = redactLogValue(options.data) as Record<string, unknown>;
-      if (options?.tags) entry.tags = options.tags;
+      if (options?.tags) entry.tags = options.tags.map((tag) => truncateText(redactSecrets(tag), 200));
       if (options?.event) entry.event = options.event;
       if (options?.run) entry.run = options.run;
       if (options?.sessionId) entry.sessionId = options.sessionId;

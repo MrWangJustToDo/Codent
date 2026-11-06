@@ -14,17 +14,24 @@ import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
 
 import type { ToolApprovalRecord } from "../../agent/persistence/types.js";
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
-import type { ChatMiddleware } from "@tanstack/ai";
+import type { ChatMiddleware, UIMessage } from "@tanstack/ai";
 
 export interface ApprovalResumeMiddlewareDeps {
   getApprovals: () => readonly ToolApprovalRecord[];
+  /**
+   * The live transcript (the UI channel), used to scope each answered row to the call it decided.
+   *
+   * A provider can reuse a tool-call id in a later request, so the id alone cannot say whether
+   * the decision belongs to the call currently being resumed. See `approvalsToResumeMap`.
+   */
+  getMessages: () => readonly UIMessage[];
 }
 
 export function createApprovalResumeMiddleware(deps: ApprovalResumeMiddlewareDeps): ChatMiddleware<ToolRunContext> {
   return defineMiddleware("observe", {
     name: "approval-resume",
     onConfig: async (_ctx, config) => {
-      const approvals = approvalsToResumeMap(deps.getApprovals());
+      const approvals = approvalsToResumeMap(deps.getApprovals(), deps.getMessages());
       if (approvals.size === 0) return;
 
       return {

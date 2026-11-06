@@ -50,7 +50,7 @@ export interface AgentChatHost {
   setUIChannel(channel: AgentUIChannel): void;
   setError(error: string): void;
   setPendingApprovalCount(count: number): void;
-  setClientToolWaiting(active: boolean): void;
+  setClientToolWaiting: (active: boolean) => "applied" | "switching" | "compacting" | "destroyed";
   setPendingWakeCause(cause: BackgroundWakeCause): void;
   isSessionSwitching(): boolean;
   /** Set by `ManagedAgent.markDestroyed`; late async continuations must not start work. */

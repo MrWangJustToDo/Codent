@@ -726,6 +726,7 @@ export class ExtensionRunner {
     this.turnContextSections.clearNotices(instance.api.id);
 
     try {
+      instance.everActivated = true;
       await withCallbackTimeout(
         Promise.resolve(instance.api.activate(context)),
         `extension "${instance.api.id}" activate`,
@@ -882,6 +883,9 @@ export class ExtensionRunner {
    */
   private async deactivateExtension(instance: ExtensionInstance): Promise<void> {
     if (!instance.api.deactivate) return;
+    // `activate` was never called (load-declared-disabled / invalid id). A teardown must mirror
+    // the lifecycle it is paired with, not invoke `deactivate` on an uninitialized extension.
+    if (!instance.everActivated) return;
     try {
       await withCallbackTimeout(
         Promise.resolve(instance.api.deactivate()),
@@ -1113,6 +1117,15 @@ export class ExtensionRunner {
       const context = this.createContext(instance.api, instance.config, instance.registrations);
       const outcome = await this.activateInstance(instance, context);
       if (outcome.kind === "active") {
+        // Retract the disabled notice under the SAME kind. The provider may not produce a base
+        // section (memory / jobs), and a named section may stay unchanged, so without this the
+        // model kept reading "this extension is disabled" after it was enabled again.
+        this.turnContextSections.setEnabledNotice(
+          instance.api.id,
+          `Extension "${instance.api.name ?? id}" is enabled again — its tools and commands are available.`,
+          instance.disabledSections ?? []
+        );
+        instance.disabledSections = undefined;
         // Runtime enable only: the initial load has no prepared turn whose snapshot could hold a
         // stale notice, so bootstrap does not need this call.
         this.options.onExtensionEnabled?.(instance.api.id);
@@ -1132,11 +1145,26 @@ export class ExtensionRunner {
     // A broken extension is the one that most needs disabling, so its own notice producer must
     // not be able to block the disable: a throw used to reject `setEnabled`, leaving the
     // extension active with no rollback — the remedy unreachable through the path that needs it.
+    // The PROPERTY READS are inside the guard too: `disabledContent` / `timeoutMs` are runtime data
+    // from arbitrary JS, and a throwing getter evaluated before `captureDisabledNotice` escaped it.
+    let customProducer: (() => string | undefined | Promise<string | undefined>) | undefined;
+    let providerTimeoutMs: number | undefined;
+    try {
+      const produce = provider?.disabledContent;
+      if (produce) customProducer = () => produce(ctxForDisable);
+      providerTimeoutMs = provider?.timeoutMs;
+    } catch (error) {
+      this.emitExtensionEvent("agent:extension-error", {
+        extensionId: instance.api.id,
+        phase: "disable-notice",
+        error: `context provider: ${errorMessage(error)}`,
+      });
+    }
     const custom = await this.turnContextSections.captureDisabledNotice(
       instance.api.id,
       "context provider",
-      provider?.disabledContent ? () => provider.disabledContent!(ctxForDisable) : undefined,
-      provider?.timeoutMs
+      customProducer,
+      providerTimeoutMs
     );
     const sectionNotices: Array<[string, string]> = [];
     // `sections` is runtime data from arbitrary JS. A malformed entry (or a throwing getter) used
@@ -1153,12 +1181,30 @@ export class ExtensionRunner {
       });
     }
     for (const section of disabledSections?.values() ?? []) {
+      let producer: (() => string | undefined | Promise<string | undefined>) | undefined;
+      let timeoutMs: number | undefined;
+      try {
+        const produce = section.disabledContent;
+        if (produce) producer = () => produce(ctxForDisable);
+        timeoutMs = section.timeoutMs ?? providerTimeoutMs;
+      } catch (error) {
+        this.emitExtensionEvent("agent:extension-error", {
+          extensionId: instance.api.id,
+          phase: "disable-notice",
+          error: `section "${section.name}": ${errorMessage(error)}`,
+        });
+        continue;
+      }
       const body = await this.turnContextSections.captureDisabledNotice(
         instance.api.id,
         `section "${section.name}"`,
-        section.disabledContent ? () => section.disabledContent!(ctxForDisable) : undefined,
-        section.timeoutMs ?? provider?.timeoutMs
+        producer,
+        timeoutMs
       );
+      // A named section only announces a disabled notice when it declares `disabledContent` (an
+      // empty string opts out). The base provider has a generic fallback; named sections do not,
+      // by contract — but every registered name is still recorded below so the ENABLE retraction
+      // can cover a section that produced content earlier.
       if (body?.trim()) sectionNotices.push([section.name, body.trim()]);
     }
 
@@ -1182,10 +1228,14 @@ export class ExtensionRunner {
       custom === undefined
         ? `Extension "${instance.api.name ?? id}" is disabled — its tools and commands are unavailable.`
         : custom.trim();
+    // Drop any previous status/retraction rows first: an enabled-again notice from an earlier
+    // cycle must not sit beside this disable's notice under a different named section.
+    this.turnContextSections.clearNotices(instance.api.id);
     this.turnContextSections.setDisabledNotice(instance.api.id, notice);
     for (const [name, body] of sectionNotices) {
       this.turnContextSections.setSectionNotice(instance.api.id, name, body);
     }
+    instance.disabledSections = [...(disabledSections?.keys() ?? [])];
     this.options.onExtensionDisabled?.(instance.api.id, notice);
     return teardownError === undefined
       ? { ok: true, message: `Extension "${id}" disabled` }

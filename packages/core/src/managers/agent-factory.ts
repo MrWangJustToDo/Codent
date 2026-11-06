@@ -128,6 +128,9 @@ export async function buildManagedAgent({
     managed.setEventBus(manager.of(managed.id, parentId));
 
     managed.setLog(log);
+    // The workspace timeline is shared, so every row carries the agent identity: root and child,
+    // and two runtimes over one workspace, stay distinguishable even before a session id exists.
+    log.setScope({ profile: profileId, agentId: managed.id });
     // The manager is needed before the construction-log snapshot (the child's event context
     // resolves its session through the parent) and before the sink bind; the registry link is
     // still assigned by `createManagedAgent` after the agent is fully built.

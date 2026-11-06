@@ -91,6 +91,11 @@ export type AgentEventPayloads = {
   };
   "agent:stop": {
     reason?: string;
+    /**
+     * Why the turn stopped: the abort reason that reached the run (`user-cancelled`,
+     * `session-switch`, `session-new`, `agentDestroyed`, …). Absent on a normal finish.
+     */
+    cause?: string;
   };
   /**
    * One agent status transition. The policy table decides whether it is recorded: transitions whose
@@ -228,6 +233,8 @@ export type AgentEventPayloads = {
   };
   "turn:summary": {
     outcome?: RunFinalizeReason;
+    /** Abort reason (`user-cancelled` / `session-switch` / `agentDestroyed`), when the turn was stopped. */
+    cause?: string;
     /**
      * The turn stopped to wait for something (approval / `ask_user`), so it has no outcome yet.
      *

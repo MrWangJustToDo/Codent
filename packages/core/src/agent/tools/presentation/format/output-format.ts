@@ -351,7 +351,15 @@ export function formatToolOutput(
   if (toolName) {
     const uiRenderer = resolvePresentation(toolName)?.text;
     if (uiRenderer) {
-      const rendered = uiRenderer(output);
+      // A renderer is arbitrary host/extension code over a stored output. One throw used to take
+      // the whole render down; the row's fallback is an empty body, which is what a descriptor stub
+      // returns anyway.
+      let rendered: unknown;
+      try {
+        rendered = uiRenderer(output);
+      } catch {
+        rendered = undefined;
+      }
       // "" is a real answer ("no body"); a host-side descriptor is a stub whose `text` returns
       // undefined, and rendering raw JSON for it would defeat the tool's own decision not to
       // render a body. The owning process ships `display.text` with the part when it can render.

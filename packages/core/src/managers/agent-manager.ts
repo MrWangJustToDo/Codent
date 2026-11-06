@@ -304,6 +304,7 @@ export class AgentManager {
     this.lifecycle.reset();
     await this.lifecycle.settleTeardowns();
     this.logExtension.dispose();
+    this.busScope.dispose();
     this.tornDown = true;
   }
 

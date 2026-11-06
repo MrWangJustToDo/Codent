@@ -33,12 +33,16 @@ export function getCurrentDate(): string {
  * don't spawn two shell calls each time.
  */
 const GIT_INFO_TTL_MS = 2000;
-/** Per-workspace-root cache (keyed by `env.rootPath`) so two runtimes never share git info. */
-const gitInfoCache = new Map<string, { at: number; info: GitInfo }>();
+/**
+ * Keyed by the env INSTANCE, not `rootPath`: two runtimes can report the same path string while
+ * pointing at different filesystems (`/workspace` is a common container path), and the cached info
+ * is injected into the prompt. Same rule as `isGitWorkTree`'s probe memo.
+ */
+const gitInfoCache = new WeakMap<object, { at: number; info: GitInfo }>();
 
 export async function getGitInfo(env: ResolvedCoreEnv): Promise<GitInfo> {
   const now = Date.now();
-  const cached = gitInfoCache.get(env.rootPath);
+  const cached = gitInfoCache.get(env);
   if (cached && now - cached.at < GIT_INFO_TTL_MS) {
     return { ...cached.info };
   }
@@ -69,6 +73,6 @@ export async function getGitInfo(env: ResolvedCoreEnv): Promise<GitInfo> {
     // Git not available — skip
   }
 
-  gitInfoCache.set(env.rootPath, { at: now, info });
+  gitInfoCache.set(env, { at: now, info });
   return info;
 }

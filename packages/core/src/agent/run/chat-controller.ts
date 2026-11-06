@@ -471,6 +471,9 @@ export class AgentChatController {
    * delivered within the same turn (before the next LLM call).
    */
   steer(content: QueuedMessageContent): boolean {
+    // Same integrity rule as follow-up / force-submit: a forged checkpoint marker would make the
+    // next compaction treat a user message as the summary of the window.
+    assertNotCompactionSummaryInput(content);
     // The message belongs to the transcript that is being replaced. Do not queue it: the unload
     // half clears the queues, and re-targeting it at the session the user has not seen yet would
     // deliver input they wrote about the old conversation.
@@ -573,12 +576,17 @@ export class AgentChatController {
     return "sent";
   }
 
-  async respondToToolApproval(approvalId: string, approved: boolean, reason?: string): Promise<boolean> {
+  async respondToToolApproval(
+    approvalId: string,
+    approved: boolean,
+    reason?: string
+  ): Promise<"recorded" | "not-pending" | "switching"> {
     // The pending question belongs to the turn being unloaded. Answering it now would settle a
     // tool row in the leaving transcript (and could start a pump after the target is adopted).
-    if (this.dropIfSwitching("respond-approval")) return false;
-    await this.approvalDecisions.respondToToolApproval(approvalId, approved, reason);
-    return true;
+    if (this.dropIfSwitching("respond-approval")) return "switching";
+    return (await this.approvalDecisions.respondToToolApproval(approvalId, approved, reason))
+      ? "recorded"
+      : "not-pending";
   }
 
   /**
@@ -618,26 +626,31 @@ export class AgentChatController {
   }
 
   /**
-   * Approve every pending tool approval, then resume the pump.
+   * Authorize every pending tool approval (auto / plan execution / command policy), then resume.
    *
    * A pending approval is a QUESTION, and turning on auto mode (or entering plan execution, which
-   * auto-approves) has just answered it. Leaving it pending is not neutral: the pump is parked on
+   * auto-approves) has usually answered it. Leaving it pending is not neutral: the pump is parked on
    * it, so the session looks like it is running auto mode while nothing runs. The TUI used to answer
    * these from its `/mode` command — a host-side workaround that the protocol hosts (ACP, remote
    * sessions) never had, which is why switching to auto mid-approval did nothing there.
    *
-   * One channel write per approval (the channel is the SoT) with the approval table kept in step,
-   * then ONE pump enqueue: `enqueueRunOnce` joins, so N decisions do not schedule N pumps.
+   * The decision still goes through `authorizeToolCall`: a hard-policy ask is NOT auto-approved,
+   * so it stays pending (fail closed) and the enqueue only happens when something was recorded.
+   * One channel write per decision with the approval table kept in step, then ONE pump enqueue:
+   * `enqueueRunOnce` joins, so N decisions do not schedule N pumps.
    */
-  approvePendingApprovals(): Promise<void> {
+  async authorizeAndResume(): Promise<void> {
     // Same policy as a single answer: the pending set belongs to the turn being unloaded.
-    if (this.dropIfSwitching("approve-pending")) return Promise.resolve();
-    return this.approvalDecisions.approvePendingApprovals();
+    if (this.dropIfSwitching("authorize-approvals")) return;
+    await this.approvalDecisions.authorizeAndResume();
   }
 
-  async addToolResult(toolCallId: string, output: Record<string, unknown>): Promise<boolean> {
+  async addToolResult(
+    toolCallId: string,
+    output: Record<string, unknown>
+  ): Promise<"accepted" | "switching" | "rejected"> {
     // A client-tool answer (`ask_user`) belongs to the question the leaving turn asked.
-    if (this.dropIfSwitching("add-tool-result")) return false;
+    if (this.dropIfSwitching("add-tool-result")) return "switching";
     // This command is reachable from the session control plane (`POST /api/agent/:id/command`), so
     // it must prove the answer belongs here before writing: a client tool, still unanswered. Without
     // the check any connected client could overwrite an executed `write_file`/`run_command` result
@@ -656,7 +669,7 @@ export class AgentChatController {
           : `Ignored a tool result for unknown tool call ${toolCallId}.`,
         details: { toolCallId, ...(part?.name ? { toolName: part.name } : {}) },
       });
-      return false;
+      return "rejected";
     }
     this.channel.addToolResult(toolCallId, output);
     // A client tool has no server-side `agent:tool-end`; this is the only place the answer exists.
@@ -675,7 +688,7 @@ export class AgentChatController {
     // while the host already reported the answer sent.
     this.persistMessages("user-message");
     await this.enqueueRunOnce();
-    return true;
+    return "accepted";
   }
 
   /**

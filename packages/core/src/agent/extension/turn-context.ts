@@ -51,8 +51,15 @@ export interface ExtensionTurnContextDeps {
 
 export class ExtensionTurnContext {
   private readonly providers = new Map<string, { provider: ExtensionContextProvider; rank: DispatchRank }>();
-  /** Persistent notices keyed by extension id (captured at disable, cleared on re-enable). */
-  private readonly disabledNotices = new Map<string, string>();
+  /**
+   * Persistent lifecycle notices keyed by extension id.
+   *
+   * A disable writes the disabled notice here; a re-enable writes an "enabled again" notice under
+   * the SAME kind, so the new block supersedes the old one (admission is per-kind and stateless).
+   * Without the retraction an extension with no base `content` (memory, jobs) stayed "disabled" in
+   * the model window forever, because only a newly produced section could supersede its old block.
+   */
+  private readonly statusNotices = new Map<string, string>();
   /** Notices for named sections, keyed by the section kind and stamped with its owner. */
   private readonly sectionNotices = new Map<string, { extensionId: string; content: string }>();
   /** Providers already warned about a bad/duplicate section name (one row, not one per turn). */
@@ -157,13 +164,17 @@ export class ExtensionTurnContext {
     }
 
     // Disabled extensions speak under the same tag so the model knows their tools are gone
-    // (symmetric to the enable-side section). Their providers were unsubscribed at disable, so an id
-    // never appears in both loops.
-    for (const [extensionId, notice] of this.disabledNotices) {
-      if (notice.trim()) turnContextSections.push({ id: this.sectionKind(extensionId), content: notice.trim() });
+    // (symmetric to the enable-side section). Their providers were unsubscribed at disable, so an
+    // id normally appears in only one loop; a lifecycle notice is skipped when the enabled
+    // provider already produced that exact kind this turn (the real content wins).
+    for (const [extensionId, notice] of this.statusNotices) {
+      const kind = this.sectionKind(extensionId);
+      if (!notice.trim() || turnContextSections.some((section) => section.id === kind)) continue;
+      turnContextSections.push({ id: kind, content: notice.trim() });
     }
     for (const [id, notice] of this.sectionNotices) {
-      if (notice.content.trim()) turnContextSections.push({ id, content: notice.content.trim() });
+      if (!notice.content.trim() || turnContextSections.some((section) => section.id === id)) continue;
+      turnContextSections.push({ id, content: notice.content.trim() });
     }
 
     return { turnContextSections };
@@ -206,8 +217,28 @@ export class ExtensionTurnContext {
   /** Store (or, with an empty string, opt out of) the extension's disabled notice. */
   setDisabledNotice(extensionId: string, notice: string): void {
     const trimmed = notice.trim();
-    if (trimmed) this.disabledNotices.set(extensionId, trimmed);
-    else this.disabledNotices.delete(extensionId);
+    if (trimmed) this.statusNotices.set(extensionId, trimmed);
+    else this.statusNotices.delete(extensionId);
+  }
+
+  /**
+   * Store the "enabled again" retraction.
+   *
+   * `sectionNames` are the named sections that were announced at disable time: each gets a neutral
+   * body under its own kind, so a section that does not produce content immediately is still
+   * retracted (the model reads "ignore the earlier disabled notice" instead of a stale "the
+   * extension is gone").
+   */
+  setEnabledNotice(extensionId: string, notice: string, sectionNames: readonly string[] = []): void {
+    const trimmed = notice.trim();
+    if (trimmed) this.statusNotices.set(extensionId, trimmed);
+    for (const name of sectionNames) {
+      const key = this.sectionKind(extensionId, name);
+      this.sectionNotices.set(key, {
+        extensionId,
+        content: `The "${name}" section of extension "${extensionId}" is enabled again; ignore its earlier disabled notice.`,
+      });
+    }
   }
 
   /** Store one named section's disabled notice (body is trimmed; empty is ignored). */
@@ -218,7 +249,7 @@ export class ExtensionTurnContext {
 
   /** Drop every notice belonging to one extension (re-enable / duplicate replacement). */
   clearNotices(extensionId: string): void {
-    this.disabledNotices.delete(extensionId);
+    this.statusNotices.delete(extensionId);
     for (const [key, entry] of this.sectionNotices) {
       if (entry.extensionId === extensionId) this.sectionNotices.delete(key);
     }
@@ -227,7 +258,7 @@ export class ExtensionTurnContext {
   /** Full teardown. */
   clear(): void {
     this.providers.clear();
-    this.disabledNotices.clear();
+    this.statusNotices.clear();
     this.sectionNotices.clear();
   }
 

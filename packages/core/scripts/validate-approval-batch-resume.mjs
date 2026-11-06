@@ -50,12 +50,90 @@ const rows = [
   { id: "approval_c", toolCallId: "call_C", status: "denied", reason: "nope", updatedAt: 3 },
 ];
 
+/**
+ * The live transcript a resumed decision belongs to.
+ *
+ * The resume map is scoped to the call instance: `call_B` / `call_C` carry the decision on their
+ * part, while `call_A` is still pending. A provider reusing `call_B` in a later request produces a
+ * part with no approval, which is what makes the old decision stop applying.
+ */
+const liveMessages = [
+  {
+    id: "m-live",
+    role: "assistant",
+    parts: [
+      {
+        id: "call_A",
+        type: "tool-call",
+        name: "run_command",
+        arguments: "{}",
+        state: "approval-requested",
+        approval: { id: "approval_a", needsApproval: true },
+      },
+      {
+        id: "call_B",
+        type: "tool-call",
+        name: "run_command",
+        arguments: "{}",
+        state: "input-complete",
+        approval: { id: "approval_b", needsApproval: true, approved: true },
+      },
+      {
+        id: "call_C",
+        type: "tool-call",
+        name: "run_command",
+        arguments: "{}",
+        state: "input-complete",
+        approval: { id: "approval_c", needsApproval: true, approved: false },
+      },
+    ],
+  },
+];
+
 {
-  const map = approvalsToResumeMap(rows);
+  const map = approvalsToResumeMap(rows, liveMessages);
   assert.equal(map.has("call_A"), false, "a pending row must still interrupt");
   assert.equal(map.has("approval_a"), false, "…under its approval id either");
   assert.equal(map.get("call_B"), true, "an approved row resolves to true");
   assert.deepEqual(map.get("call_C"), { approved: false, payload: { reason: "nope" } }, "a denial keeps its reason");
+}
+
+// A reused provider id must not inherit the earlier call's answer: the new call's part carries no
+// approval, so it asks again (fail closed).
+{
+  const reused = [
+    {
+      id: "m-old",
+      role: "assistant",
+      parts: [
+        {
+          id: "call_B",
+          type: "tool-call",
+          name: "run_command",
+          arguments: "{}",
+          state: "complete",
+          output: { ok: true },
+          approval: { id: "approval_b", needsApproval: true, approved: true },
+        },
+      ],
+    },
+    {
+      id: "m-new",
+      role: "assistant",
+      parts: [
+        {
+          id: "call_B",
+          type: "tool-call",
+          name: "run_command",
+          arguments: '{"command":"rm -rf /"}',
+          state: "approval-requested",
+          approval: { id: "approval_b2", needsApproval: true },
+        },
+      ],
+    },
+  ];
+  const map = approvalsToResumeMap(rows, reused);
+  assert.equal(map.has("call_B"), false, "a reused id asks again instead of replaying the old approval");
 }
 
 // ============================================================================
@@ -63,16 +141,20 @@ const rows = [
 // ============================================================================
 
 {
-  const middleware = createApprovalResumeMiddleware({ getApprovals: () => rows });
+  const middleware = createApprovalResumeMiddleware({
+    getApprovals: () => rows,
+    getMessages: () => liveMessages,
+  });
   const patch = await middleware.onConfig({}, { messages: [] });
   assert.equal(patch.resumeToolState.approvals.has("call_A"), false, "the pending gate is never pre-approved");
   assert.equal(patch.resumeToolState.approvals.get("call_B"), true, "answered rows are still rebuilt");
 
-  const empty = createApprovalResumeMiddleware({ getApprovals: () => [] });
+  const empty = createApprovalResumeMiddleware({ getApprovals: () => [], getMessages: () => [] });
   assert.equal(await empty.onConfig({}, { messages: [] }), undefined, "an empty table patches nothing");
 
   const allPending = createApprovalResumeMiddleware({
     getApprovals: () => [{ id: "approval_only", toolCallId: "call_only", status: "pending", updatedAt: 1 }],
+    getMessages: () => [],
   });
   assert.equal(
     await allPending.onConfig({}, { messages: [] }),
@@ -305,7 +387,7 @@ assert.equal(managed.getStatus(), "completed", "the turn itself finished normall
   );
   assert.match(
     lifecycleSrc,
-    /finalizeManagedAgentRun[\s\S]{0,4000}?syncPendingWait\?\.\(messages\)/,
+    /finalizeManagedAgentRun[\s\S]{0,8000}?syncPendingWait\?\.\(messages\)/,
     "the abort path re-asserts a still-pending ask_user instead of reporting aborted"
   );
 }
@@ -481,6 +563,33 @@ assert.equal(managed.getStatus(), "completed", "the turn itself finished normall
     },
   };
 
+  const toUiMessages = (approvals) => [
+    {
+      id: "a1",
+      role: "assistant",
+      parts: parked[1].toolCalls.map((tc) => {
+        const record = approvals.find((approval) => approval.toolCallId === tc.id);
+        return {
+          id: tc.id,
+          type: "tool-call",
+          name: tc.function.name,
+          arguments: tc.function.arguments,
+          state: "input-complete",
+          ...(record
+            ? {
+                approval: {
+                  id: record.id,
+                  needsApproval: true,
+                  ...(record.status === "approved" ? { approved: true } : {}),
+                  ...(record.status === "denied" ? { approved: false } : {}),
+                },
+              }
+            : {}),
+        };
+      }),
+    },
+  ];
+
   const drain = async (approvals) => {
     ran.length = 0;
     const stream = chat({
@@ -489,7 +598,12 @@ assert.equal(managed.getStatus(), "completed", "the turn itself finished normall
       threadId: "approval-batch",
       promptCache: "none",
       tools,
-      middleware: [createApprovalResumeMiddleware({ getApprovals: () => approvals })],
+      middleware: [
+        createApprovalResumeMiddleware({
+          getApprovals: () => approvals,
+          getMessages: () => toUiMessages(approvals),
+        }),
+      ],
       agentLoopStrategy: (() => {
         let i = 0;
         return () => ++i <= 2;

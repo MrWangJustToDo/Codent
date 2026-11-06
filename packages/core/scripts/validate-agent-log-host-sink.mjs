@@ -141,6 +141,14 @@ const subEntry = subContent
   .find((entry) => entry.message?.includes("subagent-entry"));
 assert.ok(subEntry, "the subagent row is parseable");
 assert.notEqual(subEntry.scope?.profile, "root", "the row is attributable to the child profile");
+const rootEntry = subContent
+  .split("\n")
+  .filter(Boolean)
+  .map((line) => JSON.parse(line))
+  .find((entry) => entry.message?.includes("host-level-entry"));
+assert.ok(rootEntry?.scope?.agentId, "the root row carries its agent id");
+assert.ok(subEntry.scope?.agentId, "the child row carries its agent id");
+assert.notEqual(rootEntry.scope.agentId, subEntry.scope.agentId, "root and child remain distinguishable");
 const strayChildFiles = (await fs.promises.readdir(logDir)).filter(
   (name) => name.endsWith(".log") && name !== "agent.log"
 );

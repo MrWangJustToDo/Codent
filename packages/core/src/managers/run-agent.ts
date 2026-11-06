@@ -148,6 +148,7 @@ export function buildAgentRunner(
     }),
     createApprovalResumeMiddleware({
       getApprovals: () => approvals.toArray(),
+      getMessages: () => deps.getUIChannel()?.getMessages() ?? [],
     }),
     createLifecycleMiddleware({
       usage: usage,

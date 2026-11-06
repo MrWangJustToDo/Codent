@@ -107,13 +107,20 @@ export class CompactionController {
    * is what keeps a superseded summary from being applied.
    */
   begin(kind: CompactionKind, options: CompactionBeginOptions = {}): CompactionLease | null {
-    if (kind === "manual" && this.active?.lease.kind === "manual") return null;
-
-    // An automatic claim may supersede (that is how a stale attempt is invalidated), but a manual
-    // compaction has its own summarizer signal: abort it instead of leaving a paid model call
-    // running whose result can no longer be applied (`isCurrent` is false from here on).
-    if (kind !== "manual" && this.active?.lease.kind === "manual") {
+    if (this.active) {
+      // Manual `/compact` is single-flight against another manual: a second one must not replace
+      // the paid summarizer the user is waiting on. Every other combination supersedes.
+      if (kind === "manual" && this.active.lease.kind === "manual") return null;
+      // Supersede SAFELY: abort the old lease AND restore the status it published before claiming
+      // the phase again. Aborting alone left the status at `compacting`, so the state machine
+      // rejected the new `compaction-start` while `begin` still handed out a lease for it — the
+      // older producer's `finish` became a silent no-op and the new checkpoint applied to a phase
+      // it never owned. Restoring first is also what makes the manual case safe (its producer's
+      // `release` is lease-checked and becomes a no-op).
+      const previousKind = this.active.lease.kind;
+      const { previousStatus } = this.active;
       this.abortActive(`superseded-by-${kind}`);
+      this.restoreStatusFor(previousKind, previousStatus);
     }
 
     const controller = kind === "manual" ? new AbortController() : undefined;

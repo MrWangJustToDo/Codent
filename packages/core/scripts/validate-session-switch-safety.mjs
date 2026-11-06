@@ -488,10 +488,14 @@ assert.equal(
     steer: () => false,
     followUp: () => false,
     forceSubmit: () => false,
-    respondToToolApproval: async () => false,
-    addToolResult: async () => false,
+    respondToToolApproval: async () => "switching",
+    addToolResult: async () => "switching",
   };
-  const managed = { parentId: undefined, getChatController: () => refused };
+  const managed = {
+    parentId: undefined,
+    getChatController: () => refused,
+    setClientToolWaiting: () => "switching",
+  };
   const cases = [
     { type: "send", content: "hello" },
     { type: "steer", content: "hello" },
@@ -510,6 +514,55 @@ assert.equal(
   const queued = { ...managed, getChatController: () => ({ ...refused, sendMessage: async () => "queued" }) };
   const queuedResult = await dispatchLocalAgentSessionCommand(queued, {}, { type: "send", content: "hello" });
   assert.deepEqual(queuedResult, { ok: true }, "a queued message is accepted");
+}
+
+// Protocol outcomes beyond "switching": an already-answered approval and a rejected client-tool
+// result must not be reported as a switch (the host would tell the user to retry forever), and a
+// wait asserted during compaction must say so.
+{
+  const chat = {
+    respondToToolApproval: async () => "not-pending",
+    addToolResult: async () => "rejected",
+  };
+  const managed = {
+    parentId: undefined,
+    getChatController: () => chat,
+    setClientToolWaiting: () => "compacting",
+  };
+  const approval = await dispatchLocalAgentSessionCommand(
+    managed,
+    {},
+    {
+      type: "respondApproval",
+      approvalId: "a1",
+      approved: true,
+    }
+  );
+  assert.equal(approval.ok, false);
+  assert.match(String(approval.error), /no longer pending/i);
+
+  const result = await dispatchLocalAgentSessionCommand(
+    managed,
+    {},
+    {
+      type: "addToolResult",
+      toolCallId: "t1",
+      output: {},
+    }
+  );
+  assert.equal(result.ok, false);
+  assert.match(String(result.error), /rejected/i);
+
+  const waiting = await dispatchLocalAgentSessionCommand(
+    managed,
+    {},
+    {
+      type: "setClientToolWaiting",
+      active: true,
+    }
+  );
+  assert.equal(waiting.ok, false);
+  assert.match(String(waiting.error), /compaction/i);
 }
 
 console.log("session-switch-safety validation passed");

@@ -112,8 +112,8 @@ export class ApprovalDecisionCoordinator {
     });
   }
 
-  /** One explicit y/n answer; settles once and joins the pump. */
-  async respondToToolApproval(approvalId: string, approved: boolean, reason?: string): Promise<void> {
+  /** One explicit y/n answer; returns whether a pending approval was actually recorded. */
+  async respondToToolApproval(approvalId: string, approved: boolean, reason?: string): Promise<boolean> {
     // First decision wins: only a PENDING approval may be answered. A repeated or late answer
     // (remote client retry, an old dialog, a deny racing auto-mode) must be inert — otherwise it
     // rewrites the channel decision, invents a table row for an id no part carries, and runs a
@@ -121,7 +121,7 @@ export class ApprovalDecisionCoordinator {
     const pending = collectPendingApprovals(this.deps.getMessages()).find(
       (approval) => approval.approvalId === approvalId
     );
-    if (!pending) return;
+    if (!pending) return false;
 
     this.recordDecision({
       approvalId,
@@ -136,17 +136,22 @@ export class ApprovalDecisionCoordinator {
     // remote-facing, and a pump runs for the whole remaining turn — blocking the response on it
     // made a slow turn look like a failed approval, and a client retry re-answered a decided call.
     void this.deps.enqueueRun().catch(() => undefined);
+    return true;
   }
 
-  /** Answer every pending approval, then resume the pump exactly once. */
-  async approvePendingApprovals(): Promise<void> {
-    const pending = collectPendingApprovals(this.deps.getMessages());
-    if (pending.length === 0) return;
-
-    this.approveAll(pending);
-    this.settle();
-    // Same rule as a single answer: the decisions are durable now, and the caller (auto-mode,
-    // plan execution, a remote command) must not block for the rest of the pump.
+  /**
+   * Authorize every pending approval (auto / plan-execution / command policy) and resume the pump
+   * exactly once.
+   *
+   * This is NOT "approve all": the decision still goes through `authorizeToolCall`, so a hard
+   * policy ask (an env override, an external path) stays pending for the user even though auto
+   * mode is on. The previous unconditional approve-all let a mode switch bypass that gate.
+   */
+  async authorizeAndResume(): Promise<void> {
+    const handled = await this.authorization.authorizePendingApprovals();
+    if (!handled) return;
+    // The decisions are durable now; the caller (auto-mode, plan execution, a remote command) must
+    // not block for the rest of the pump.
     void this.deps.enqueueRun().catch(() => undefined);
   }
 
@@ -174,21 +179,8 @@ export class ApprovalDecisionCoordinator {
   }
 
   /** The pump's decision step: one `authorizeToolCall` per unresolved gated call. */
-  async authorizePendingApprovals(): Promise<void> {
+  async authorizePendingApprovals(): Promise<boolean> {
     return this.authorization.authorizePendingApprovals();
-  }
-
-  /** Record approval for every pending interaction, in the order the collector returned them. */
-  private approveAll(pending: ReturnType<typeof collectPendingApprovals>): void {
-    for (const approval of pending) {
-      this.recordDecision({
-        approvalId: approval.approvalId,
-        toolCallId: approval.toolCallId,
-        toolName: approval.toolName,
-        approved: true,
-        source: "auto",
-      });
-    }
   }
 
   private recordDecision(input: ToolAuthorizationRecord): void {

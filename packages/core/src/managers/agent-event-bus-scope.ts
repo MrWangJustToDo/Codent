@@ -35,6 +35,8 @@ export class AgentEventBusScope {
   readonly root: AgentEventBus;
   private readonly scopes = new Map<string, AgentEventBus>();
   private readonly parents = new Map<string, string | undefined>();
+  /** Set by {@link dispose}: a disposed manager must not mint durable subscriptions/scopes. */
+  private disposed = false;
   /**
    * Re-entrancy guard for handler-failure reporting.
    *
@@ -66,8 +68,7 @@ export class AgentEventBusScope {
   }): void {
     if (this.reportingHandlerError) return;
     const ownerId = this.deps.resolveLogOwner(info.scopeId);
-    if (!ownerId) return;
-    const parentId = this.parents.get(info.scopeId);
+    const parentId = ownerId ? this.parents.get(info.scopeId) : undefined;
     this.reportingHandlerError = true;
     try {
       // Emit on the OWNING agent's bus, not the root. `emit` travels self → ancestors, so a root
@@ -77,7 +78,10 @@ export class AgentEventBusScope {
       // frame. A scope already dropped by teardown falls back to the root and still carries
       // `agentId` for the log bridge. (There is no `channel` in the meta, so this does NOT publish
       // on an `AgentSession` channel — the typed/extension observer surface is the gain.)
-      (this.scopes.get(ownerId) ?? this.root).emit(
+      // A root-scoped listener (`agentManager.on("*", …)`) has no owning agent; it is still a
+      // subscriber that must hear about a contained failure instead of the report vanishing.
+      const target = ownerId ? (this.scopes.get(ownerId) ?? this.root) : this.root;
+      target.emit(
         "agent:event-handler-error",
         {
           pattern: info.pattern,
@@ -86,10 +90,9 @@ export class AgentEventBusScope {
           error: errorMessage(info.error),
         },
         // Identity has two halves: `agentId` comes from the meta override and the PARENT from the
-        // scope tree. Emitting on the root node (this method's only seat) means `buildEventAt`
-        // cannot derive it, so a child's handler failure was the one event that named a parentless
-        // child — unlinkable to the task row and filtered out of the parent's projection.
-        { agentId: ownerId, ...(parentId !== undefined ? { parentId } : {}) }
+        // scope tree. Emitting on the root node (a root-scoped failure) means `buildEventAt`
+        // cannot derive an agent, and stamping one would be a lie.
+        ownerId !== undefined ? { agentId: ownerId, ...(parentId !== undefined ? { parentId } : {}) } : undefined
       );
     } catch {
       // A failure while REPORTING a failure is contained: the bus already lost the frame, and the
@@ -100,11 +103,17 @@ export class AgentEventBusScope {
   }
 
   on(type: AgentEventType | "*", listener: AgentEventListener): () => void {
+    // The manager this bus belongs to is gone; a subscription would outlive every emitter and pin
+    // the listener for the rest of the process.
+    if (this.disposed) return () => {};
     return this.root.on(type, listener);
   }
 
   /** Scoped bus for one agent; subagents are scoped under their parent and up-flow. */
   of(agentId: string, parentId?: string): AgentEventBus {
+    // Teardown paths may still ask for a scope (a late producer unwinding). Hand back a detached
+    // bus instead of caching a new scope nobody will ever delete.
+    if (this.disposed) return createAgentEventBus(`disposed:${agentId}`);
     const cached = this.scopes.get(agentId);
     if (cached) {
       if (this.parents.get(agentId) !== parentId) {
@@ -137,5 +146,18 @@ export class AgentEventBusScope {
   delete(agentId: string): void {
     this.scopes.delete(agentId);
     this.parents.delete(agentId);
+  }
+
+  /**
+   * Retire the scope registry with its manager.
+   *
+   * The root bus itself is owned by the manager, so listeners/retained values are collected with
+   * it; what must not survive is the scope cache (a late `of()` used to recreate an orphan scope
+   * that no teardown would ever reach).
+   */
+  dispose(): void {
+    this.disposed = true;
+    this.scopes.clear();
+    this.parents.clear();
   }
 }

@@ -151,6 +151,7 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
   subagent.parentTaskId = taskCallId;
   subagent.log.setScope({
     profile: effectiveProfileId,
+    agentId: subagent.id,
     ...(taskCallId ? { taskCallId } : {}),
   });
 

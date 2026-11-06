@@ -89,7 +89,11 @@ export async function saveSessionUIMessages(
   if (persisted) tracker.markPersisted(uiMessages);
 }
 
-export async function restoreManagedSession(host: SessionHost, sessionId: string): Promise<SessionData> {
+export async function restoreManagedSession(
+  host: SessionHost,
+  sessionId: string,
+  options: { repairRuntime?: boolean } = {}
+): Promise<SessionData> {
   // The caller's session lifecycle stops a live pump before this helper is entered; the
   // production switch owns that ordering in exactly one place.
   host.getToolCompactCache().clear();
@@ -115,9 +119,11 @@ export async function restoreManagedSession(host: SessionHost, sessionId: string
   // A background `task` is the one part that carries an output and still cannot be running: it wrote
   // its `running` handle at start, and a session end drops the ledger that would ever settle it. That
   // pass runs FIRST — the generic one skips any part with an output, so it would leave the handle.
-  const restoredMessages = cancelInterruptedBackgroundCommands(restored.uiMessages);
-  const taskMessages = cancelInterruptedBackgroundTasks(restoredMessages);
-  const uiMessages = settleInterruptedToolCalls(taskMessages);
+  const restoredMessages =
+    options.repairRuntime === false ? restored.uiMessages : cancelInterruptedBackgroundCommands(restored.uiMessages);
+  const taskMessages =
+    options.repairRuntime === false ? restoredMessages : cancelInterruptedBackgroundTasks(restoredMessages);
+  const uiMessages = options.repairRuntime === false ? taskMessages : settleInterruptedToolCalls(taskMessages);
   // The repairs happen after `readSessionForRestore` wrote the canonical form, and `tracker.reset`
   // below is given the REPAIRED array — so without this write the settled transcript would only
   // ever exist in memory (the tracker would consider it persisted and every later save a no-op),

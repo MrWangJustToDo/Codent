@@ -246,16 +246,22 @@ export class SessionLifecycleService {
       return next;
     } catch (error) {
       if (this.rt.transcript.getSessionData()?.id === next.id) {
-        // The data was adopted (possibly just before a later step threw): keep the switch and make
-        // the lease agree.
+        // The data was adopted (possibly just before a later step threw): the switch is COMMITTED.
+        // Finish the remaining steps best-effort and report success — surfacing a failure here
+        // would tell the host the new session was not created while the transcript is already on it.
         this.rt.lease.commit();
-        // Adoption committed but the reset did not run: without it usage/todos/approvals/mode and
-        // the stream hub still describe the LEFT session and would be persisted into this one.
         try {
           this.resetTransientState(reason, "full");
         } catch {
           // Best-effort; the switch itself is already committed.
         }
+        try {
+          await this.settleTransientReset();
+        } catch {
+          // Best-effort; a late background reset must not turn a committed switch into a failure.
+        }
+        this.rt.transcript.refreshState();
+        return next;
       } else {
         this.rt.lease.abortClaim();
       }
@@ -280,12 +286,15 @@ export class SessionLifecycleService {
    * at the same moment, so "active in another live session" always describes a real holder.
    */
   async resume(sessionId: string, reason: SessionSwitchReason = "resume"): Promise<SessionData> {
-    const session = await this.serializeSwitch(() => this.runTransition(() => this.resumeInner(sessionId, reason)));
-    // AFTER the transaction, for two reasons the in-transaction call could not satisfy: the reset
-    // drops the facade, and `wakeForBackgroundCompletion` refuses while `isSessionSwitching()` is
-    // true. Rebuilding it here is exactly the "next session builds a fresh one" lifecycle.
-    this.rt.sidecars.resumeBackgroundWork?.();
-    return session;
+    try {
+      return await this.serializeSwitch(() => this.runTransition(() => this.resumeInner(sessionId, reason)));
+    } finally {
+      // AFTER the transaction, for two reasons the in-transaction call could not satisfy: the
+      // reset drops the facade, and `wakeForBackgroundCompletion` refuses while `isSessionSwitching()`
+      // is true. This runs on failure too: a switch that threw after dropping the facade must not
+      // leave the leaving session without `session:jobs`/notifications until the next switch.
+      this.rt.sidecars.resumeBackgroundWork?.();
+    }
   }
 
   /**
@@ -310,9 +319,9 @@ export class SessionLifecycleService {
         return { ok: true as const, session };
       })
     );
-    // Same post-transaction lifecycle as `resume()`: the reset dropped the facade, and a wake is
-    // refused mid-switch, so clone/fork must rebuild it too.
-    if (result.ok) this.rt.sidecars.resumeBackgroundWork?.();
+    // Same post-transaction lifecycle as `resume()`, including the failure path: the reset may
+    // have dropped the facade, so rebuild it after the switch is decided.
+    this.rt.sidecars.resumeBackgroundWork?.();
     return result;
   }
 
@@ -425,7 +434,7 @@ export class SessionLifecycleService {
     // reloads (and the disk record is authoritative because writes were drained before the load).
     if (isRestoreReadFailure(cause)) return;
     try {
-      await this.rt.transcript.sessionPersistence.restore(leavingId);
+      await this.rt.transcript.sessionPersistence.restore(leavingId, { repairRuntime: false });
     } catch (error) {
       // Best-effort: the host still gets the original failure, and the in-memory state is already
       // the departure's (the target was never adopted). The report is itself contained so a broken

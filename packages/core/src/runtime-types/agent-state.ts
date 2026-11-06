@@ -218,6 +218,19 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
       };
 
     case "fail":
+      // A compaction lease owns `run`; a failure from inside it must record the outcome and let
+      // `compaction-end` apply it, exactly like `settle`/`stream-end`. Stealing the phase here made
+      // the lease's restore guard unreachable (`run !== "compacting"`), while the lease could still
+      // apply its checkpoint.
+      if (state.run === "compacting") {
+        return {
+          ...state,
+          outcome: "error",
+          stream: "none",
+          errorMessage: event.error,
+          ...(state.wait === "approval" ? { wait: "none" as const } : {}),
+        };
+      }
       return {
         ...state,
         lifecycle: "ready",
@@ -320,7 +333,7 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
       return { lifecycle: "ready", run: "idle", wait: "none", outcome: "none", stream: "none" };
 
     case "teardown":
-      return { ...state, lifecycle: "destroyed", run: "idle", wait: "none", stream: "none" };
+      return { lifecycle: "destroyed", run: "idle", wait: "none", outcome: "none", stream: "none" };
   }
 }
 

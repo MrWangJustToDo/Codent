@@ -169,6 +169,19 @@ const fakeEnv = (root) => ({
 
   await runtime.dispose();
   assert.deepEqual(destroyed, ["agent-owned"], "dispose destroys only sessions created by this runtime");
+
+  // A disposed handle must not mint new work: the teardown loop already enumerated its snapshot,
+  // so a session created afterwards would never be destroyed by anything.
+  assert.equal(runtime.getSession("agent-owned"), undefined, "a disposed handle exposes no session");
+  assert.deepEqual(await runtime.listSessions(), [], "a disposed handle lists nothing");
+  let rejected = false;
+  try {
+    await runtime.createSession({ name: "too-late", model: "m" });
+  } catch {
+    rejected = true;
+  }
+  assert.equal(rejected, true, "createSession after dispose is refused");
+  await runtime.destroySession("agent-owned");
 }
 
 // ---------------------------------------------------------------------------

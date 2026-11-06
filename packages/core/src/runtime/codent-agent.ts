@@ -115,6 +115,12 @@ export class CodentAgent {
   private readonly ownedSessionIds = new Set<string>();
   /** Guards {@link dispose} against re-running (double session destroy / env destroy). */
   private disposePromise: Promise<void> | undefined;
+  /**
+   * Set when {@link dispose} starts. A disposed handle must reject new work: a session created
+   * afterwards is recorded in a set no teardown will ever read again (the loop already ran), so it
+   * would live until the process exits.
+   */
+  private disposed = false;
 
   /**
    * The runtime's session host.
@@ -150,6 +156,14 @@ export class CodentAgent {
    * remote-session: pass `host` and no provider (no local manager).
    */
   static async create(options: CodentAgentOptions): Promise<CodentAgent> {
+    // Validate an injected manager BEFORE building a provider: the provider may be ours, and a
+    // throw after construction used to leak it (never disposed, because no handle was returned).
+    const injectedRuntime = options.manager?.runtime;
+    if (injectedRuntime && injectedRuntime.env.rootPath !== options.env.rootPath) {
+      throw new Error(
+        `Injected AgentManager is bound to ${injectedRuntime.env.rootPath}, not ${options.env.rootPath}.`
+      );
+    }
     const provider: ModelProvider | undefined =
       options.provider ?? (options.direct ? createDirectModelProvider(options.direct) : undefined);
     const runtimeOptions: AgentRuntimeOptions = {
@@ -165,12 +179,6 @@ export class CodentAgent {
     // An injected manager already carries the runtime its agents actually use. Reusing it is the
     // only way `getEnv()` / the provider / the model catalog describe the same workspace as the
     // manager; constructing a second runtime here silently split those two planes.
-    const injectedRuntime = options.manager?.runtime;
-    if (injectedRuntime && injectedRuntime.env.rootPath !== options.env.rootPath) {
-      throw new Error(
-        `Injected AgentManager is bound to ${injectedRuntime.env.rootPath}, not ${options.env.rootPath}.`
-      );
-    }
     const runtime = injectedRuntime ?? new AgentRuntime(runtimeOptions);
     // An injected manager built with `new AgentManager()` has no runtime and would keep using the
     // ambient env for every agent it creates. Bind it to the runtime this handle is built on, so
@@ -226,6 +234,7 @@ export class CodentAgent {
    * destroyed by {@link dispose}.
    */
   async createSession(options: AgentSessionCreateOptions): Promise<AgentSessionCreateResult> {
+    this.assertLive("createSession");
     const result = await this.host.create(options);
     this.ownedSessionIds.add(result.session.id);
     return result;
@@ -233,6 +242,7 @@ export class CodentAgent {
 
   /** Bind to a live agent id (root or subagent) of this runtime. */
   getSession(agentId: string): AgentSession | undefined {
+    if (this.disposed) return undefined;
     return this.host.connect(agentId) ?? undefined;
   }
 
@@ -242,13 +252,23 @@ export class CodentAgent {
    * tracked separately by {@link ownedSessionIds} (see {@link dispose}).
    */
   async listSessions(): Promise<AgentSessionListEntry[]> {
+    if (this.disposed) return [];
     return await this.host.list();
   }
 
-  /** Destroy one live agent (cascades to children). */
+  /** Destroy one live agent (cascades to children). Inert after {@link dispose}. */
   async destroySession(agentId: string): Promise<void> {
+    if (this.disposed) {
+      this.ownedSessionIds.delete(agentId);
+      return;
+    }
     await this.host.destroy(agentId);
     this.ownedSessionIds.delete(agentId);
+  }
+
+  /** Reject work offered to a handle whose teardown already started. */
+  private assertLive(operation: string): void {
+    if (this.disposed) throw new Error(`CodentAgent has been disposed; cannot ${operation}`);
   }
 
   /**
@@ -267,6 +287,9 @@ export class CodentAgent {
    * sessions (and the server's own agents) when a remote CLI exits or rebuilds its adapter.
    */
   async dispose(): Promise<void> {
+    // From here on the handle accepts no new session: the teardown loop below enumerates a snapshot,
+    // so a session created during (or after) it would never be destroyed.
+    this.disposed = true;
     // Cache the in-flight teardown: a second caller must await the same completion, not observe
     // a half-finished shutdown because `disposed` was set before the first await. A FAILED teardown
     // drops the cache so a retry can finish the sessions that are still owned — keeping it meant a

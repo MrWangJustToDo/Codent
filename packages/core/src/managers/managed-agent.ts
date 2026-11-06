@@ -782,6 +782,7 @@ export class ManagedAgent {
       getStatus: () => this.getStatus(),
       getAgentState: () => this.agentState,
       getError: () => this.getError(),
+      getAbortReason: () => this.run.getAbortReason(),
       finalizeRun: (reason) => this.finalizeRun(reason),
       discardPreforkRuns: (cause) => this.discardPreforkRuns(cause),
       emitEvent: (type, ...args) => this.emitEvent(type, ...args),
@@ -1151,16 +1152,18 @@ export class ManagedAgent {
    * App host API — pause agent status while a client tool (e.g. `ask_user`) waits for user input.
    * Core does not infer this from messages; the UI sets it when opening/closing client-tool flows.
    */
-  setClientToolWaiting(active: boolean): void {
+  setClientToolWaiting(active: boolean): "applied" | "switching" | "compacting" | "destroyed" {
+    if (this.destroyed) return "destroyed";
     // A switch is unload → load: the waiting flag describes the turn being replaced, and setting
     // it after the target is adopted would park the new session on a question it never asked.
-    if (this.isSessionSwitching()) return;
+    if (this.isSessionSwitching()) return "switching";
     // A compaction owns the status. `/compact` is refused while a real client tool is pending, so
     // a flag arriving now is stale host state; applying it moves `compacting → awaiting_user`,
     // where the compaction can neither restore its status (it no longer owns the field) nor clear
     // the wait — and `shouldDeferMidRunQueue` would then defer every later message forever.
-    if (this.compactions.isRunning()) return;
+    if (this.compactions.isRunning()) return "compacting";
     this.statusController.setClientToolWaiting(active);
+    return "applied";
   }
 
   /** @internal Re-assert a pending `ask_user` wait after the run finalizes. */
@@ -2886,14 +2889,15 @@ export class ManagedAgent {
    */
   markDestroyed(): void {
     this.destroyed = true;
-    // Make the axes agree with the flag: late transitions then hit the destroyed guard instead of
-    // being accepted by a state machine that still believes the agent is alive.
-    this.agentState = { ...this.agentState, lifecycle: "destroyed", run: "idle", wait: "none", stream: "none" };
+    // Go through the state machine: `teardown` is the one transition a destroyed agent accepts,
+    // and it clears the run outcome (a destroyed runtime has no status to report). Late transitions
+    // then hit the destroyed guard instead of being accepted by a state machine that still believes
+    // the agent is alive.
+    this.agentState = transition(this.agentState, { type: "teardown" }, { strict: false });
     // ...and the status must agree with the axes. `getL1State()` pairs the two, so leaving
-    // `currentStatus` at "running" exposed a `status: "running"` + `lifecycle: "destroyed"` snapshot
-    // and made the abort that follows (`run-lifecycle`) treat the agent as live, writing a
-    // "Rejected state transition" diagnostic on every teardown of a running agent.
+    // `currentStatus` at "running" exposed a `status: "running"` + `lifecycle: "destroyed"` snapshot.
     this.currentStatus = projectAgentStatus(this.agentState);
+    this.emitStateChange();
   }
 
   /** Whether {@link markDestroyed} ran. */

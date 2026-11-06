@@ -106,11 +106,12 @@ const root = {
 };
 const unattributedRows = allEntries.entries.filter((entry) => !entry.sessionId).length;
 
-// Child rows share the workspace file; a child is identified by scope (profile + task call).
+// Child rows share the workspace file; a child is identified by its agent id (falling back to
+// profile + task call for rows written before the agentId field existed).
 const childGroups = new Map();
 for (const entry of sessionEntries) {
   if (!entry.scope || entry.scope.profile === "root") continue;
-  const key = `${entry.scope.profile}:${entry.scope.taskCallId ?? "internal"}`;
+  const key = entry.scope.agentId ?? `${entry.scope.profile}:${entry.scope.taskCallId ?? "internal"}`;
   if (!childGroups.has(key)) childGroups.set(key, []);
   childGroups.get(key).push(entry);
 }

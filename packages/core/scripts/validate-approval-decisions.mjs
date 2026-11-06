@@ -101,11 +101,11 @@ function makeCoordinator({ messages: initial = messages, auto = false, evaluate,
 }
 
 // ---------------------------------------------------------------------------
-// 2. Approve-all joins ONE pump; no pending decisions does nothing
+// 2. authorizeAndResume joins ONE pump; no pending decisions does nothing
 // ---------------------------------------------------------------------------
 {
-  const ctrl = makeCoordinator();
-  await ctrl.coordinator.approvePendingApprovals();
+  const ctrl = makeCoordinator({ auto: true, evaluate: async () => ({ action: "allow" }) });
+  await ctrl.coordinator.authorizeAndResume();
   assert.equal(ctrl.decisions.length, 2);
   assert.equal(ctrl.upserts.length, 2);
   assert.deepEqual(ctrl.stats(), { reconciles: 1, persists: 1, pumps: 1 }, "N decisions → one pump");
@@ -113,7 +113,7 @@ function makeCoordinator({ messages: initial = messages, auto = false, evaluate,
 
 {
   const ctrl = makeCoordinator({ messages: [{ id: "u", role: "user", parts: [] }] });
-  await ctrl.coordinator.approvePendingApprovals();
+  await ctrl.coordinator.authorizeAndResume();
   assert.equal(ctrl.decisions.length, 0);
   assert.deepEqual(ctrl.stats(), { reconciles: 0, persists: 0, pumps: 0 });
 }

@@ -242,4 +242,38 @@ async function disableText(runner, id) {
   assert.match(collected.turnContextSections?.[0]?.content ?? "", /is disabled/, "the model is told");
 }
 
+// 8. Re-enable retracts the notice for an extension with NO base section.
+//
+// `memory` / `jobs` only register named sections (or no provider at all), so a re-enable produces
+// no block that could supersede the old `ext:<id>` disabled notice. Without an explicit retraction
+// the model kept reading "this extension is disabled" for the rest of the session.
+{
+  const runner = new ExtensionRunner({});
+  await runner.loadExtension({
+    id: "named-only",
+    name: "Named Only",
+    version: "1.0.0",
+    description: "only named sections",
+    activate(ctx) {
+      ctx.registerContextProvider({
+        sections: [{ name: "selection", content: () => "selected memories" }],
+        disabledContent: () => "Named Only is off",
+      });
+    },
+  });
+  await runner.setEnabled("named-only", false);
+  const off = await runner.collectBeforeAgentStart("x", "id");
+  assert.ok(
+    off.turnContextSections?.some((section) => section.id === "ext:named-only"),
+    "the disabled notice is announced under the base kind"
+  );
+
+  await runner.setEnabled("named-only", true);
+  const on = await runner.collectBeforeAgentStart("x", "id");
+  const base = on.turnContextSections?.find((section) => section.id === "ext:named-only");
+  assert.match(base?.content ?? "", /enabled again/, "re-enable retracts the disabled notice");
+  const named = on.turnContextSections?.find((section) => section.id === "ext:named-only:selection");
+  assert.equal(named?.content, "selected memories", "the real named section wins over its notice");
+}
+
 console.log("extension-disable-notice validation passed");

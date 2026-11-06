@@ -434,10 +434,14 @@ export interface ExtensionContextSectionProvider {
  * when its content changes — prompt-cache friendly).
  */
 export interface ExtensionTurnContextSection {
-  /** Extension id — used as the `<ctx kind="ext:<id>">` tag's id part. */
+  /**
+   * Section kind inside the `ext:` namespace: `ext:<extensionId>` for the base section, or
+   * `ext:<extensionId>:<sectionName>` for a named section. It is the `<ctx kind>` identity (and
+   * the admission key), not a bare extension id.
+   */
   id: string;
   /** Rendered content. For an enabled extension this is its injected content
-   *  (e.g. `<memory_index>`); for a disabled extension it is the disabled notice. */
+   *  (e.g. `<memory_index>`); for a disabled extension it is the disabled/enabled notice. */
   content: string;
 }
 
@@ -792,6 +796,22 @@ export interface ExtensionInstance {
    * incarnation (the context is the registration lease — see `ExtensionRunner.isContextLive`).
    */
   config?: ExtensionConfig;
+  /**
+   * Named sections registered at the last disable, retracted on the next successful enable.
+   *
+   * A section that produces no content on the enable turn has no other way to supersede its old
+   * block, so the name list has to outlive the disable. It covers every registered name (not only
+   * the ones with a disabled notice): a section without `disabledContent` can still have produced
+   * content before the disable.
+   */
+  disabledSections?: string[];
+  /**
+   * Whether `activate` was ever entered for this instance.
+   *
+   * A load-declared-disabled (`enabled: false`) or invalid-id instance owns no resources, so
+   * calling its `deactivate` at teardown would break the activate/deactivate pairing contract.
+   */
+  everActivated?: boolean;
 }
 
 /** Public, read-only description of a loaded extension (for management commands). */
@@ -833,8 +853,9 @@ export interface ExtensionConfig {
   id: string;
   /**
    * Whether the extension is activated at load. `false` registers the instance without calling
-   * `activate` (no tool/command/interceptor/section lands, and the model is told it is disabled);
-   * it can still be turned on later through `setEnabled(id, true)`. Omitted means enabled.
+   * `activate` (no tool/command/interceptor/section lands, and no disabled notice is injected: the
+   * model never saw the extension, so there is nothing to retract); it can still be turned on later
+   * through `setEnabled(id, true)`. Omitted means enabled.
    */
   enabled?: boolean;
   /**

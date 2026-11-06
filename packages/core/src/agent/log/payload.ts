@@ -11,7 +11,10 @@ import type { AgentEvent } from "../agent-event-bus";
  * them starts reading a field the others dropped.
  */
 export function readEventPayload(event: AgentEvent): Record<string, unknown> {
-  return event.payload as Record<string, unknown>;
+  // Events whose payload is entirely optional may be emitted without one. Formatters read fields
+  // off this object, so `undefined` turned a valid event into a thrown formatter (the row was lost
+  // and only the contained handler failure was reported).
+  return (event.payload ?? {}) as Record<string, unknown>;
 }
 
 // ============================================================================

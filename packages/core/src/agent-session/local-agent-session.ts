@@ -73,6 +73,29 @@ const RETAINED_CHANNEL_EVENT = (() => {
 type ChannelPayload<C extends AgentSessionChannel> = Extract<AgentSessionEvent, { channel: C }>["payload"];
 
 /**
+ * Lifecycle payloads that must not cross the wire verbatim.
+ *
+ * They are `unknown` at the type level and come from arbitrary tool/extension results (a Buffer, a
+ * Date, a multi-MB base64 image). The lifecycle channel sends the ENTIRE envelope, so those values
+ * were serialized into every remote frame. Every channel consumer reads only scalar identity fields
+ * (`tool_name`, `tool_call_id`, `duration_ms`, …); the local bus event keeps the raw values for
+ * logs and observers, which are the only readers that need them.
+ */
+const CHANNEL_DROPPED_PAYLOAD_KEYS = ["tool_input", "tool_output", "output"] as const;
+
+function channelSafeLifecycleEvent(event: AgentEvent): AgentEvent {
+  const payload = event.payload as Record<string, unknown> | null | undefined;
+  if (!payload || typeof payload !== "object") return event;
+  let next: Record<string, unknown> | undefined;
+  for (const key of CHANNEL_DROPPED_PAYLOAD_KEYS) {
+    if (!(key in payload)) continue;
+    next ??= { ...payload };
+    delete next[key];
+  }
+  return next ? ({ ...event, payload: next } as AgentEvent) : event;
+}
+
+/**
  * Project one scoped bus event onto its declared session channel. Returns null
  * for events that do not map to a channel.
  */
@@ -123,8 +146,9 @@ function projectChannelEvent(channel: AgentSessionChannel, event: AgentEvent): A
       // Shape already matches `{ subagents }`, as with `jobs` above.
       return { channel, payload: event.payload as ChannelPayload<"subagents">, ts };
     case "lifecycle":
-      // The lifecycle channel carries the typed AgentEvent envelope itself.
-      return { channel, payload: event as ChannelPayload<"lifecycle">, ts };
+      // The lifecycle channel carries the typed AgentEvent envelope itself (minus the raw
+      // arbitrary tool payloads — see `channelSafeLifecycleEvent`).
+      return { channel, payload: channelSafeLifecycleEvent(event) as ChannelPayload<"lifecycle">, ts };
     case "extension-ui":
       return { channel, payload: event.payload as ChannelPayload<"extension-ui">, ts };
     default: {

@@ -39,7 +39,40 @@ const records = [
   },
 ];
 
-const resume = approvalsToResumeMap(records);
+const resumeMessages = [
+  {
+    id: "m-resume",
+    role: "assistant",
+    parts: [
+      {
+        id: "run_1",
+        type: "tool-call",
+        name: "run_command",
+        arguments: "{}",
+        state: "approval-requested",
+        approval: { id: "approval_call_run_1", needsApproval: true },
+      },
+      {
+        id: "edit_1",
+        type: "tool-call",
+        name: "edit_file",
+        arguments: "{}",
+        state: "input-complete",
+        approval: { id: "approval_call_edit_1", needsApproval: true, approved: true },
+      },
+      {
+        id: "rm_1",
+        type: "tool-call",
+        name: "run_command",
+        arguments: "{}",
+        state: "input-complete",
+        approval: { id: "approval_call_rm_1", needsApproval: true, approved: false },
+      },
+    ],
+  },
+];
+
+const resume = approvalsToResumeMap(records, resumeMessages);
 assert.equal(resume.has("approval_call_run_1"), false, "pending must be omitted");
 assert.equal(resume.has("run_1"), false, "pending toolCallId must be omitted");
 
@@ -93,6 +126,7 @@ assert.equal(withTimes[0].updatedAt, 1234, "approvalTimes carries the real decis
 
 const middleware = createApprovalResumeMiddleware({
   getApprovals: () => records,
+  getMessages: () => resumeMessages,
 });
 const projectedMessages = [{ role: "user", content: "wire" }];
 let config = {

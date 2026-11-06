@@ -5,7 +5,7 @@
  * tool-call parts remain the transcript; this table feeds `resumeToolState`.
  */
 
-import { isToolCallPart } from "../stream/message-parts.js";
+import { isSettledToolCallPart, isToolCallPart } from "../stream/message-parts.js";
 
 import type { ToolApprovalSource } from "../../runtime-types/agent-event-payloads.js";
 import type { ToolApprovalRecord, ToolApprovalStatus } from "../persistence/types.js";
@@ -177,12 +177,32 @@ export function recordFromToolCallPart(part: ToolCallPart, now = Date.now()): Up
  * with a plain one therefore parks on the gate and holds the plain calls (TanStack's `held` list);
  * `AgentChatController.pumpToolPhases` settles those as CANCELLED when the turn ends, which is the
  * deliberate contract — a held call is not silently executed later, and the model can retry.
+ *
+ * **The decision is scoped to the call it was made for.** Provider tool-call ids are
+ * request-scoped and reused (`call_0`), so exporting every answered row keyed by id let an earlier
+ * approval silently authorize a later, different call. A row is only replayable while the LAST
+ * part carrying that id is the unresolved call (no result) **and** that part already carries this
+ * decision; a new call reusing the id has no approval on its part, so it asks again (fail closed).
  */
-export function approvalsToResumeMap(records: readonly ToolApprovalRecord[]): Map<string, ToolApprovalResolution> {
+export function approvalsToResumeMap(
+  records: readonly ToolApprovalRecord[],
+  messages: readonly UIMessage[]
+): Map<string, ToolApprovalResolution> {
   const approvals = new Map<string, ToolApprovalResolution>();
+  const lastPartById = new Map<string, ToolCallPart>();
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (isToolCallPart(part)) lastPartById.set(part.id, part);
+    }
+  }
 
   for (const record of records) {
     if (record.status === "pending") continue;
+    const part = lastPartById.get(record.toolCallId);
+    // Only a live, still-unresolved call can consume the decision. `undefined` means the call is
+    // no longer in the transcript (or belongs to a trimmed window); replaying it by id alone is
+    // exactly the stale-approval bug this guard closes.
+    if (!part || part.approval?.approved === undefined || isSettledToolCallPart(part)) continue;
 
     const resolution: ToolApprovalResolution =
       record.status === "approved"

@@ -64,6 +64,7 @@ export const logEntrySchema = z.strictObject({
   scope: z.strictObject({
     profile: z.enum(AGENT_PROFILE_IDS),
     taskCallId: z.string().optional(),
+    agentId: z.string().optional(),
   }),
   id: z.string(),
   timestamp: z.number(),

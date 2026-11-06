@@ -121,7 +121,9 @@ export class AgentToolRegistry {
     if (!stack) return false;
     const remaining = stack.filter((entry) => entry.ownerId !== ownerId);
     if (remaining.length === stack.length) return false;
-    if (remaining.length === 0) {
+    // An incumbent placeholder (`tool: undefined`) is not a live registration: a name first seen
+    // through an extension leaves one behind, and keeping it grew the stack table forever.
+    if (remaining.length === 0 || remaining.every((entry) => entry.tool === undefined)) {
       this.stacks.delete(name);
       delete (this.tools as Record<string, unknown>)[name];
       return true;
