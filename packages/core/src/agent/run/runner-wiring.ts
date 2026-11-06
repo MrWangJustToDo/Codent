@@ -13,7 +13,7 @@
  * second reason they are not spread across the class body.
  *
  * Extracted from `ManagedAgent` (architecture debt P1-15). The host interface is
- * the codebase's standard seam shape (see `managed-agent-compact.ts`): pass
+ * the codebase's standard seam shape (see `managers/compact-facet.ts`): pass
  * `() => value` accessors, not `this`, so the module has no dependency on the
  * composition root and can be validated on its own.
  */

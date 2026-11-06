@@ -113,49 +113,122 @@ export class SessionLifecycleService {
    */
   private resetTransientState(reason: SessionLifecycleReason, scope: "full" | "resume"): void {
     const full = scope === "full";
-    if (full) {
-      this.rt.mode.mode.reset();
-      this.rt.mode.approvals.clear();
+    try {
+      if (full) {
+        this.rt.mode.mode.reset();
+        this.rt.mode.approvals.clear();
+      }
+      // Status FIRST: `resetRunState()` aborts the previous run, and its abort listener rewrites any
+      // ACTIVE status to `aborted`. Aborting before the reset made every resume from an approval
+      // pause (and every `/new` while parked) log a cancellation that never happened — the run was
+      // merely being unloaded. With the status already `idle` the listener has nothing to change.
+      this.rt.run.statusController.resetToIdle();
+      this.rt.run.run.resetRunState();
+      this.rt.run.run.resetTurnLifecycle();
+      this.rt.sidecars.getCompaction().resetReactiveCompactRetries();
+      this.rt.run.clearErrorAndRetry();
+      if (full) this.rt.run.clearPendingApprovals();
+      this.rt.sidecars.memory.resetState();
+      if (full) {
+        this.rt.sidecars.usage.reset();
+        this.rt.mode.resetMediaHydrationMisses();
+        this.rt.sidecars.getTodoManager()?.reset();
+        this.rt.sidecars.getToolCompactCache?.().clear();
+      }
+      this.rt.sidecars.streamHub.clearAll();
+      this.rt.mode.resetTurnContext();
+      // Extension render slots describe the conversation, not the agent: a plan board or file tree
+      // published for the old transcript must not survive into the new one (and must not be replayed
+      // to a later subscriber as that session's initial state).
+      this.rt.sidecars.clearExtensionUi?.();
+      // Notices are conversation-scoped too: "Extension X is disabled" (or its retraction) must not
+      // be replayed into a transcript that never had that extension's tools.
+      this.rt.sidecars.clearExtensionSessionNotices?.();
+      if (full) this.rt.transcript.resetSessionSyncTracker();
+      this.rt.transcript.resetIterationProgress();
+      // Session-scoped, like the iteration progress above: a completed task keeps its row for the
+      // preview, but the conversation it belonged to is gone. Destroying them (not just aborting)
+      // is what releases the child's UI channel, log sink and tool state; `clearTaskRuns` below then
+      // drops the phase records/pre-fork seats that pointed at them.
+      this.rt.sidecars.destroyChildAgents(reason);
+      this.rt.sidecars.clearTaskRuns();
+      this.rt.sidecars.clearToolBeforeHooks?.();
+      this.rt.run.resetRunOutcome?.();
+    } finally {
+      // Invoked synchronously in `finally` so the facade is dropped before the caller continues
+      // (a switch that throws mid-reset must not leave the leaving session's facade live), but
+      // captured as a promise: an earlier throw used to skip this line entirely, so
+      // `settleTransientReset()` awaited the PREVIOUS switch's already-resolved promise — the reset
+      // reported success while the leaving session's jobs and tasks survived into the new
+      // transcript. A synchronous throw is converted, not rethrown, so it cannot mask the original.
+      this.pendingBackgroundReset = (() => {
+        try {
+          return Promise.resolve(this.rt.sidecars.resetBackgroundWork(reason));
+        } catch (error) {
+          return Promise.reject(error);
+        }
+      })();
     }
-    // Status FIRST: `resetRunState()` aborts the previous run, and its abort listener rewrites any
-    // ACTIVE status to `aborted`. Aborting before the reset made every resume from an approval
-    // pause (and every `/new` while parked) log a cancellation that never happened — the run was
-    // merely being unloaded. With the status already `idle` the listener has nothing to change.
-    this.rt.run.statusController.resetToIdle();
-    this.rt.run.run.resetRunState();
-    this.rt.run.run.resetTurnLifecycle();
-    this.rt.sidecars.getCompaction().resetReactiveCompactRetries();
-    this.rt.run.clearErrorAndRetry();
-    if (full) this.rt.run.clearPendingApprovals();
-    this.rt.sidecars.memory.resetState();
-    if (full) {
-      this.rt.sidecars.usage.reset();
-      this.rt.mode.resetMediaHydrationMisses();
-      this.rt.sidecars.getTodoManager()?.reset();
-      this.rt.sidecars.getToolCompactCache?.().clear();
-    }
-    this.rt.sidecars.streamHub.clearAll();
-    this.rt.mode.resetTurnContext();
-    // Extension render slots describe the conversation, not the agent: a plan board or file tree
-    // published for the old transcript must not survive into the new one (and must not be replayed
-    // to a later subscriber as that session's initial state).
-    this.rt.sidecars.clearExtensionUi?.();
-    if (full) this.rt.transcript.resetSessionSyncTracker();
-    this.rt.transcript.resetIterationProgress();
-    // Session-scoped, like the iteration progress above: a completed task keeps its row for the
-    // preview, but the conversation it belonged to is gone. Destroying them (not just aborting)
-    // is what releases the child's UI channel, log sink and tool state; `clearTaskRuns` below then
-    // drops the phase records/pre-fork seats that pointed at them.
-    this.rt.sidecars.destroyChildAgents(reason);
-    this.rt.sidecars.clearTaskRuns();
-    this.rt.sidecars.clearToolBeforeHooks?.();
-    this.rt.run.resetRunOutcome?.();
-    this.pendingBackgroundReset = Promise.resolve(this.rt.sidecars.resetBackgroundWork(reason));
   }
 
   /** Await the background-work reset started by the last transient reset (switch transactions only). */
   private async settleTransientReset(): Promise<void> {
     await this.pendingBackgroundReset;
+  }
+
+  /**
+   * Run the post-commit steps of a switch, each best-effort and all of them attempted.
+   *
+   * Past `lease.commit()` the switch HAS happened, so throwing would tell the host the session was
+   * not adopted while the transcript is already on it. One failing step (a memory reset, an
+   * extension UI slot clear) used to skip every later one — including the interaction-state
+   * re-apply, so a session parked on an approval came back as `idle` with no pending wait to resume
+   * from, and the next request queued behind a pump that never ran. A failure is reported, not
+   * swallowed.
+   */
+  private async settleCommittedTransition(
+    steps: ReadonlyArray<readonly [label: string, run: () => void | Promise<void>]>
+  ): Promise<void> {
+    for (const [label, run] of steps) {
+      try {
+        await run();
+      } catch (error) {
+        // Reported, never propagated: a throwing reporter must not make the caller treat a
+        // committed switch as failed (the `/new` catch would then run the tail a second time).
+        try {
+          this.rt.sidecars.warn?.(`${label} failed after the session switch committed`, {
+            error: errorMessage(error),
+          });
+        } catch {
+          // Last resort: the failure is unreportable, but the switch still stands.
+        }
+      }
+    }
+  }
+
+  /** The post-commit tail of `/new` (also used by the committed-failure path). */
+  private async settleNewSession(next: SessionData, reason: "session-new", current: SessionData | null): Promise<void> {
+    const store = this.rt.transcript.getSessionStore();
+    await this.settleCommittedTransition([
+      ["session new transcript clear", () => this.rt.transcript.getChatController()?.clearTranscript()],
+      ["session new reset", () => this.resetTransientState(reason, "full")],
+      // The reset kills background jobs/tasks asynchronously; the switch is not complete until
+      // they are gone (an immediate re-resume must not race a late record deletion).
+      ["session new background reset", () => this.settleTransientReset()],
+      [
+        "session new store cache",
+        () => {
+          // A long-lived process `/resume`s through many sessions; the store's per-id fingerprints
+          // (a second copy of the transcript) for the departure would otherwise live until exit.
+          if (current?.id && current.id !== next.id) {
+            (store as (typeof store & { clearCache?: (id: string) => void }) | null)?.clearCache?.(current.id);
+          }
+        },
+      ],
+      ["session new subagents", () => this.rt.transcript.refreshSubagents?.()],
+      ["session new row", () => this.rt.transcript.emitSessionNew(next.id, reason)],
+      ["session new state refresh", () => this.rt.transcript.refreshState()],
+    ]);
   }
 
   /**
@@ -228,21 +301,7 @@ export class SessionLifecycleService {
       // `setSessionData` can throw AFTER swapping the data (the log-sink bind), so the catch below
       // asks the data for the truth instead of relying on a boolean written after the call.
       this.rt.lease.commit();
-      this.rt.transcript.getChatController()?.clearTranscript();
-      this.resetTransientState(reason, "full");
-      // The reset kills background jobs/tasks asynchronously; the switch is not complete until
-      // they are gone (an immediate re-resume must not race a late record deletion).
-      await this.settleTransientReset();
-      // A long-lived process `/resume`s through many sessions; the store's per-id fingerprints
-      // (a second copy of the transcript) for the departure would otherwise live until exit.
-      if (current?.id && current.id !== next.id) {
-        // The lifecycle's store port is narrower than `SessionStore` (fake stores in tests do not
-        // implement the cache); the method is optional so the switch never fails over it.
-        (store as typeof store & { clearCache?: (id: string) => void }).clearCache?.(current.id);
-      }
-      this.rt.transcript.refreshSubagents?.();
-      this.rt.transcript.emitSessionNew(next.id, reason);
-      this.rt.transcript.refreshState();
+      await this.settleNewSession(next, reason, current);
       return next;
     } catch (error) {
       if (this.rt.transcript.getSessionData()?.id === next.id) {
@@ -250,17 +309,7 @@ export class SessionLifecycleService {
         // Finish the remaining steps best-effort and report success — surfacing a failure here
         // would tell the host the new session was not created while the transcript is already on it.
         this.rt.lease.commit();
-        try {
-          this.resetTransientState(reason, "full");
-        } catch {
-          // Best-effort; the switch itself is already committed.
-        }
-        try {
-          await this.settleTransientReset();
-        } catch {
-          // Best-effort; a late background reset must not turn a committed switch into a failure.
-        }
-        this.rt.transcript.refreshState();
+        await this.settleNewSession(next, reason, current);
         return next;
       } else {
         this.rt.lease.abortClaim();
@@ -368,33 +417,35 @@ export class SessionLifecycleService {
       // advances the generation here, exactly once.
       this.rt.lease.commit();
 
-      try {
+      const steps: Array<[string, () => void | Promise<void>]> = [
         // Clear the leaving run's volatile state. The `resume` scope keeps mode/approvals/usage/todos —
         // the restore just adopted those.
-        this.resetTransientState("session-resume", "resume");
-        await this.settleTransientReset();
+        ["session resume reset", () => this.resetTransientState("session-resume", "resume")],
+        ["session resume background reset", () => this.settleTransientReset()],
         // The reset makes the status idle; re-apply the restored interaction state so a session that
         // was waiting on approval/ask_user does not come back as idle.
-        this.rt.run.syncInteractionStateFromUIMessages?.(session.uiMessages);
-        this.rt.transcript.refreshSubagents?.();
-
-        if (leavingId && leavingId !== sessionId) {
-          // One recorded row carries both ids; the file itself never moves on a switch.
-          this.rt.transcript.emitSessionSwitch(leavingId, sessionId, leavingMessageCount, reason);
-          // The departure is no longer active; drop its transcript fingerprints (the next
-          // `/resume` reloads and re-primes them).
-          (this.rt.transcript.getSessionStore() as { clearCache?: (id: string) => void } | undefined)?.clearCache?.(
-            leavingId
-          );
-        }
-        this.rt.transcript.refreshState();
-      } catch (error) {
-        // Past the commit the switch HAS happened. Surfacing this as a failed resume made the host
-        // report a failure for a state it is actually in; report and keep the switch instead.
-        this.rt.sidecars.warn?.("session resume post-commit step failed", {
-          error: errorMessage(error),
-        });
+        [
+          "session resume interaction state",
+          () => this.rt.run.syncInteractionStateFromUIMessages?.(session.uiMessages),
+        ],
+        ["session resume subagents", () => this.rt.transcript.refreshSubagents?.()],
+      ];
+      if (leavingId && leavingId !== sessionId) {
+        steps.push([
+          "session resume switch row",
+          () => {
+            // One recorded row carries both ids; the file itself never moves on a switch.
+            this.rt.transcript.emitSessionSwitch(leavingId, sessionId, leavingMessageCount, reason);
+            // The departure is no longer active; drop its transcript fingerprints (the next
+            // `/resume` reloads and re-primes them).
+            (this.rt.transcript.getSessionStore() as { clearCache?: (id: string) => void } | undefined)?.clearCache?.(
+              leavingId
+            );
+          },
+        ]);
       }
+      steps.push(["session resume state refresh", () => this.rt.transcript.refreshState()]);
+      await this.settleCommittedTransition(steps);
       return session;
     } catch (error) {
       // No commit ⇒ the leaving session is still the active one. Give the target claim back,

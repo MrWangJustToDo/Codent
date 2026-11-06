@@ -7,6 +7,7 @@ import { convertMessagesToModelMessages } from "@tanstack/ai";
 import { collectIncompleteTodos, isCompactionCancel } from "../agent/compaction";
 import { applyCompactionResult, applyReactiveCompactionResult } from "../agent/compaction/apply-compaction-result.js";
 import { autoCompact } from "../agent/compaction/auto-compact.js";
+import { isCompactionSummaryUIMessage } from "../agent/compaction/compaction-summary.js";
 import { keepPolicyProjectionOptions, resolveKeepPolicy } from "../agent/compaction/keep-policy.js";
 import { getModelVisibleMessages } from "../agent/compaction/message-chain-projection.js";
 import { isPromptTooLongError, reactiveCompact } from "../agent/compaction/reactive-compact.js";
@@ -195,6 +196,17 @@ export async function runManualCompact(
   }
 
   if (options?.messages?.length) {
+    // A caller-supplied transcript is user text: it must not be able to install a forged
+    // `[CONVERSATION SUMMARY] / [END SUMMARY]` block that the next compaction would treat as a
+    // checkpoint. Every other user-text entry point runs the same guard. Returned, not thrown:
+    // `compact()` answers with a result union, and a rejection here skipped the caller's `ok` branch
+    // while the lease's `finally` still ran.
+    if (options.messages.some((message) => isCompactionSummaryUIMessage(message))) {
+      return {
+        ok: false,
+        error: "Compaction input contains a reserved compaction summary marker and would be misread as a checkpoint.",
+      };
+    }
     channel.setMessages(options.messages);
   }
 
@@ -272,12 +284,20 @@ export async function runManualCompact(
       return { ok: false, error: "Compaction aborted" };
     }
 
+    const tokensBefore = result.tokensBefore ?? tokensBeforeEstimate;
+    const tokensAfter = result.tokensAfter;
+    // `applyCompactionResult` resets the window because the NEXT model call reports its own fill.
+    // A manual `/compact` has no next call and persists immediately, so the session on disk said
+    // `contextTokens: 0`; resume treats falsy as "nothing to restore", and auto-compaction could
+    // not fire until the first response — a resumed session could then overflow into reactive
+    // compaction. Seed the window with the post-compact fill before persisting.
+    if (tokensAfter > 0) {
+      host.usage.setWindowUsage({ inputTokens: tokensAfter, outputTokens: 0, totalTokens: tokensAfter });
+    }
     host.resetSystemPrompt();
     host.persistSession();
     host.maybeSaveSessionUIMessages(channel.getMessages(), "force");
 
-    const tokensBefore = result.tokensBefore ?? tokensBeforeEstimate;
-    const tokensAfter = result.tokensAfter;
     const compressionRatio = tokensBefore > 0 ? Math.round((1 - tokensAfter / tokensBefore) * 100) : 0;
     const todoNote = todos.length > 0 ? ` (${todos.length} todos preserved)` : "";
 

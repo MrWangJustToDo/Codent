@@ -66,8 +66,8 @@ export async function saveSessionUIMessages(
   uiMessages: TanStackUIMessage[],
   tracker: SessionSyncTracker,
   sessionId: string | undefined = host.session.getSessionData()?.id
-): Promise<void> {
-  if (uiMessages.length === 0) return;
+): Promise<boolean> {
+  if (uiMessages.length === 0) return false;
   // Only mark persisted when the write actually landed. Marking a failed save
   // would make the fingerprint match, so every later persist of the same content
   // is skipped as a no-op and the loss never converges (the store's own baseline
@@ -87,6 +87,7 @@ export async function saveSessionUIMessages(
     { coalesceUiMessages: true }
   );
   if (persisted) tracker.markPersisted(uiMessages);
+  return persisted;
 }
 
 export async function restoreManagedSession(

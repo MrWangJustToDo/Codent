@@ -34,14 +34,21 @@ export class SessionPersistence {
     this.tracker.reset(uiMessages);
   }
 
-  /** Persist `uiMessages` when an explicit trigger fires and the fingerprint changed. */
-  maybeSave(uiMessages: UIMessage[], reason: SessionSaveReason): void {
-    if (uiMessages.length === 0) return;
-    if (!this.tracker.shouldPersist(uiMessages, { reason })) return;
+  /**
+   * Persist `uiMessages` when an explicit trigger fires and the fingerprint changed.
+   *
+   * Returns the write's verdict (undefined when the tracker skipped it) so a caller that must not
+   * claim durability — the background completion push — can wait for the actual result instead of
+   * treating "queued" as "landed".
+   */
+  maybeSave(uiMessages: UIMessage[], reason: SessionSaveReason): Promise<boolean> | undefined {
+    if (uiMessages.length === 0) return undefined;
+    if (!this.tracker.shouldPersist(uiMessages, { reason })) return undefined;
     const sessionId = this.host.session.getSessionData()?.id;
-    void saveSessionUIMessages(this.host, uiMessages, this.tracker, sessionId).catch((err) =>
-      this.reportBackgroundPersistError(err, sessionId)
-    );
+    return saveSessionUIMessages(this.host, uiMessages, this.tracker, sessionId).catch((err) => {
+      this.reportBackgroundPersistError(err, sessionId);
+      return false;
+    });
   }
 
   /** Force-persist `uiMessages` (explicit slash-command flushes). */
@@ -50,6 +57,20 @@ export class SessionPersistence {
     void saveSessionUIMessages(this.host, uiMessages, this.tracker, sessionId).catch((err) =>
       this.reportBackgroundPersistError(err, sessionId)
     );
+  }
+
+  /**
+   * Force-persist the current transcript and report whether it landed, bypassing the fingerprint
+   * short-circuit. Used when a synthetic message is ALREADY on the channel (a retry after a failed
+   * write): there is no new content to queue, but the previous write still has to succeed before
+   * the delivery may be marked.
+   */
+  persistUiMessagesNow(uiMessages: UIMessage[]): Promise<boolean> {
+    const sessionId = this.host.session.getSessionData()?.id;
+    return saveSessionUIMessages(this.host, uiMessages, this.tracker, sessionId).catch((err) => {
+      this.reportBackgroundPersistError(err, sessionId);
+      return false;
+    });
   }
 
   /** Awaitable state-only persist (rename/title need the write to land before returning). */

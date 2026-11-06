@@ -66,9 +66,15 @@ export function isCompactionSummaryModelMessage(message: ModelMessage): boolean 
 
 export function isCompactionSummaryUIMessage(message: UIMessage): boolean {
   if (message.role !== "user") return false;
-  const textPart = message.parts.find((part) => part.type === "text");
-  if (!textPart || textPart.type !== "text") return false;
-  return isCompactionSummaryText(textPart.content);
+  // Join every non-empty text part, like the wire detector (`extractTextFromContent`) does. Reading
+  // only the FIRST part let `[{text:""}, {text:"[CONVERSATION SUMMARY]…"}]` pass a user-input guard
+  // while `cut-point` still recognized the message as a checkpoint.
+  const text = message.parts
+    .filter((part): part is Extract<typeof part, { type: "text" }> => part.type === "text")
+    .map((part) => part.content)
+    .filter((value) => value.length > 0)
+    .join("\n");
+  return isCompactionSummaryText(text);
 }
 
 /**

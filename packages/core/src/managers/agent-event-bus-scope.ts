@@ -46,13 +46,15 @@ export class AgentEventBusScope {
    */
   private reportingHandlerError = false;
   /**
-   * Root-scope failures are reported once per (event, pattern).
+   * Root-scope failures are reported once per (event, pattern) on STDERR.
    *
    * The bus's own default reporter (dedupe + stderr) is bypassed whenever a host sink is supplied,
    * and `AgentEventBusScope` always supplies one. A failure on a root-scoped listener (`agentManager
    * .on`, the log bridge itself) has no owning `AgentLog`, so the event that reports it has no
    * `agentId` the bridge can resolve — it was dropped in silence. This is the fallback that used to
-   * exist on the default reporter.
+   * exist on the default reporter. The EVENT is still emitted every time (a fact; observers count
+   * it); row volume for owned scopes is the log policy's decision (`event-log-rules.ts` throttles
+   * `agent:event-handler-error`).
    */
   private readonly reportedRootFailures = new Set<string>();
 

@@ -289,9 +289,11 @@ export function buildAgentRunner(
     createBackgroundMiddleware({
       getUIChannel: () => deps.getUIChannel() ?? undefined,
       persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
+      persistNow: (next) => deps.persistUIMessagesNow(next),
       getBackgroundWork: () => deps.getBackgroundWork(),
       getCommandService: () => deps.getCommandService(),
       getParentId: () => parentId,
+      isAgentDestroyed: () => managed.isDestroyed(),
       isSessionSwitching: () => deps.isSessionSwitching(),
       emitDiagnostic: (area, message, options) =>
         emitEvent("session:diagnostic", {

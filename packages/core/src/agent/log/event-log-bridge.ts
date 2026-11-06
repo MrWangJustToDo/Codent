@@ -46,6 +46,12 @@ function writeLog(log: AgentLog, rule: EventLogRule, event: AgentEvent, message:
   // when that work should not happen. Optional-call: a duck-typed sink used by validators/embedded
   // hosts may only implement `eventEntry`, and it must keep working.
   if (log.isLevelEnabled?.(level) === false) return;
+  // Per-instance suppression belongs to the rule (see `EventLogRule.suppress`): the table cell is
+  // static, but "was anyone asked" is a property of the event. Checked AFTER the level so a hidden
+  // event does not consume a stateful suppression's bookkeeping — the handler-failure throttle
+  // would otherwise stamp its window while `AGENT_LOG_LEVEL` hides the row, and raising the level
+  // later swallowed the first real one.
+  if (rule.suppress?.(event)) return;
 
   const data = summarizePayload(payload);
   // The run identity comes from the envelope, never from seam state: the producer stamps it once and
@@ -104,7 +110,6 @@ export function bridgeTelemetryToAgentLog(
     const override = policy?.events?.[event.type];
     if (override === false) return;
     if (override) {
-      if (override.suppress?.(event)) return;
       writeLog(log, override, event, override.formatMessage(event));
       return;
     }
@@ -119,9 +124,6 @@ export function bridgeTelemetryToAgentLog(
 
     const rule = resolveRule(event.type, policy);
     if (!rule) return;
-    // Per-instance suppression belongs to the rule (see `EventLogRule.suppress`): the table cell is
-    // static, but "was anyone asked" is a property of the event.
-    if (rule.suppress?.(event)) return;
 
     writeLog(log, rule, event, rule.formatMessage(event));
   });

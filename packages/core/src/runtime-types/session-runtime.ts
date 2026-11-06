@@ -82,6 +82,8 @@ export interface SessionSidecarPort {
   getTodoManager(): TodoManager | null;
   getToolCompactCache?(): { clear(): void };
   clearExtensionUi?(): void;
+  /** Drop extension lifecycle notices that describe the conversation being left. */
+  clearExtensionSessionNotices?(): void;
   destroyChildAgents(reason: string): void;
   clearTaskRuns(): void;
   /** Drop per-call `tool:before:*` outcomes from the conversation being left. */

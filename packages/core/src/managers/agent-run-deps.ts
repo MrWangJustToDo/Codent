@@ -127,7 +127,13 @@ export interface AgentRunDeps {
    */
   coreEnv: ResolvedCoreEnv;
   shouldTriggerAutoCompact: (messages?: ModelMessage[]) => boolean;
-  shouldPersistUIMessage: (messages: TanStackUIMessage[], reason: "user-message") => void;
+  /**
+   * Persist the transcript when the trigger/fingerprint admits it. Returns the write's verdict
+   * (undefined when skipped) so a caller that must not claim durability can await it.
+   */
+  shouldPersistUIMessage: (messages: TanStackUIMessage[], reason: "user-message") => void | Promise<boolean>;
+  /** Force-persist the transcript (no fingerprint short-circuit) and report whether it landed. */
+  persistUIMessagesNow: (messages: TanStackUIMessage[]) => Promise<boolean>;
   setIterationProgress: (state: AgentIterationState) => void;
   /**
    * Session identity from the same accessor the event envelope uses.
@@ -198,6 +204,7 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     coreEnv: managed.runtime?.env ?? getEnv(),
     shouldTriggerAutoCompact: (messages) => managed.shouldTriggerAutoCompact(messages),
     shouldPersistUIMessage: (messages, reason) => managed.maybeSaveSessionUIMessages(messages, reason),
+    persistUIMessagesNow: (messages) => managed.persistSessionUIMessagesNow(messages),
     setIterationProgress: (state) => managed.setIterationProgress(state),
     getEventSessionId: () => managed.getEventSessionId(),
     isSessionSwitching: () => managed.isSessionSwitching(),

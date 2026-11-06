@@ -162,12 +162,13 @@ time (never a snapshot):
 
 | Member | Meaning |
 |---|---|
+| \`ctx.agentId\` | The **owning** agent's id (the registrar). Extensions load on the root only; events up-flowed from a subagent carry the child id, so filter with \`event.agentId !== ctx.agentId\`. For the *running* agent of a tool call use \`opts.agentId\`. |
 | \`ctx.sessionId\` / \`ctx.isIdle()\` / \`ctx.mode\` / \`ctx.model\` | Live session facts (\`mode\` is \`normal\` / \`auto\` / \`plan\`). |
 | \`ctx.signal\` | The active run's \`AbortSignal\` (\`undefined\` when idle). Forward it to long work. |
 | \`ctx.getMessages()\` | A copy of the model-visible conversation; mutating it cannot reach the wire. |
 | \`ctx.getContextUsage()\` | \`{ fillTokens, limitTokens }\` (the footer's reading), or \`undefined\` when unknown. |
 | \`ctx.getSystemPrompt()\` | The effective system prompt for the run. |
-| \`ctx.llm.complete({ messages \\| prompt, system?, schema?, model?, maxOutputTokens? })\` | One-shot model call outside the turn (text, or schema-validated \`data\`). Uses the session's connection; \`model\` must be one it offers. Tokens are charged to the session automatically; a per-run budget bounds runaway use. Rejections are \`ExtensionLlmError\` with \`code\` \`"no-adapter" \\| "unknown-model" \\| "budget-exceeded" \\| "bad-request"\`. |
+| \`ctx.llm.complete({ messages \\| prompt, system?, schema?, model?, maxOutputTokens? })\` | One-shot model call outside the turn (text, or schema-validated \`data\`). Uses the session's connection; \`model\` must be one it offers. Tokens are charged to the session automatically; a per-run budget bounds runaway use. Rejections are \`ExtensionLlmError\` with \`code\` \`"no-adapter" \\| "unknown-model" \\| "budget-exceeded" \\| "bad-request" \\| "revoked"\` (\`revoked\` = the extension was disabled/destroyed while the call was in flight). |
 
 Observable turn/message events: \`turn:start\`/\`turn:end\` (one model turn), \`message:start\`/
 \`message:end\` (one assistant message; \`firstOutput\` marks the run's first).
@@ -233,9 +234,9 @@ Match is on the literal prefix, so \`tool:before:run_*\` works too.
 
 | Hook | Payload / control |
 |---|---|
-| \`session:bootstrap\` | \`{ cwd, sessionId }\` — awaited initialization hook, after bootstrap. |
-| \`session:shutdown\` | \`{ sessionId }\` — fires on teardown. |
-| \`before_agent_start\` | \`{ prompt, sessionId }\` — once per user turn, before turn context is collected. **Observe-only**: there is no field to append prompt or context here; use \`registerContextProvider\` for model-visible text. |
+| \`session:bootstrap\` | \`{ cwd, agentId, sessionId? }\` — awaited initialization hook, after bootstrap. |
+| \`session:shutdown\` | \`{ agentId, sessionId? }\` — fires on teardown. |
+| \`before_agent_start\` | \`{ prompt, agentId, sessionId? }\` — once per user turn, before turn context is collected. **Observe-only**: there is no field to append prompt or context here; use \`registerContextProvider\` for model-visible text. |
 | \`tool:before:<name>\` | \`{ toolName, args, sessionId? }\` — \`sessionId\` is the disk session that owns the call (the parent session for a subagent) and is **omitted** when the host has no session store yet. Set \`event.skip = true\` to cancel (add \`event.reason\` to explain), or \`event.modifiedArgs = …\` to rewrite the arguments. The rewrite is **refused** for approval-gated tools and for \`task\`: their approval/safety decision (or the pre-forked child) was already made from the original arguments, so the call runs unchanged and the refusal is logged. |
 | \`tool:after:<name>\` | \`{ toolName, args, result, durationMs }\`. Set \`event.payload.modifiedResult = …\` to replace the result the model receives. |
 | \`tool:error:<name>\` | \`{ toolName, args, error }\`. Observe-only; use it to log or alert. |

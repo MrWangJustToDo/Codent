@@ -50,12 +50,26 @@ export interface BackgroundMiddlewareDeps {
   getUIChannel: () => AgentUIChannel | undefined;
   /** Persist the updated UI messages (dehydrate session to disk). */
   persistMessages: (next: UIMessage[]) => void;
+  /**
+   * Wait until the queued session writes have landed.
+   *
+   * `persistMessages` is fire-and-forget, so marking a completion delivered right after it claimed
+   * a durability that does not exist. A kill in between lost a task result permanently (tasks have
+   * no `<background_jobs>` pointer). Used when there is nothing new to inject (a retry after a
+   * failed write), where the coalesced queue would otherwise short-circuit on the fingerprint.
+   */
+  persistNow?: (messages: UIMessage[]) => Promise<boolean>;
   /** Undelivered completions + the delivered flag, merged over both sources. */
   getBackgroundWork: () => BackgroundWorkService;
   /** The command source, for the `<background_jobs>` pointer (`sectionFor`). */
   getCommandService: () => AgentCommandService;
   /** Parent id of the owning agent — subagents get neither the pointer nor the notifications. */
   getParentId: () => string | undefined;
+  /**
+   * Whether the runtime was destroyed. The pointer reads the command source, which would mint a
+   * process-wide registry on a destroyed agent; completions still deliver.
+   */
+  isAgentDestroyed?: () => boolean;
   /**
    * Whether a `/new` or `/resume` is in flight. The work reads below are async, and a write that
    * lands after the switch starts would be persisted into the target transcript.
@@ -83,9 +97,8 @@ export function createBackgroundMiddleware(deps: BackgroundMiddlewareDeps): Chat
       const isStaleSession = captureSessionStaleness(deps.getUIChannel(), deps.isSessionSwitching);
 
       // --- 1. Completions (core): one-shot push per finished unit, both kinds ---
-      // Do not mark yet: the channel row must exist first. The session write behind it is
-      // fire-and-forget, so the persistence guarantee here is "the row is in the channel and
-      // queued", not "on disk" — a crash in between is recovered by the pointer below.
+      // Not delivered yet: the channel row must exist first, and the mark below happens only after
+      // the write's verdict (see `persistNow` / `injectSyntheticMessages`'s `persistResult`).
       const completed = await work.pending();
       // A switch during the read means these completions belong to the session being left; the
       // facade is reset by the switch, so dropping them (undelivered) is the whole cleanup.
@@ -99,18 +112,42 @@ export function createBackgroundMiddleware(deps: BackgroundMiddlewareDeps): Chat
           await work.markDelivered(completed);
           messages = [...messages, { role: "user", content: formatNotifications(completed) }];
         } else {
-          const injected = injectSyntheticMessages(
-            messages,
-            [{ kind: NOTIFICATION_KIND, content: formatNotifications(completed) }],
-            { ui, persist: deps.persistMessages }
-          );
+          // Units the wire ALREADY announces are filtered out before rendering the block: their
+          // paragraph is on the channel, and re-rendering the whole set when one new unit arrives
+          // changes the content hash — a new id — so the older paragraphs appeared twice.
+          const announced = collectAnnouncedJobIds(messages);
+          const fresh = completed.filter((unit) => !announced.has(unit.id));
+          const injected =
+            fresh.length > 0
+              ? injectSyntheticMessages(messages, [{ kind: NOTIFICATION_KIND, content: formatNotifications(fresh) }], {
+                  ui,
+                  persist: deps.persistMessages,
+                })
+              : { injected: [] as string[], messages, persistResult: undefined };
           messages = injected.messages;
-          await work.markDelivered(completed);
+          // Mark AFTER the row is durable, not merely queued. A retry with nothing new to add
+          // still forces one write: the previous attempt may be the one that failed.
+          let persisted = true;
+          const write = injected.injected.length > 0 ? injected.persistResult : deps.persistNow?.(ui.getMessages());
+          if (write !== undefined) {
+            try {
+              persisted = (await write) !== false;
+            } catch {
+              persisted = false;
+            }
+          }
+          if (persisted) {
+            await work.markDelivered(completed);
+          } else {
+            deps.emitDiagnostic?.("jobs", "Background completion could not be persisted; it will be redelivered", {
+              level: "warn",
+            });
+          }
         }
       }
 
       // --- 2. Pointer (safety net): visible command jobs this wire does not announce yet ---
-      if (!deps.getParentId()) {
+      if (!deps.getParentId() && deps.isAgentDestroyed?.() !== true) {
         const announced = collectAnnouncedJobIds(messages);
         const section = await buildJobsSection(deps, messages, announced);
         // Same guard after the section build (it reads job state through the env).

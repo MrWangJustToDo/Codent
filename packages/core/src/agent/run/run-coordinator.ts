@@ -339,6 +339,9 @@ export class RunCoordinator {
   recordStreamDuration(): void {
     if (this.streamStartedAt <= 0) return;
     this.lastStreamDurationMs = Math.max(0, Date.now() - this.streamStartedAt);
+    // One-shot: a second call (re-applying the same terminal outcome on a compaction restore)
+    // would otherwise re-measure from the old start and swallow the time spent compacting.
+    this.streamStartedAt = 0;
   }
 
   /** Clear the previous session's completed-run duration before adopting a new transcript. */

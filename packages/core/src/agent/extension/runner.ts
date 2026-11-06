@@ -454,6 +454,22 @@ export class ExtensionRunner {
   }
 
   /**
+   * Drop per-extension lifecycle notices (disabled / enabled-again).
+   *
+   * Render slots describe the CURRENT transcript; notices describe a transition that happened in
+   * the conversation being left. After a switch, injecting "Extension X is disabled" into a
+   * transcript that never had its tools is pure per-turn prompt cost. Providers are NOT cleared:
+   * they are registered only at activation, so dropping them here silenced the skills index, memory
+   * and MCP sections for the rest of the process.
+   *
+   * `disabledSections` is deliberately kept: a resumed session's stored wire can still contain that
+   * extension's per-section "disabled" blocks, and the list is what the next enable retracts.
+   */
+  clearSessionNotices(): void {
+    this.turnContextSections.clearAllNotices();
+  }
+
+  /**
    * Wrap the shared UI for a single extension so render slots are attributed to
    * that extension (used to clear its slots when it is disabled). Every other
    * member (notify / subscribe / getContext) is shared.
@@ -821,6 +837,24 @@ export class ExtensionRunner {
    * are the runner's bookkeeping, not the extension's — logging/coreEnv still work after a revoke.
    */
   private async teardownIncarnation(instance: ExtensionInstance, incarnation = instance.context): Promise<void> {
+    // Serialize per incarnation: a revoke that lands while the first teardown is still awaiting
+    // `deactivate()` must join it, not start a second concurrent pass.
+    const inFlight = instance.teardownInFlight;
+    if (inFlight && inFlight.incarnation === incarnation) return inFlight.promise;
+    const promise = this.runTeardownIncarnation(instance, incarnation);
+    const entry = { incarnation, promise };
+    instance.teardownInFlight = entry;
+    // Both arms clear the marker (a rejecting teardown still ends); `.then` rather than `.finally`
+    // so the derived promise is not an unobserved rejection.
+    const clear = (): void => {
+      if (instance.teardownInFlight === entry) instance.teardownInFlight = undefined;
+    };
+    void promise.then(clear, clear);
+    return promise;
+  }
+
+  /** The body of {@link teardownIncarnation}, run once per incarnation. */
+  private async runTeardownIncarnation(instance: ExtensionInstance, incarnation: ExtensionContext): Promise<void> {
     // Identity-checked so an older teardown cannot revoke a newer incarnation's lease.
     if (this.contexts.get(instance.api.id) === incarnation) {
       this.contexts.delete(instance.api.id);

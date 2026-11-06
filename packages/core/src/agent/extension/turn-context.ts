@@ -75,6 +75,13 @@ export class ExtensionTurnContext {
 
   /** Register one extension's provider; the disposer is identity-checked. */
   register(extensionId: string, provider: ExtensionContextProvider, rank: DispatchRank): () => void {
+    const previous = this.providers.get(extensionId)?.provider;
+    if (previous !== undefined && previous !== provider) {
+      // One provider per extension — a second registration REPLACES the first, unlike commands
+      // (warned) and duplicate section names (warned). Composing two providers used to lose one
+      // with no diagnostic at all.
+      this.deps.log("warn", extensionId, "context provider re-registered — the earlier provider is replaced");
+    }
     this.providers.set(extensionId, { provider, rank });
     return () => {
       if (this.providers.get(extensionId)?.provider === provider) this.providers.delete(extensionId);
@@ -257,7 +264,13 @@ export class ExtensionTurnContext {
     }
   }
 
-  /** Full teardown. */
+  /** Drop every lifecycle notice (session switch), keeping registered providers intact. */
+  clearAllNotices(): void {
+    this.statusNotices.clear();
+    this.sectionNotices.clear();
+  }
+
+  /** Full teardown (provider registrations included). */
   clear(): void {
     this.providers.clear();
     this.statusNotices.clear();

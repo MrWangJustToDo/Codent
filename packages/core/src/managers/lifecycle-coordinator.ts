@@ -245,6 +245,13 @@ export class LifecycleCoordinator {
   /** Track a teardown promise so {@link settleTeardowns} can await it. @internal */
   trackTeardown(promise: Promise<void>): void {
     this.pendingTeardowns.add(promise);
-    void promise.finally(() => this.pendingTeardowns.delete(promise));
+    // `.then` on both arms, not `.finally`: `finally` re-throws into a derived promise nobody
+    // observes, so any future unguarded await inside a teardown would surface as an
+    // `unhandledRejection` — and a host running `installAgentLogProcessGuards()` exits the process
+    // on one. `settleTeardowns` still sees the rejection through `allSettled`.
+    void promise.then(
+      () => this.pendingTeardowns.delete(promise),
+      () => this.pendingTeardowns.delete(promise)
+    );
   }
 }

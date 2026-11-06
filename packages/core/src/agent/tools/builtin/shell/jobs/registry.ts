@@ -592,10 +592,17 @@ export class CommandJobRegistry {
   }
 
   /**
-   * Evict oldest finished jobs (already surfaced to the model) beyond the cap.
+   * Evict oldest finished jobs beyond the cap.
    *
-   * Runs inside a terminal transition, whose caller broadcasts once afterwards — so
-   * an eviction never needs a notification of its own.
+   * Already-surfaced rows go first. An un-notified row cannot be dropped from memory without losing
+   * the completion in-process, but it must not be unbounded either: the idle wake is refused while
+   * a session is parked (plan review/planning, a pending wait), so a long run of background
+   * commands could accumulate past the stated cap. The overflow therefore drops the in-memory row
+   * but KEEPS its durable record and log, so a restart still delivers it and the file stays
+   * readable; only the current process loses the one-shot push.
+   *
+   * Runs inside a terminal transition, whose caller broadcasts once afterwards — so an eviction
+   * never needs a notification of its own.
    */
   private evictOldestFinished(): void {
     const finished: string[] = [];
@@ -611,6 +618,17 @@ export class CommandJobRegistry {
       this.notifiedJobIds.delete(id);
       void this.disposeLog(id);
       void this.removeRecord(id);
+      excess--;
+    }
+    if (excess <= 0) return;
+    for (const id of finished) {
+      if (excess <= 0) break;
+      if (!this.jobs.has(id)) continue;
+      // Notified rows were removed above; whatever is left is the un-notified overflow. Drop the
+      // in-memory row but keep its durable record AND log file (a restart re-delivers it). The log
+      // writer was finalized when the job ended, so releasing the map entry only frees memory.
+      this.jobs.delete(id);
+      this.logs.delete(id);
       excess--;
     }
   }
@@ -730,13 +748,12 @@ export class CommandJobRegistry {
   /** Record completions as delivered (and persist the flag before a restart can lose it). */
   async markNotified(jobIds: readonly string[]): Promise<void> {
     if (jobIds.length === 0) return;
-    for (const id of jobIds) this.notifiedJobIds.add(id);
-    await Promise.all(
-      jobIds
-        .map((id) => this.jobs.get(id))
-        .filter((job): job is CommandJobRecord => job !== undefined)
-        .map((job) => this.persist(job))
-    );
+    // Only live rows: a completion captured before an eviction may be marked afterwards, and an id
+    // with no row would outlive its job in `notifiedJobIds` (a later restore then reads the record's
+    // still-`notified: false` and re-delivers it, which the content-hash dedupe makes benign).
+    const live = jobIds.map((id) => this.jobs.get(id)).filter((job): job is CommandJobRecord => job !== undefined);
+    for (const job of live) this.notifiedJobIds.add(job.id);
+    await Promise.all(live.map((job) => this.persist(job)));
     // The delivery is a visible state change: `pendingPickup` is derived from this set, so a status
     // surface would otherwise keep showing "finished, still owed" until the next job event — which,
     // for the last job in a session, may never arrive. No `finished` ids: nothing ended here, only

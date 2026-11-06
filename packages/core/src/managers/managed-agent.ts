@@ -953,6 +953,7 @@ export class ManagedAgent {
         getTodoManager: () => this.getTodoManager(),
         getToolCompactCache: () => this.getToolCompactCache(),
         clearExtensionUi: () => this.getExtensionRunner()?.clearUISlots(),
+        clearExtensionSessionNotices: () => this.getExtensionRunner()?.clearSessionNotices(),
         // Task phase records and pre-fork seats belong to the conversation being left.
         clearTaskRuns: () => clearTaskRuns(this),
         clearToolBeforeHooks: () => this.toolBeforeHooks.clear(),
@@ -1248,12 +1249,10 @@ export class ManagedAgent {
 
   /** Current agent-loop progress (1-based iteration vs budget); `{current:0}` when idle. */
   readIteration(): AgentIterationState {
-    return (
-      this.run.getIterationState() ?? {
-        current: 0,
-        max: this.config.maxIterations ?? DEFAULT_AGENT_MAX_ITERATIONS,
-      }
-    );
+    const state = this.run.getIterationState();
+    // Copied: the payload goes to every observer, and the run mutates this object in place. A
+    // handler writing to it would corrupt the live counter (and `lastIteration`, which ACP reads).
+    return state ? { ...state } : { current: 0, max: this.config.maxIterations ?? DEFAULT_AGENT_MAX_ITERATIONS };
   }
 
   /**
@@ -1287,7 +1286,10 @@ export class ManagedAgent {
    */
   setIterationProgress(state: AgentIterationState): void {
     this.run.setIterationState(state);
-    this.eventBus?.emit("agent:iteration", state);
+    // Copied: the payload reaches every observer, and the run holds this exact object (it mutates
+    // it as the loop advances). A handler writing to `event.payload` would corrupt the live counter
+    // and `lastIteration`, which ACP reads for its stop reason.
+    this.eventBus?.emit("agent:iteration", { ...state });
   }
 
   /** Clear retained run progress and publish the idle value (`current: 0`). */
@@ -1913,8 +1915,19 @@ export class ManagedAgent {
    * Reasons: `user-message` | `pump-complete` | `force` (via {@link saveSessionUIMessages}).
    * Fire-and-forget — dehydrate + disk write happen in the background.
    */
-  maybeSaveSessionUIMessages(uiMessages: TanStackUIMessage[], reason: SessionSaveReason): void {
-    this.sessionFacet.maybeSaveSessionUIMessages(uiMessages, reason);
+  maybeSaveSessionUIMessages(uiMessages: TanStackUIMessage[], reason: SessionSaveReason): Promise<boolean> | undefined {
+    return this.sessionFacet.maybeSaveSessionUIMessages(uiMessages, reason);
+  }
+
+  /**
+   * Force-persist the transcript and report whether it landed.
+   *
+   * The background completion push needs the verdict (it may only mark a unit delivered after the
+   * row is on disk), and a retry after a failed write has no new content to queue — so this bypasses
+   * the fingerprint short-circuit instead of relying on a second `maybeSave`.
+   */
+  persistSessionUIMessagesNow(uiMessages: TanStackUIMessage[]): Promise<boolean> {
+    return this.sessionFacet.persistSessionUIMessagesNow(uiMessages);
   }
 
   /**
@@ -2354,6 +2367,11 @@ export class ManagedAgent {
    * alone is exactly how a finished job would end up with no `job:changed`, no footer row and no wake.
    */
   getCommandService(): AgentCommandService {
+    // A destroyed runtime must not mint a source: the lazy `registry()` registers a process-wide
+    // `CommandJobRegistry` that nobody owns or destroys, and `run_in_background` on an outlived pump
+    // could start a real child process. Callers are either inside a live pump (a clear failure is
+    // correct) or guarded — the background pointer skips this accessor when the agent is destroyed.
+    if (this.isDestroyed()) throw new Error("Agent has been destroyed");
     this.getBackgroundWork();
     return this.buildCommandService();
   }
@@ -2378,19 +2396,22 @@ export class ManagedAgent {
    * reopened) by {@link resetBackgroundWork}; the next session builds a fresh one.
    */
   getBackgroundWork(): BackgroundWorkService {
-    if (!this.backgroundWork) {
-      const work = new BackgroundWorkService({
-        onChange: (change) => this.publishBackgroundWork(change),
-        onError: (message, error) =>
-          this.emitDiagnostic("jobs", message, { level: "warn", error: errorMessage(error) }),
-      });
-      // Assigned before the sources are registered: registering wires a sink, and a source that
-      // notified during that wiring would otherwise re-enter this method with no facade to find.
-      this.backgroundWork = work;
-      work.register(this.buildCommandService());
-      work.register(createTaskWorkSource(this));
-    }
-    return this.backgroundWork;
+    if (this.backgroundWork) return this.backgroundWork;
+    const work = new BackgroundWorkService({
+      onChange: (change) => this.publishBackgroundWork(change),
+      onError: (message, error) => this.emitDiagnostic("jobs", message, { level: "warn", error: errorMessage(error) }),
+    });
+    // Assigned before the sources are registered: registering wires a sink, and a source that
+    // notified during that wiring would otherwise re-enter this method with no facade to find.
+    this.backgroundWork = work;
+    // A destroyed runtime must not mint a source: `buildCommandService()` registers a process-wide
+    // `CommandJobRegistry` that nobody owns or destroys (the same reason `resumeBackgroundWork()`
+    // refuses). It is still reachable from a pump that outlived the teardown barrier, so it gets a
+    // source-less facade that answers empty instead of resurrecting work.
+    if (this.isDestroyed()) return work;
+    work.register(this.buildCommandService());
+    work.register(createTaskWorkSource(this));
+    return work;
   }
 
   /**
@@ -2917,10 +2938,13 @@ export class ManagedAgent {
     // then hit the destroyed guard instead of being accepted by a state machine that still believes
     // the agent is alive.
     this.agentState = transition(this.agentState, { type: "teardown" }, { strict: false });
-    // ...and the status must agree with the axes. `getL1State()` pairs the two, so leaving
-    // `currentStatus` at "running" exposed a `status: "running"` + `lifecycle: "destroyed"` snapshot.
-    this.currentStatus = projectAgentStatus(this.agentState);
-    this.emitStateChange();
+    // A destroyed runtime has no in-flight retry to report: the terminal-status branch of
+    // `applyStatus` is unreachable here (teardown projects `idle`), so clear it explicitly.
+    this.run.setRetryState(null);
+    // ...and the status must agree with the axes. Route through `applyStatus` — the one writer that
+    // also publishes the `agent:status` row — instead of assigning the field: a bare write left a
+    // destroyed agent with no transition in the timeline.
+    this.applyStatus(projectAgentStatus(this.agentState), "teardown");
   }
 
   /** Whether {@link markDestroyed} ran. */

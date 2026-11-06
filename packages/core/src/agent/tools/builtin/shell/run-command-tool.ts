@@ -341,7 +341,9 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; context
             // No exit code exists for a killed process; -1 is the schema's "not finished"
             // value and `success: false` keeps the run from reading as a clean exit.
             exitCode: -1,
-            durationMs: 0,
+            // Elapsed time, like the timeout branch: the activity summary sums this, and a
+            // cancelled 4-minute command reported as ~0 ms skewed that reading.
+            durationMs: Date.now() - startTime,
             success: false,
             cancelled: true,
             cachedOutputPath: stdoutResult.cachedOutputPath ?? stderrResult.cachedOutputPath ?? null,

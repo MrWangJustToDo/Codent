@@ -190,6 +190,11 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
       }
       return {
         ...state,
+        // The run reached its verdict: `finalizing` is a transient cleanup phase, not "busy".
+        // Leaving `busy` here made a settled turn (completed OR aborted) report
+        // `lifecycle: "busy"` for the rest of the session, which is what an off-process host
+        // reading the axes (not the projection) rendered as a spinner.
+        lifecycle: "ready",
         run: "finalizing",
         outcome: event.result,
         stream: "none",
@@ -210,6 +215,7 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
       }
       return {
         ...state,
+        lifecycle: "ready",
         run: "finalizing",
         outcome: event.result,
         stream: "none",
@@ -279,6 +285,8 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
       }
       return {
         ...state,
+        // Same as `settle`: the interrupt ended the run, so it is no longer busy.
+        lifecycle: "ready",
         run: "finalizing",
         // Same rule as `fail`: an approval wait dies with the run it gated; a question is still
         // the user's to answer, and the projection keeps reporting `awaiting_user` for it.
@@ -317,6 +325,8 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
       if (state.outcome !== "none") {
         return {
           ...state,
+          // The finish that landed during the compaction already ended the run.
+          lifecycle: "ready",
           run: "finalizing",
           stream: "none",
           resumeRun: undefined,
@@ -325,13 +335,16 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
         };
       }
       const run = state.resumeRun ?? "idle";
+      const restoredOutcome = state.resumeOutcome ?? "none";
       return {
         ...state,
         // `idle` is only reachable with `lifecycle: "ready"` — leaving the compaction's `busy` here
-        // projected an idle axis set as `running` (no run exists to clear it).
-        lifecycle: run === "idle" ? "ready" : "busy",
+        // projected an idle axis set as `running` (no run exists to clear it). A settled run is the
+        // same case: `/compact` after a finished turn stores `resumeRun: "finalizing"`, and keying
+        // readiness off `run` alone put the sticky `busy` back.
+        lifecycle: run === "idle" || restoredOutcome !== "none" ? "ready" : "busy",
         run,
-        outcome: state.resumeOutcome ?? "none",
+        outcome: restoredOutcome,
         stream: run === "streaming" ? (state.resumeStream ?? "none") : "none",
         resumeRun: undefined,
         resumeOutcome: undefined,

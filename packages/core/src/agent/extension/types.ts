@@ -645,6 +645,16 @@ export interface ExtensionInstance {
    * calling its `deactivate` at teardown would break the activate/deactivate pairing contract.
    */
   everActivated?: boolean;
+  /**
+   * In-flight teardown for one incarnation.
+   *
+   * Two teardown paths can overlap: a runtime disable of a hung activation runs `teardownIncarnation`
+   * while the activation is still awaited, and the activation's own revocation path runs it again
+   * once it resolves. Teardown is contractually idempotent, not re-entrant — a second concurrent
+   * `deactivate()` can double-close a native handle — so later callers await this promise instead
+   * of starting a second pass over the same incarnation.
+   */
+  teardownInFlight?: { incarnation: ExtensionContext; promise: Promise<void> };
 }
 
 /** Public, read-only description of a loaded extension (for management commands). */

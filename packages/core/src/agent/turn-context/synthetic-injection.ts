@@ -37,7 +37,7 @@ export interface SyntheticMessageEntry {
 export interface SyntheticInjectionDeps {
   ui: AgentUIChannel;
   /** Persist the updated UI messages (no-op for subagents without a session store). */
-  persist: (next: UIMessage[]) => void;
+  persist: (next: UIMessage[]) => void | Promise<unknown>;
 }
 
 export interface SyntheticInjectionResult {
@@ -45,6 +45,12 @@ export interface SyntheticInjectionResult {
   injected: string[];
   /** The wire to use — a new array when anything was injected, else the input. */
   messages: ModelMessage[];
+  /**
+   * The persistence of the appended messages, when a persist callback was supplied and something
+   * was injected. A caller that must not claim durability (the background completion push) awaits
+   * it instead of assuming "appended to the channel" means "on disk".
+   */
+  persistResult?: void | Promise<unknown>;
 }
 
 /** Stable id for a synthetic context message (content-hash dedupe across restores). */
@@ -142,12 +148,14 @@ export function injectSyntheticMessages(
     role: "user",
     parts: [{ type: "text", content: entry.content }],
   }));
-  // --- Channel: append (time order) via the shared safe entry, then persist. ---
-  appendChannelMessages(deps.ui, inserted, { existingIds, persist: deps.persist });
+  // Persist AFTER the append, with the channel's own list: the single safe entry (dedupe + order)
+  // stays in `appendChannelMessages`, while the write's promise is returned to the caller.
+  appendChannelMessages(deps.ui, inserted, { existingIds });
+  const persistResult = deps.persist(deps.ui.getMessages());
 
   // --- Wire: new array, appended at the tail so this call's payload matches what
   // the next channel projection produces (cross-turn prefix stability). ---
   const next = [...messages, ...fresh.map((entry) => ({ role: "user" as const, content: entry.content }))];
 
-  return { injected: fresh.map((entry) => entry.content), messages: next };
+  return { injected: fresh.map((entry) => entry.content), messages: next, persistResult };
 }

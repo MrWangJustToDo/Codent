@@ -217,7 +217,7 @@ export class CompactionController {
         });
       }
     }
-    this.restoreStatus(lease.kind);
+    this.restoreStatus(lease.kind, outcome);
     this.active = null;
     return true;
   }
@@ -318,11 +318,11 @@ export class CompactionController {
     this.active = null;
   }
 
-  private restoreStatus(kind: CompactionKind): void {
-    this.restoreStatusFor(kind, this.active?.previousStatus);
+  private restoreStatus(kind: CompactionKind, outcome?: CompactionOutcome): void {
+    this.restoreStatusFor(kind, this.active?.previousStatus, outcome);
   }
 
-  private restoreStatusFor(kind: CompactionKind, previous: AgentStatus | undefined): void {
+  private restoreStatusFor(kind: CompactionKind, previous: AgentStatus | undefined, outcome?: CompactionOutcome): void {
     // Only an owner may restore, and only from the phase it published. A cancel (aborted), a
     // session switch (reset) or a newer run (running) already moved on.
     //
@@ -335,7 +335,13 @@ export class CompactionController {
     if (!ownsPhase) return;
     if (this.deps.transition) {
       const terminalPrevious = previous !== undefined && isTerminalStatus(previous);
-      if (kind === "manual" && terminalPrevious) {
+      // Only a compaction that SUCCEEDED (or made no change) may clear the previous turn's fault.
+      // A FAILED `/compact` reported `compaction:manual-error` and then settled `idle` with the
+      // error text erased, so every host rendered a healthy session beside a failed compaction.
+      // `release()` (cancel / teardown / safety net) passes no outcome and must also leave the
+      // verdict alone: a cancel is not a repair.
+      const repaired = outcome?.status === "completed" || outcome?.status === "skipped";
+      if (kind === "manual" && terminalPrevious && repaired) {
         // A successful manual compact after a failed turn clears the old fault and settles idle.
         this.deps.setError?.("");
         this.deps.transition({ type: "reset" });
@@ -355,6 +361,13 @@ export class CompactionController {
       // status) and stop deferring the user's next message. The earlier `ownsPhase` guard is what
       // stops a normal stream finish from overwriting a parked turn — not this predicate.
       if (isTerminalStatus(previous)) {
+        // Only a compaction that succeeded may clear the previous turn's fault. `release()`
+        // (cancel / teardown / safety net) passes no outcome; restoring the terminal status keeps
+        // its error text instead of erasing a real fault.
+        if (outcome?.status !== "completed" && outcome?.status !== "skipped") {
+          this.deps.setStatus(previous, "compaction-end");
+          return;
+        }
         // The error belonged to that failed turn: leaving it set is the only way `idle` and a
         // non-empty `error` can coexist.
         this.deps.setError?.("");

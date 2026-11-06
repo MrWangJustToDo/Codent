@@ -34,8 +34,13 @@ export class SessionFacet {
     this.host.session.setSessionDataPlaceholder(data);
   }
 
-  maybeSaveSessionUIMessages(uiMessages: UIMessage[], reason: SessionSaveReason): void {
-    this.persistence.maybeSave(uiMessages, reason);
+  maybeSaveSessionUIMessages(uiMessages: UIMessage[], reason: SessionSaveReason): Promise<boolean> | undefined {
+    return this.persistence.maybeSave(uiMessages, reason);
+  }
+
+  /** Force-persist the transcript and report whether it landed (background delivery gate). */
+  persistSessionUIMessagesNow(uiMessages: UIMessage[]): Promise<boolean> {
+    return this.persistence.persistUiMessagesNow(uiMessages);
   }
 
   saveSessionUIMessages(uiMessages: UIMessage[]): void {

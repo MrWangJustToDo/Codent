@@ -64,7 +64,10 @@ export function isMcpToolName(name: string): boolean {
 export function getPlanModeToolExcludeSet(tools: ToolsRecord, resolve = getBuiltinToolPresentation): Set<string> {
   const exclude = new Set(PLAN_MODE_EXCLUDED_NON_EDIT_TOOL_NAMES);
   for (const name of Object.keys(tools)) {
-    if (isMcpToolName(name) || isWorkspaceEditingTool(name, resolve)) exclude.add(name);
+    // Derived from the same predicate the execution gate uses (`isPlanModeForbiddenTool`), so the
+    // offered set and the denied set cannot drift: adding an exclusion class in one place used to
+    // offer the model a tool the pipeline then refused.
+    if (isPlanModeForbiddenTool(name, resolve)) exclude.add(name);
   }
   return exclude;
 }

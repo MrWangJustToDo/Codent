@@ -2,7 +2,7 @@
  * Tool Output Cache — saves large tool results to disk and returns a preview.
  *
  * When a tool result exceeds the cache threshold, the full output is written
- * to `.agents/cache/tool-output/{id}.txt` and a preview (head + tail) is returned
+ * to `.agents/cache/tool-output/{id}-<writer-token>.txt` and a preview (head + tail) is returned
  * to the LLM with instructions to use `read_file` for the full content.
  *
  * ## Two cleanup paths (they are complements, not alternatives)
@@ -75,7 +75,12 @@ export const CACHE_THRESHOLD = 10000;
  * call leaves the previous file to the age sweep instead of clobbering it.
  */
 let cacheFileSeq = 0;
-const cacheProcessToken = Date.now().toString(36);
+// `Date.now()` alone is not process-unique: a server and a CLI started in the same millisecond
+// produced the same token, so the collision this suffix exists to prevent came back across
+// processes (provider ids are request-scoped, e.g. `call_0-stdout`). A random tail keeps this
+// environment-agnostic (the same module runs in browser hosts, where `process` may not exist)
+// while making the name unique per writer; the id prefix stays the readable join key.
+const cacheProcessToken = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
 
 function uniqueCacheEntryName(id: string): string {
   cacheFileSeq += 1;

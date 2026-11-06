@@ -23,6 +23,30 @@ function taskBindingSuffix(payload: Record<string, unknown>): string {
   return typeof id === "string" && id.length > 0 ? ` [task ${id}]` : "";
 }
 
+/**
+ * One row per (agent, pattern, event, kind) per window for contained handler failures.
+ *
+ * The bus reports every occurrence — that is a fact, and observers count it — but a broken observer
+ * on a high-frequency projection event (`session:messages` is emitted per streamed delta) used to
+ * write a `warn` row per frame and rotate the real timeline away at the sink's rotation cap. The
+ * suppression is stateful because the rule is per event INSTANCE; the map holds one entry per
+ * failing handler (~a few dozen at worst) and is reset if a pathological producer grows it.
+ */
+const handlerFailureReportedAt = new Map<string, number>();
+const HANDLER_FAILURE_REPORT_WINDOW_MS = 60_000;
+const MAX_TRACKED_HANDLER_FAILURES = 100;
+
+function suppressRepeatedHandlerFailure(event: AgentEvent): boolean {
+  const d = p(event);
+  const key = `${event.agentId ?? ""}\0${String(d.pattern ?? "")}\0${String(d.event ?? "")}\0${String(d.kind ?? "")}`;
+  const now = Date.now();
+  const last = handlerFailureReportedAt.get(key);
+  if (last !== undefined && now - last < HANDLER_FAILURE_REPORT_WINDOW_MS) return true;
+  if (handlerFailureReportedAt.size >= MAX_TRACKED_HANDLER_FAILURES) handlerFailureReportedAt.clear();
+  handlerFailureReportedAt.set(key, now);
+  return false;
+}
+
 export interface EventLogRule {
   level: LogLevel;
   category: LogCategory;
@@ -293,6 +317,7 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
   "agent:event-handler-error": {
     level: "warn",
     category: "hooks",
+    suppress: suppressRepeatedHandlerFailure,
     formatMessage: (event) => {
       const d = p(event);
       const what =

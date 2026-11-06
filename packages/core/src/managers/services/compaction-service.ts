@@ -4,8 +4,9 @@
  *
  * Extracted from ManagedAgent (config field + trigger method) and
  * RunCoordinator (run-scoped retry counter). Orchestration — persisting the
- * token limit to UsageTracker, running manual/reactive compaction — stays on
- * ManagedAgent / managed-agent-compact.ts.
+ * token limit to UsageTracker, running manual/reactive compaction — lives in
+ * `managers/compact-facet.ts` (`runManualCompact` / `handleManagedReactiveCompact`),
+ * which `ManagedAgent` calls directly.
  */
 
 import { shouldTriggerAutoCompact } from "../../agent/compaction/auto-compact.js";
