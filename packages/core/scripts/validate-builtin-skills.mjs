@@ -378,6 +378,7 @@ const body = writeExtension?.body ?? "";
 // this assertion is what fails instead of the skill quietly lying to the model.
 const CONTEXT_MEMBERS = [
   "id",
+  "agentId",
   "env",
   "cwd",
   "coreEnv",

@@ -134,6 +134,8 @@ export interface AgentRunDeps {
   shouldPersistUIMessage: (messages: TanStackUIMessage[], reason: "user-message") => void | Promise<boolean>;
   /** Force-persist the transcript (no fingerprint short-circuit) and report whether it landed. */
   persistUIMessagesNow: (messages: TanStackUIMessage[]) => Promise<boolean>;
+  /** Whether the runtime was torn down; the background pointer must not mint a command source. */
+  isDestroyed: () => boolean;
   setIterationProgress: (state: AgentIterationState) => void;
   /**
    * Session identity from the same accessor the event envelope uses.
@@ -205,6 +207,7 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     shouldTriggerAutoCompact: (messages) => managed.shouldTriggerAutoCompact(messages),
     shouldPersistUIMessage: (messages, reason) => managed.maybeSaveSessionUIMessages(messages, reason),
     persistUIMessagesNow: (messages) => managed.persistSessionUIMessagesNow(messages),
+    isDestroyed: () => managed.isDestroyed(),
     setIterationProgress: (state) => managed.setIterationProgress(state),
     getEventSessionId: () => managed.getEventSessionId(),
     isSessionSwitching: () => managed.isSessionSwitching(),

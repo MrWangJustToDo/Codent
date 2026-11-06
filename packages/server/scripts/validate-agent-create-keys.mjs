@@ -26,8 +26,10 @@ const read = (relative) => readFileSync(join(repo, relative), "utf8");
  * - `extensions` — in-process factories; functions cannot be serialized (`RemoteSessionHost`
  *   rejects them loudly, which is the whole point of the exemption).
  * - `providerMode` — a LOCAL resume decision; the agent server owns its provider.
+ * - `mcpElicit` — a callback (`McpElicitHook`), so it cannot be serialized either. The server
+ *   supplies its own hook from its environment; a remote client's local hook is not forwarded.
  */
-const EXEMPT = new Set(["extensions", "providerMode"]);
+const EXEMPT = new Set(["extensions", "providerMode", "mcpElicit"]);
 
 /**
  * The route's body names three connection fields differently (they are mapped onto the server's

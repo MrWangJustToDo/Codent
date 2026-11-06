@@ -293,7 +293,7 @@ export function buildAgentRunner(
       getBackgroundWork: () => deps.getBackgroundWork(),
       getCommandService: () => deps.getCommandService(),
       getParentId: () => parentId,
-      isAgentDestroyed: () => managed.isDestroyed(),
+      isAgentDestroyed: () => deps.isDestroyed(),
       isSessionSwitching: () => deps.isSessionSwitching(),
       emitDiagnostic: (area, message, options) =>
         emitEvent("session:diagnostic", {
