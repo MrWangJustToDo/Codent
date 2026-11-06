@@ -229,8 +229,11 @@ export async function dispatchLocalAgentSessionCommand(
         return result.ok ? { ok: true } : { ok: false, code: "failed", error: result.error ?? "Cannot complete plan" };
       }
       case "mcp.refresh": {
-        const servers = managed.getMcpManager()?.getServerStatuses() ?? [];
-        managed.getEventBus()?.emit("session:mcp", { servers });
+        const mcp = managed.getMcpManager();
+        const servers = mcp?.getServerStatuses() ?? [];
+        // Same payload shape as bootstrap (and the retained value): a refresh must not drop the
+        // config provenance the load report carries.
+        managed.getEventBus()?.emit("session:mcp", mcp?.getStatusPayload() ?? { servers });
         return { ok: true, data: { servers } };
       }
       case "extension.toggle": {
@@ -291,6 +294,9 @@ export async function dispatchLocalAgentSessionCommand(
         return { ok: true, data: { options } };
       }
       case "session.resume": {
+        if (managed.isDestroyed?.() === true) {
+          return { ok: false, code: "failed", error: "Agent has been destroyed" };
+        }
         const data = await managed.restoreSession(command.sessionId);
         return {
           ok: true,

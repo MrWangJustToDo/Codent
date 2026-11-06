@@ -223,12 +223,14 @@ assert.equal(DEFAULT_AGENT_SESSION_CHANNELS.includes("mcp"), true, "mcp is a def
   ]);
 }
 
-// Malformed arguments → question falls back to "" and no options are emitted.
+// Malformed arguments are not an answerable question. A stream cut short (`max_tokens` /
+// RUN_FINISHED) promotes the call to `input-complete` with JSON that does not parse; reporting it
+// gave the host an empty question and parked the session until Esc.
 {
   const messages = [
     assistant("a1", [toolCall({ id: "ask-bad", name: "ask_user", arguments: "not-json", state: "input-complete" })]),
   ];
-  assert.deepEqual(collectPendingAskUser(messages), [{ toolCallId: "ask-bad", question: "" }]);
+  assert.deepEqual(collectPendingAskUser(messages), []);
 }
 
 // Empty conversation → empty snapshot parts.

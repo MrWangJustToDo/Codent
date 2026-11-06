@@ -232,7 +232,7 @@ export function buildAgentRunner(
       // parent session it was spawned in (not its agent id), and a root falls back to the
       // pre-adoption `initialSessionId`. This is what keeps `tool:before:*` agreeing with the
       // `agent:tool-start` envelope for the same call.
-      getSessionId: () => managed.getEventSessionId(),
+      getSessionId: () => deps.getEventSessionId(),
       emitEvent,
       getAbortSignal: () => run.currentAbortController?.signal,
       // A pre-forked `task` emits its own start on admission; skip the eager one so a
@@ -292,7 +292,7 @@ export function buildAgentRunner(
       getBackgroundWork: () => deps.getBackgroundWork(),
       getCommandService: () => deps.getCommandService(),
       getParentId: () => parentId,
-      isSessionSwitching: () => managed?.isSessionSwitching() ?? false,
+      isSessionSwitching: () => deps.isSessionSwitching(),
       emitDiagnostic: (area, message, options) =>
         emitEvent("session:diagnostic", {
           area,

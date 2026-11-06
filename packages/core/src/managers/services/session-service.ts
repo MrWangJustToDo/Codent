@@ -7,6 +7,7 @@
 
 import { getFirstUserInput } from "../../agent/compaction/message-utils.js";
 import { dehydrateUIMessages, hydrateUIMessages, type MediaHydrationMiss } from "../../agent/media/media-utils.js";
+import { TITLE_SYSTEM_PROMPT } from "../../agent/prompt/session-summary-prompts.js";
 import { markRestoreReadFailure } from "../../agent/session/session-restore.js";
 import { runSideTextQuery } from "../../models/adapter/side-text-query.js";
 import { errorMessage } from "../../utils/errors.js";
@@ -208,8 +209,10 @@ export class SessionService {
       const textAdapter = (await resolveTextAdapter?.()) ?? null;
       if (!textAdapter) return userMessage.slice(0, 50);
       const { text, usage: queryUsage } = await runSideTextQuery(textAdapter, {
-        systemPrompt:
-          "Generate a concise title (3-8 words) for a conversation that starts with the following message. Return ONLY the title, no quotes or punctuation.",
+        // The ONE title prompt. The auto path used to inline a second copy without the
+        // "same language" rule, so a Chinese conversation could get an English title while the
+        // manual `/title` path got it right.
+        systemPrompt: TITLE_SYSTEM_PROMPT,
         userPrompt: userMessage.slice(0, 500),
         maxOutputTokens: 30,
         purpose: "title",

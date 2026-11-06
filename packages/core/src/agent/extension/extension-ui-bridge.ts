@@ -80,9 +80,10 @@ export function createExtensionUiBridge(options: ExtensionUiBridgeOptions): Exte
         override?.usage ??
         (usage
           ? {
+              // Same field names as `ctx.getContextUsage()`: one reading, one vocabulary.
+              fillTokens: usage.contextFillTokens,
+              limitTokens: usage.tokenLimit,
               percent: usage.percent,
-              tokenLimit: usage.tokenLimit,
-              windowTokens: usage.contextFillTokens,
               costUsd: usage.cost,
             }
           : null),

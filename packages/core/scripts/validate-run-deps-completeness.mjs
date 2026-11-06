@@ -51,6 +51,10 @@ const runnerSource = readFileSync(RUNNER_FILE, "utf8");
     runnerSource.includes("export function buildAgentRunner("),
     "canary: buildAgentRunner not found — the body probe below would have no target"
   );
+  assert.ok(
+    [..."managed?.getEventSessionId()".matchAll(/\bmanaged\s*\??\.([A-Za-z_$][\w$]*)/g)].length === 1,
+    "canary: the direct-read probe must also see optional chaining (`managed?.x`)"
+  );
 
   const { fields } = collectFields(depsSource);
   // Deliberately low: the canary's job is to prove the parse found a real interface,
@@ -96,7 +100,9 @@ const runnerSource = readFileSync(RUNNER_FILE, "utf8");
 // ---------------------------------------------------------------------------
 {
   const body = extractRunnerBody(runnerSource, assert);
-  const directReads = [...body.matchAll(/\bmanaged\.([A-Za-z_$][\w$]*)/g)].map((m) => m[1]);
+  // Optional chaining is the same violation: `managed?.x` used to be invisible to this scan, which
+  // let a direct read sit in the assembly while the gate stayed green.
+  const directReads = [...body.matchAll(/\bmanaged\s*\??\.([A-Za-z_$][\w$]*)/g)].map((m) => m[1]);
 
   assert.equal(
     directReads.length,

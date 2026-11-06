@@ -9,28 +9,14 @@ export {
   isTerminalStatus,
   resolveFinishStatus,
 } from "../runtime-types/agent-status.js";
-export {
-  DefaultAgentEventBus,
-  createAgentEventBus,
-  AGENT_EVENT_META,
-} from "../agent/agent-event-bus/index.js";
-export type {
-  AgentEvent,
-  AgentEventBus,
-  AgentEventListener,
-  AgentEventMeta,
-  AgentEvents,
-  AgentEventType,
-  AgentEventPayloadMap,
-} from "../agent/agent-event-bus/index.js";
+export { createAgentEventBus, AGENT_EVENT_META } from "../agent/agent-event-bus/index.js";
+export type { AgentEvent, AgentEventBus, AgentEventType } from "../agent/agent-event-bus/index.js";
 export { bridgeTelemetryToAgentLog } from "../agent/log/event-log-bridge.js";
 export { summarizePayload } from "../agent/log/payload.js";
 export { redactLogValue, redactSecrets } from "../agent/log/redaction.js";
 export { DEFAULT_EVENT_LOG_RULES, SPECIALIZED_EVENT_LOG } from "../agent/log/event-log-rules.js";
 export { SPECIALIZED_EVENT_LOG_TYPES, SPECIALIZED_EVENT_LOG_HANDLERS } from "../agent/log/event-log-specialized.js";
-export { createJsonlFileSink } from "../agent/log/jsonl-file-sink.js";
 export { createLogExtension } from "../agent/log/extension.js";
-export type { LogExtension, LogExtensionOptions, EventLogPolicy } from "../agent/log/extension.js";
 export {
   emitAgentTelemetry,
   getDroppedTelemetryEventCount,
@@ -64,7 +50,6 @@ export { AgentManager } from "../managers/agent-manager.js";
 export { buildManagedAgent } from "../managers/agent-factory.js";
 export { ManagedAgent } from "../managers/managed-agent.js";
 export { completePlan, loadPlanFromWorkspace } from "../agent/plan/plan-facet.js";
-export { createManualCompactHost } from "../managers/managed-agent.js";
 export { RunnerWiring } from "../agent/run/runner-wiring.js";
 export { RunCoordinator, type RunToken } from "../agent/run/run-coordinator.js";
 export { CompactionService } from "../managers/services/compaction-service.js";
@@ -82,7 +67,6 @@ export {
   retryDelayMs,
   runStreamWithRecovery,
   tryCapabilitySanitizeRetry,
-  tryReactiveCompactRetry,
 } from "../managers/run-stream-recovery.js";
 export { createTaskPreforkMiddleware } from "../managers/middleware/task-prefork-middleware.js";
 export {
@@ -117,7 +101,6 @@ export { resolveModelConfig } from "../models/config/model-config.js";
 export { MODEL_CAPABILITY_FLAGS } from "../agent/extension/types.js";
 
 export {
-  assertCanonicalMiddlewareOrder,
   CANONICAL_MIDDLEWARE_ORDER,
   createBackgroundMiddleware,
   createCompactionMiddleware,
@@ -129,19 +112,13 @@ export {
   createStepBudgetMiddleware,
   buildStepBudgetNotice,
   stepBudgetThreshold,
-  STEP_BUDGET_NOTICE_RATIO,
   STEP_BUDGET_MIN_NOTICE,
   createToolCompactMiddleware,
   createTurnContextMiddleware,
-  defineMiddleware,
   sortMiddlewaresByPhase,
   MIDDLEWARE_PHASE_RANK,
 } from "../managers/middleware/index.js";
-export type { MiddlewarePhase } from "../managers/middleware";
-export {
-  CONTINUATION_PROMPT,
-  MAX_TRUNCATION_CONTINUATIONS,
-} from "../managers/stream-recovery/max-tokens-continue.js";
+export { CONTINUATION_PROMPT, MAX_TRUNCATION_CONTINUATIONS } from "../managers/stream-recovery/max-tokens-continue.js";
 export {
   createTruncationState,
   handleMaxTokensTruncation,
@@ -153,7 +130,6 @@ export { CompactionController } from "../agent/compaction/compaction-controller.
 // unwind). `validate:reactive-compact` drives this against a fake host, because the
 // helper-only coverage it had before could not see a broken gate or a stuck status.
 export { handleManagedReactiveCompact } from "../managers/compact-facet.js";
-export type { ReactiveCompactHost } from "../managers/compact-facet.js";
 
 // Tool presentation (internal validation exports): pure descriptor helpers over the static
 // built-in table plus a supplied resolver.
@@ -165,13 +141,12 @@ export { AgentToolService } from "../managers/services/agent-tool-service.js";
 export { createTools } from "../agent/tools";
 export { buildToolset } from "../managers/toolset-factory.js";
 export { resolveToolsRecord } from "../agent/tools/catalog/tool-set.js";
-export type {
-  AgentRunOutcome,
-  AgentRunOutcomeKind,
-  AgentRunPath,
-  StatusReconcilePolicy,
-} from "../agent/state/agent-run-outcome.js";
 export { whenClearForReconcilePolicy } from "../agent/state/agent-run-outcome.js";
-export { applyRestoredSessionChatState, getSessionPersistInput, restoreManagedSession, saveSessionUIMessages } from "../agent/session/session-restore.js";
+export {
+  applyRestoredSessionChatState,
+  getSessionPersistInput,
+  restoreManagedSession,
+  saveSessionUIMessages,
+} from "../agent/session/session-restore.js";
 export { dispatchLocalAgentSessionCommand } from "../agent-session/local-session-dispatch.js";
-export { SKILL_DIRS_ENV_VAR, getDefaultSkillDirs } from "../managers/agent-manager.js";
+export { getDefaultSkillDirs } from "../managers/agent-manager.js";

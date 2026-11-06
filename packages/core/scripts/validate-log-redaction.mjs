@@ -15,10 +15,17 @@ const cases = [
   ["password: hunter2", /hunter2/],
   ["GET https://example.test/?token=abc123&x=1", /abc123/],
   ["ghp_abcdefghijklmnop", /ghp_/],
+  // JSON keeps a quote between the key and the `:`, which used to defeat the key-name rules.
+  ['{"api_key":"plainvalue123"}', /plainvalue123/],
+  ["postgres://user:s3cretpass@db.test/app", /s3cretpass/],
+  ["eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop", /eyJhbGci/],
+  ["-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY-----", /MIIEowIBAAKCAQEA/],
+  // A truncated tool-output preview cuts the END marker off; the header alone must redact the rest.
+  ["-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA", /MIIEowIBAAKCAQEA/],
 ];
 for (const [input, leak] of cases) {
   const out = redactSecrets(input);
-  assert.match(out, /\[redacted\]/, `must redact: ${input}`);
+  assert.match(out, /\[redacted(\]| private key\])/, `must redact: ${input}`);
   assert.doesNotMatch(out, leak, `must not leak: ${input} -> ${out}`);
 }
 

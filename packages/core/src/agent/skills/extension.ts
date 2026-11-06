@@ -170,7 +170,12 @@ that help you complete specific types of tasks.`,
     ctx.registerContextProvider({
       content: () => {
         const skills = visibleSkills();
-        if (skills.length === 0) return undefined;
+        if (skills.length === 0) {
+          // Section admission is hash-based and has no retraction: returning `undefined` left the
+          // PREVIOUS index block in the wire forever, and the model kept calling `load_skill` for
+          // skills that were no longer visible. A stable sentinel supersedes it once.
+          return "<skills>No skills are currently available.</skills>";
+        }
         const lines = skills.map((s) => `- ${s.name} (${s.source}): ${s.description}`);
         return [
           "<skills>",

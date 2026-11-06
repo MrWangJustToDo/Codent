@@ -164,6 +164,38 @@ export class TaskPreforkCoordinator {
   }
 
   /**
+   * Labels for the waiting calls, owned here so BOTH the live emission and the retained snapshot
+   * can build the same `subagent:queue` payload. The middleware used to keep the map privately,
+   * which left the retained provider (registered on the agent bus) unable to reproduce it.
+   */
+  private queuedDescriptions = new Map<string, string>();
+
+  /**
+   * Merge the caller's labels for waiting calls, and drop labels for ids that are no longer waiting.
+   *
+   * Merge, not replace: a runner rebuild (model/depth switch) constructs a NEW middleware with an
+   * empty label map while the coordinator — and the calls still waiting in it — outlive that
+   * instance. Replacing would erase the labels of every already-queued task.
+   */
+  syncQueuedDescriptions(descriptions: ReadonlyMap<string, string>): void {
+    for (const [toolCallId, description] of descriptions) {
+      this.queuedDescriptions.set(toolCallId, description);
+    }
+    const waiting = new Set(this.queuedToolCallIds());
+    for (const toolCallId of this.queuedDescriptions.keys()) {
+      if (!waiting.has(toolCallId)) this.queuedDescriptions.delete(toolCallId);
+    }
+  }
+
+  /** The current queue snapshot (`subagent:queue`'s payload), in admission order. */
+  queueSnapshot(): Array<{ toolCallId: string; description?: string }> {
+    return this.queuedToolCallIds().map((toolCallId) => {
+      const description = this.queuedDescriptions.get(toolCallId);
+      return description !== undefined ? { toolCallId, description } : { toolCallId };
+    });
+  }
+
+  /**
    * Publish every mutation of the queue/occupancy to a host.
    *
    * A callback rather than a bus or a logger: this class stays transport-free (the middleware owns

@@ -301,28 +301,25 @@ export class AgentManager {
     if (this.buildsInFlight > 0) {
       await new Promise<void>((resolve) => this.buildWaiters.push(resolve));
     }
-    // Each stage runs even when an earlier one throws. Without this, one failing agent teardown
-    // skipped `settleTeardowns` and left the log extension + root bus scope alive on a manager that
-    // reported itself disposed (`tornDown` was only set at the end).
-    try {
-      this.lifecycle.reset();
-    } finally {
+    // Each stage runs even when an earlier one throws. A stage that FAILS leaves the manager
+    // retryable: `dispose()` drops the cached promise on rejection, and `tornDown` stays false so
+    // the next call re-runs the (idempotent) stages instead of reporting success over leaked work.
+    // The old nested `finally` set `tornDown` unconditionally, which made the documented retry a
+    // no-op after the first partial failure.
+    let firstError: unknown;
+    const stage = async (fn: () => void | Promise<void>): Promise<void> => {
       try {
-        await this.lifecycle.settleTeardowns();
-      } finally {
-        try {
-          this.logExtension.dispose();
-        } finally {
-          try {
-            this.busScope.dispose();
-          } finally {
-            // Set in a finally: a throwing bus disposal must not leave the manager in a state where
-            // `disposed` is true, `tornDown` is false, and a retry re-runs the whole teardown.
-            this.tornDown = true;
-          }
-        }
+        await fn();
+      } catch (error) {
+        firstError ??= error;
       }
-    }
+    };
+    await stage(() => this.lifecycle.reset());
+    await stage(() => this.lifecycle.settleTeardowns());
+    await stage(() => this.logExtension.dispose());
+    await stage(() => this.busScope.dispose());
+    if (firstError !== undefined) throw firstError;
+    this.tornDown = true;
   }
 
   // ============================================================================

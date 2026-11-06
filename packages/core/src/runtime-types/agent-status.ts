@@ -39,18 +39,28 @@ export type RunFinalizeReason = "finished" | "aborted" | "error";
  */
 export type AgentRunOutcomeKind = RunFinalizeReason | "waiting";
 
-const ALL_STATUSES: readonly AgentStatus[] = [
-  "idle",
-  "running",
-  "completed",
-  "error",
-  "aborted",
-  "waiting",
-  "awaiting_user",
-  "compacting",
-  "thinking",
-  "responding",
-];
+/**
+ * Exhaustive record, then array.
+ *
+ * `satisfies Record<AgentStatus, true>` makes a new `AgentStatus` member a COMPILE error here; a
+ * hand-maintained array would silently omit it, and `deriveAgentState`'s switch cannot catch the
+ * omission because it only ever receives a member that is already in the array. The three derived
+ * sets (terminal / active / busy) all read this list.
+ */
+const STATUS_BY_KIND = {
+  idle: true,
+  running: true,
+  completed: true,
+  error: true,
+  aborted: true,
+  waiting: true,
+  awaiting_user: true,
+  compacting: true,
+  thinking: true,
+  responding: true,
+} as const satisfies Record<AgentStatus, true>;
+
+const ALL_STATUSES: readonly AgentStatus[] = Object.keys(STATUS_BY_KIND) as AgentStatus[];
 
 /**
  * Derived, not a hand-maintained overlapping set: `waiting`/`awaiting_user` are ACTIVE waits, not
@@ -70,6 +80,24 @@ export function isTerminalStatus(status: AgentStatus): boolean {
 
 export function isActiveStatus(status: AgentStatus): boolean {
   return ACTIVE_STATUSES.has(status);
+}
+
+/**
+ * Busy = a run is doing work right now (running / thinking / responding / compacting).
+ *
+ * Deliberately NOT `isActiveStatus`: an ACTIVE wait (`waiting` / `awaiting_user`) keeps the session
+ * occupied but is not work, and a settled outcome is not work either. One derived set, so the status
+ * controller and the app footer cannot drift into private copies.
+ */
+export const BUSY_STATUSES: ReadonlySet<AgentStatus> = new Set(
+  ALL_STATUSES.filter((status) => {
+    const state = deriveAgentState(status);
+    return state.wait === "none" && state.run !== "idle" && state.outcome === "none";
+  })
+);
+
+export function isBusyStatus(status: AgentStatus): boolean {
+  return BUSY_STATUSES.has(status);
 }
 
 /**

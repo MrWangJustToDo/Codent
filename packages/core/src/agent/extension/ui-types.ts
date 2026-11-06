@@ -8,6 +8,8 @@
  * plain JSON-serializable data — never functions or components.
  */
 
+import type { ExtensionContextUsage } from "./context-access.js";
+
 /**
  * One node of the generic layout tree an extension may render into a host
  * surface.
@@ -61,7 +63,7 @@ export interface ExtensionUiModel {
 }
 
 /** Token / cost usage exposed to extensions. */
-export interface ExtensionUiUsage {
+export interface ExtensionUiUsage extends ExtensionContextUsage {
   /**
    * Fill against the compaction budget, 0 upward — NOT clamped at 100: the budget is
    * `min(contextWindow, 400k)` and the auto-compact trigger sits at `compactAtPercent` of it (80 by
@@ -69,10 +71,6 @@ export interface ExtensionUiUsage {
    * clamps for itself.
    */
   percent: number;
-  /** The compaction budget the percentage is against (`min(contextWindow, 400k)`), not the model's window. */
-  tokenLimit: number;
-  /** Tokens currently occupying the context window. */
-  windowTokens: number;
   /** Cumulative session cost in USD. */
   costUsd: number;
 }

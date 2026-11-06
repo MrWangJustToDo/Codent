@@ -33,13 +33,12 @@ export async function prepareManagedAgentForRun(
       // The predicate is `isActiveStatus`, deliberately NOT `isTerminalStatus`. Those two
       // tables answer different questions, and this one asked the wrong table once:
       //
-      // - `TERMINAL_STATUSES` means "must not be overwritten when a stream finishes
-      //   normally". It therefore EXCLUDES `completed` (that is the value a normal finish
-      //   writes) and INCLUDES `waiting` / `awaiting_user` (a paused run, which can and
-      //   should still be aborted). Using it here left `completed` unguarded — exactly the
-      //   case this exists for — while wrongly refusing to abort an approval pause.
-      // - `ACTIVE_STATUSES` means "currently doing work", which is precisely "aborting this
-      //   has something to change".
+      // - `TERMINAL_STATUSES` means "the last run failed or was aborted" (`error` / `aborted`).
+      //   It therefore EXCLUDES `completed` (a settled result is not a fault) and does NOT contain
+      //   the paused waits: `waiting` / `awaiting_user` are ACTIVE. Using it here left `completed`
+      //   unguarded — exactly the case this exists for.
+      // - `ACTIVE_STATUSES` means "a run is in flight or the session is parked on a human", which
+      //   is precisely "aborting this has something to change".
       //
       // This listener fires SYNCHRONOUSLY inside `RunCoordinator.abort()`, so it runs BEFORE
       // the status check at the end of `abortManagedAgentRun` — a guard placed after that
@@ -205,7 +204,13 @@ export function abortManagedAgentRun(host: RunLifecycleHost, reason?: string): v
   // ("Agent aborted (Agent destroyed)") that read as a fault, and it dwarfed real cancels
   // (measured: 459 rows across 390 logs vs 58 `user-cancelled`). The signal is still aborted below
   // — that is what cancels in-flight work such as memory extraction.
-  const hadRun = isActiveStatus(host.getStatus());
+  //
+  // A run that already reached a verdict (`error` / `aborted`) is over even when a pending
+  // `ask_user` keeps projecting `awaiting_user`; reading only the projection filed an abort row
+  // for a turn that had failed before the user pressed Esc.
+  const axes = host.getAgentState?.();
+  const alreadySettled = axes?.outcome === "error" || axes?.outcome === "aborted";
+  const hadRun = !alreadySettled && isActiveStatus(host.getStatus());
   if (hadRun) host.emitEvent("agent:abort", { reason: effectiveReason });
   host.run.abort(effectiveReason);
   // The status flip normally already happened in the abort listener above (it fires

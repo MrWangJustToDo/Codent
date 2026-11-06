@@ -164,6 +164,37 @@ assert.equal(projectAgentStatus(transition(idle, { type: "reset" })), "idle");
   assert.equal(state.errorMessage, "down", "the failure survives the answered question");
 }
 
+// --- Esc while a failed turn is parked on a question keeps the failure ------
+// The projection hides `error` behind `awaiting_user`, so the abort callers' `isActiveStatus`
+// check cannot see the verdict. `interrupt` itself must keep it.
+{
+  let state = transition(initState(), { type: "prepare" });
+  state = transition(state, { type: "pause", wait: "question" });
+  state = transition(state, { type: "stream-end", result: "error", error: "down" });
+  state = transition(state, { type: "interrupt" });
+  assert.equal(state.outcome, "error", "an abort does not rewrite a failed run's verdict");
+  state = transition(state, { type: "resume" });
+  assert.equal(projectAgentStatus(state), "error");
+  assert.equal(state.errorMessage, "down");
+}
+
+// --- `completed` + question is still cancellable; a dead approval wait is cleared ---
+{
+  let completed = transition(initState(), { type: "prepare" });
+  completed = transition(completed, { type: "pause", wait: "question" });
+  completed = transition(completed, { type: "stream-end", result: "completed" });
+  completed = transition(completed, { type: "interrupt" });
+  assert.equal(completed.outcome, "aborted", "a normally-finished parked turn can still be cancelled");
+
+  let approval = transition(initState(), { type: "prepare" });
+  approval = transition(approval, { type: "pause", wait: "approval" });
+  approval = transition(approval, { type: "stream-end", result: "error", error: "down" });
+  assert.equal(approval.wait, "approval", "stream-end does not clear the gate itself");
+  approval = transition(approval, { type: "interrupt" });
+  assert.equal(approval.outcome, "error", "the failure is kept");
+  assert.equal(approval.wait, "none", "but an approval gate dies with the run");
+}
+
 // --- controller sequences match the pure machine ----------------------------
 {
   let state = deriveAgentState("idle");

@@ -267,6 +267,16 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
       return { ...state, wait: "none" };
 
     case "interrupt":
+      // A run that already reached a verdict keeps it. The projection can HIDE that verdict behind
+      // a pending question (`awaiting_user` wins over `error`), so a caller checking only
+      // `isActiveStatus` would otherwise rewrite a provider failure into "user cancelled" the
+      // moment the user pressed Esc while the question was still open — and the failure became
+      // unrecoverable once `resume` cleared the wait. `completed` is intentionally NOT included: a
+      // turn parked on an unanswered question can still be cancelled by the user.
+      if (state.outcome === "error" || state.outcome === "aborted") {
+        // Keep the verdict, but the old "an approval gate dies with the run" rule still holds.
+        return state.wait === "approval" ? { ...state, wait: "none" } : state;
+      }
       return {
         ...state,
         run: "finalizing",

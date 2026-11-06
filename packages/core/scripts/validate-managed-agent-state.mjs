@@ -10,9 +10,9 @@
  *    stale `[]` stripped images the new vision model accepts and a stale
  *    `[vision]` sent images to an endpoint that rejects them. `undefined` means
  *    "unknown" (permissive), which is the correct reset.
- * 2. **Switching sessions stops the in-flight run (P0-3).** `restoreSession` replaced
- *    the channel without aborting a live pump, so the pump kept writing chunks into
- *    the freshly restored transcript and persisted the mixture.
+ * 2. **A failed restore is a no-op (P0-3, revised).** The target is READ before
+ *    `unloadCurrent`, so an unknown id never stops the run that is still on screen.
+ *    (The stop → swap order for a real restore lives in `validate-session-switch-safety`.)
  *
  * Run: pnpm --filter @codent/core run validate-managed-agent-state
  */
@@ -158,11 +158,12 @@ registerCoreEnv({
 }
 
 // ---------------------------------------------------------------------------
-// 2. restoreSession stops an in-flight run (P0-3)
+// 2. A failed restore is a no-op (the target is read before the live run is stopped)
 // ---------------------------------------------------------------------------
 {
   const manager = new AgentManager();
   const agent = await manager.createManagedAgent({ name: "restore-gate", model: "test-model" });
+  const liveSessionId = agent.getSessionData()?.id;
 
   // The agent is idle, so a restore must NOT fire the abort/finalize path.
   let stopActiveRunCalls = 0;
@@ -172,13 +173,18 @@ registerCoreEnv({
     originalStop(reason);
   };
 
-  // Restoring a session that does not exist rejects, but only *after* the
-  // stop-if-active guard ran — that ordering is what the fix guarantees.
-  await agent.restoreSession("ses_does_not_exist").catch(() => undefined);
-  assert.equal(stopActiveRunCalls, 1, "restoreSession consults stopActiveRun before swapping the transcript");
+  // A failed `/resume` must be a no-op: the target is READ before `unloadCurrent`, so an unknown
+  // id never stops the run that is still on screen (the old order aborted the visible turn and
+  // then reported "not found"). The stop → swap order for a REAL restore is covered by
+  // `validate-session-switch-safety`.
+  const error = await agent.restoreSession("ses_does_not_exist").catch((e) => e);
+  assert.ok(error instanceof Error, "an unknown session id rejects");
+  assert.match(error.message, /not found/i, "and says the session does not exist");
+  assert.equal(stopActiveRunCalls, 0, "an unknown session id must not stop the live run");
 
-  // Idle ⇒ the call is the no-op guard, not a real interrupt.
+  // Idle ⇒ nothing moved, and the live session was not replaced.
   assert.equal(agent.getStatus(), "idle", "an idle restore does not move the agent into aborted");
+  assert.equal(agent.getSessionData()?.id, liveSessionId, "the live session is unchanged");
 }
 
 // ---------------------------------------------------------------------------

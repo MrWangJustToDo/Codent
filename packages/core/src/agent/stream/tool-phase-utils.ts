@@ -2,6 +2,7 @@ import { parseToolArguments } from "../../utils/parse-tool-arguments.js";
 import { BUILTIN_TOOL_NAMES, CLIENT_TOOL_NAMES } from "../tools/catalog/tool-names.js";
 
 import { findLastMeaningfulAssistant, isEmptyAssistantShell } from "./empty-assistant-shell.js";
+import { hasValidToolArguments } from "./incomplete-tool-calls.js";
 // The classification lives with the name registry: the tool set and this predicate must agree on it.
 import { isToolCallPart, partTextContent } from "./message-parts.js";
 
@@ -290,8 +291,7 @@ export function hasPendingAskUser(messages: UIMessage[]): boolean {
     if (message.role !== "assistant") continue;
     for (const part of message.parts) {
       if (!isToolCallPart(part)) continue;
-      if (part.name !== BUILTIN_TOOL_NAMES.askUser) continue;
-      if (part.state === "input-complete" && part.output === undefined) return true;
+      if (pendingAskUserEntry(part)) return true;
     }
   }
   return false;
@@ -308,6 +308,10 @@ function pendingAskUserEntry(
 ): (SessionInteractionsSnapshot["askUser"][number] & { kind: "clientTool"; toolName: string }) | undefined {
   if (part.name !== BUILTIN_TOOL_NAMES.askUser) return undefined;
   if (part.state !== "input-complete" || part.output !== undefined) return undefined;
+  // A stream cut short (max_tokens / RUN_FINISHED) promotes an unfinished call to
+  // `input-complete` with arguments that may not parse. It cannot be answered, so it must not
+  // become a host-facing question (an empty one, at that) that parks the session until Esc.
+  if (!hasValidToolArguments(part)) return undefined;
   const input = parseToolArguments(part.arguments) as
     { question?: string; options?: string[]; multiSelect?: boolean } | undefined;
   return {

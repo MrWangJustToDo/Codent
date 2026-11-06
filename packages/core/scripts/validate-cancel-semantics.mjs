@@ -731,8 +731,12 @@ assert.equal(taskOutputSchema.shape.cancelled, undefined, "task declares ONE mar
   // And a cancel must not be written through the error path, which synthesizes an Error
   // from the payload — for a cancelled subagent that text is a paragraph of narration.
   const bridgeSrc = readFileSync(join(SRC, "agent/log/event-log-bridge.ts"), "utf8");
+  // The flag is computed once, and the cancellation branch RETURNS before any `eventError(…)`
+  // synthesis. Asserting the structure (rather than one long distance-bounded regex) keeps this
+  // guard working when the bridge grows a new early filter.
+  assert.ok(/const cancelled = payload\.cancelled === true/.test(bridgeSrc), "the cancelled flag is read once");
   assert.ok(
-    /rule\.level === "error"[\s\S]{0,300}p\(event\)\.cancelled === true/.test(bridgeSrc),
+    /if \(cancelled\) \{[\s\S]{0,300}return;[\s\S]{0,200}\}[\s\S]{0,900}eventError\(/.test(bridgeSrc),
     "the bridge short-circuits a cancelled payload BEFORE synthesizing an Error from it"
   );
 }

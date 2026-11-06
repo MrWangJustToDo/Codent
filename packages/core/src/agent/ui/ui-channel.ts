@@ -617,11 +617,14 @@ function attachMissingToolDisplays(
   resolveToolPresentation: (name: string) => ToolPresentation | undefined = getBuiltinToolPresentation,
   isBuiltinTool: (name: string) => boolean = () => true
 ): TanStackUIMessage[] | null {
-  const displayableStates = new Set(["complete", "output-available", "output-error"]);
-
   return patchToolCallParts(messages, (part) => {
     if (!part.name || part.display) return undefined;
-    if (!part.state || !displayableStates.has(part.state) || part.output === undefined) return undefined;
+    // Output means the call finished. Gating on `part.state` used two values from the UI vocabulary
+    // (`output-available` / `output-error`) that a TanStack part never carries, so a batched/replayed
+    // result that still reads `input-complete` never got its display — the exact case this pass
+    // exists for. The display renderer owns cancel/`success:false` wording; the app's row layer
+    // folds the resulting state separately.
+    if (part.output === undefined) return undefined;
 
     // `input` is the engine's parsed field; while a call streams only `arguments` exists. One helper
     // for both, so a restored/streaming row shows the same parameters as the approval gate saw.

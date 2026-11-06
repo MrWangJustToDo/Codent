@@ -129,6 +129,19 @@ export interface AgentRunDeps {
   shouldTriggerAutoCompact: (messages?: ModelMessage[]) => boolean;
   shouldPersistUIMessage: (messages: TanStackUIMessage[], reason: "user-message") => void;
   setIterationProgress: (state: AgentIterationState) => void;
+  /**
+   * Session identity from the same accessor the event envelope uses.
+   *
+   * Live read: a session switch can adopt a new id while the cached runner stays alive, and a
+   * subagent resolves the parent session it was spawned in (not its agent id).
+   */
+  getEventSessionId: () => string | undefined;
+  /**
+   * Whether a session switch (unload → load) is admitted but not committed.
+   *
+   * Live read: background delivery must not write into the transcript a switch is about to target.
+   */
+  isSessionSwitching: () => boolean;
   getDynamicTurnContextSections: () => Promise<TurnContextSection[]>;
   /** Identity of the owning user turn (`null` outside a run), for per-turn facts like `firstOutput`. */
   getCurrentRunId: () => string | null;
@@ -186,6 +199,8 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     shouldTriggerAutoCompact: (messages) => managed.shouldTriggerAutoCompact(messages),
     shouldPersistUIMessage: (messages, reason) => managed.maybeSaveSessionUIMessages(messages, reason),
     setIterationProgress: (state) => managed.setIterationProgress(state),
+    getEventSessionId: () => managed.getEventSessionId(),
+    isSessionSwitching: () => managed.isSessionSwitching(),
     getDynamicTurnContextSections: () => managed.getDynamicTurnContextSections(),
     getCurrentRunId: () => managed.getCurrentRunId(),
   };

@@ -334,8 +334,7 @@ export class CompactionController {
     const ownsPhase = state ? state.run === "compacting" : this.deps.getStatus() === "compacting";
     if (!ownsPhase) return;
     if (this.deps.transition) {
-      const terminalPrevious =
-        previous !== undefined && isTerminalStatus(previous) && previous !== "waiting" && previous !== "awaiting_user";
+      const terminalPrevious = previous !== undefined && isTerminalStatus(previous);
       if (kind === "manual" && terminalPrevious) {
         // A successful manual compact after a failed turn clears the old fault and settles idle.
         this.deps.setError?.("");
@@ -350,11 +349,12 @@ export class CompactionController {
       // aborted turn, and writing `error`/`aborted` back after a SUCCESSFUL compaction made the
       // session look broken and contradicted the `compaction:manual-complete` that just fired.
       //
-      // `waiting` / `awaiting_user` are deliberately NOT treated as terminal here: they are states
-      // to RESTORE. They live in `TERMINAL_STATUSES` only to stop a normal stream finish from
-      // overwriting a parked turn. Reporting `idle` instead would contradict the approval table
-      // (an unanswered question with no wait status) and stop deferring the user's next message.
-      if (isTerminalStatus(previous) && previous !== "waiting" && previous !== "awaiting_user") {
+      // `waiting` / `awaiting_user` are NOT terminal (they are active waits), so they fall through
+      // to the restore branch below deliberately: a parked turn is state to RESTORE. Reporting
+      // `idle` instead would contradict the approval table (an unanswered question with no wait
+      // status) and stop deferring the user's next message. The earlier `ownsPhase` guard is what
+      // stops a normal stream finish from overwriting a parked turn — not this predicate.
+      if (isTerminalStatus(previous)) {
         // The error belonged to that failed turn: leaving it set is the only way `idle` and a
         // non-empty `error` can coexist.
         this.deps.setError?.("");

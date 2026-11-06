@@ -162,6 +162,9 @@ export class ApprovalDecisionCoordinator {
    * to the interrupted turn, and leaving it pending kept it in `interactions.approvals` (and in
    * the wire) after the run had ended. The caller owns reconcile + persistence because the same
    * teardown already writes the cancelled tool rows.
+   *
+   * Recorded as `source: "policy"`, not `"user"`: the user pressed Esc on the TURN, never saw this
+   * question, and the timeline must not report a decision they did not make.
    */
   denyPendingApprovals(reason: string): void {
     const pending = collectPendingApprovals(this.deps.getMessages());
@@ -173,7 +176,7 @@ export class ApprovalDecisionCoordinator {
         toolName: approval.toolName,
         approved: false,
         reason,
-        source: "user",
+        source: "policy",
       });
     }
   }

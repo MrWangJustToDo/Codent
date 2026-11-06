@@ -313,15 +313,22 @@ check("builtinsDisabled removes built-ins from the index", () => {
   }
 });
 
-// With built-ins disabled AND no directory skill present, the index must vanish
-// entirely rather than render an empty <skills> block. The provider returns
-// `undefined`, so a caller that assumes a string breaks here — this was a real
-// regression that only CI caught (locally `.agents/skills` always existed).
-check("builtinsDisabled with no directory skills drops the index section", async () => {
+// With built-ins disabled AND no directory skill present, the index must be RETRACTED rather than
+// left in the wire. Section admission is hash-based and has no retraction, so the provider returns
+// a stable sentinel; returning `undefined` left the previous block in place forever (the failure
+// this test once guarded against was the opposite direction — rendering an empty `<skills>` list).
+check("builtinsDisabled with no directory skills retracts the index section", async () => {
   const empty = new SkillRegistry({ rootPath: fixtureRoot });
   empty.registerAll(BUILTIN_SKILLS);
   const offEmpty = await activate(empty, { builtinsDisabled: true });
-  assert.equal(await offEmpty.provider.content(), undefined, "no section when nothing is visible");
+  // Section admission is hash-based and has NO retraction: returning `undefined` left the previous
+  // index block in the model wire forever, where the model kept calling `load_skill` for skills
+  // that were no longer visible. A stable sentinel supersedes it once (same rule as memory).
+  assert.equal(
+    await offEmpty.provider.content(),
+    "<skills>No skills are currently available.</skills>",
+    "an empty index must retract the previous block, not vanish"
+  );
 });
 
 check("builtinsDisabled removes built-ins from list_skills", async () => {

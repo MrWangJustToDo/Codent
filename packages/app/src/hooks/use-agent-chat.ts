@@ -1,4 +1,4 @@
-import { isActiveStatus, resolvePendingInteractions } from "@codent/core";
+import { isBusyStatus, resolvePendingInteractions } from "@codent/core";
 import { throttle } from "lodash-es";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toRaw } from "reactivity-store";
@@ -150,7 +150,7 @@ function toChatContent(content: string | SendMessageContent): string | ContentPa
 }
 
 function isAgentLoading(status: AgentStatus): boolean {
-  return isActiveStatus(status) && status !== "waiting" && status !== "awaiting_user";
+  return isBusyStatus(status);
 }
 
 // ============================================================================

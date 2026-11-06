@@ -6,8 +6,10 @@ export type { Epoch, EpochGenerations, EpochRunToken, EpochSource } from "./epoc
 export { createEpoch } from "./epoch.js";
 export {
   ACTIVE_STATUSES,
+  BUSY_STATUSES,
   TERMINAL_STATUSES,
   isActiveStatus,
+  isBusyStatus,
   isTerminalStatus,
   resolveFinishStatus,
 } from "./agent-status.js";

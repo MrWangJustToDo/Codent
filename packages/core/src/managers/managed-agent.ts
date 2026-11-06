@@ -208,6 +208,7 @@ import type {
   SessionInteractionsSnapshot,
   SessionJobSummary,
   SessionJobsSnapshot,
+  WhenClearStatus,
 } from "../runtime-types/session-payloads.js";
 
 // ============================================================================
@@ -1174,10 +1175,7 @@ export class ManagedAgent {
   }
 
   /** Sync approval / client-tool pause status from loaded UIMessages (e.g. session resume). */
-  syncInteractionStateFromUIMessages(
-    messages: TanStackUIMessage[],
-    options?: { whenClear?: "idle" | "running" | "completed" }
-  ): void {
+  syncInteractionStateFromUIMessages(messages: TanStackUIMessage[], options?: { whenClear?: WhenClearStatus }): void {
     if (options?.whenClear === "running") {
       this.statusController.reconcileWithPolicy(messages, "during-run");
       return;
@@ -1508,11 +1506,14 @@ export class ManagedAgent {
     bus.retain("session:mode", () => this.readModeProjection());
     bus.retain("session:extensions", () => readExtensionSummary(this.extensions.getExtensionRunner()));
     bus.retain("session:tool-presentation", () => ({ descriptors: this.getToolPresentationCatalog() }));
-    bus.retain("session:mcp", () => ({ servers: this.getMcpManager()?.getServerStatuses() ?? [] }));
+    bus.retain("session:mcp", () => this.getMcpManager()?.getStatusPayload() ?? { servers: [] });
     bus.retain("session:interaction", () => this.readInteractions());
     bus.retain("agent:iteration", () => this.readIteration());
     bus.retain("session:jobs", () => this.readJobs());
     bus.retain("session:subagents", () => this.readSubagents());
+    // A snapshot with no retained value was invisible to a late subscriber: a queued `task` has no
+    // subagent yet, so it appears in neither `session:subagents` nor `agent:tool-start`.
+    bus.retain("subagent:queue", () => ({ queued: peekTaskPreforkCoordinator(this)?.queueSnapshot() ?? [] }));
     // Route telemetry through this agent's scoped bus (up-flows to the root
     // observer / Event→Log bridge) instead of the process-wide root bus.
     // A new bus has no subscribers that saw the old frames; do not suppress its first snapshot.
@@ -2083,6 +2084,11 @@ export class ManagedAgent {
    * handed every idle `ctx.llm` call an already-aborted signal. `isIdle()` and `signal` must agree.
    */
   private extensionRunSignal(): AbortSignal | undefined {
+    // Only a live run exposes a signal. `prepareRunPhase` flips the status to `running` BEFORE
+    // `prepareForRun` runs (so the `before_agent_start` / memory-selection completions already see
+    // it), and `beginRun()`→`setupAbortController()` still holds the PREVIOUS run's controller —
+    // returning that would hand an extension an already-aborted signal. Keeping the predicate on
+    // the status is what makes `isIdle()` and `signal()` agree.
     if (isActiveStatus(this.getStatus())) return this.run.currentAbortController?.signal;
     return undefined;
   }
@@ -2431,6 +2437,11 @@ export class ManagedAgent {
    */
   resumeBackgroundWork(): void {
     if (this.parentId) return;
+    // A host can still hold a session reference after teardown; `session.resume` on it is refused
+    // by the lifecycle service, whose `finally` then calls this. Building a facade here would mint
+    // a fresh `AgentCommandService` → `CommandJobRegistry` (registered in the process-wide
+    // `liveRegistries`) that nobody owns or destroys, pinning the whole env chain.
+    if (this.isDestroyed()) return;
     this.getBackgroundWork();
     // A fresh session (or a resumed one) must be allowed to wake for its own pending set even if
     // that set's ids happen to match the previous wake's signature.

@@ -33,14 +33,6 @@ export type McpToolsRecord = Record<string, AnyServerTool>;
 /** How many undrained diagnostics the manager keeps before dropping the oldest (see `note`). */
 const MAX_BUFFERED_DIAGNOSTICS = 50;
 
-/**
- * Legacy owner id used by standalone MCP-presentation tests.
- *
- * Live MCP tools carry their `toModelOutput` on the registered tool definition, so the agent
- * tool service owns publication/removal; no process registry entry exists to clean up.
- */
-export const MCP_TOOL_OWNER = "codent-mcp";
-
 // ============================================================================
 // Approval policy
 // ============================================================================
@@ -405,6 +397,30 @@ export class McpManager {
 
   getServerStatuses(): McpServerStatus[] {
     return Array.from(this.serverStatuses.values());
+  }
+
+  /**
+   * The `session:mcp` payload: config provenance PLUS the server list.
+   *
+   * One builder for all three producers (bootstrap, `mcp.refresh`, the retained channel value).
+   * The refresh path used to emit `{ servers }` only, so a host that re-read the retained value lost
+   * "why did my mcp.json not apply?" — the one question the load report exists to answer.
+   */
+  getStatusPayload(): {
+    configPath?: string;
+    configLoadedFrom?: string;
+    configSourceKind: McpConfigSourceKind;
+    servers: McpServerStatus[];
+    toolCount: number;
+  } {
+    const servers = this.getServerStatuses();
+    return {
+      ...(this.configPath !== undefined ? { configPath: this.configPath } : {}),
+      ...(this.configLoadedFrom !== undefined ? { configLoadedFrom: this.configLoadedFrom } : {}),
+      configSourceKind: this.configSourceKind,
+      servers,
+      toolCount: servers.reduce((sum, server) => sum + server.toolCount, 0),
+    };
   }
 
   /**

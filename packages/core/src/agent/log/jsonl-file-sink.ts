@@ -31,8 +31,7 @@ import type { AgentLogFileSinkOptions, LogEntry, LogPersistErrorInfo } from "../
 /** Rotate when the active file exceeds this size (5 MiB). */
 export const DEFAULT_LOG_MAX_BYTES = 5 * 1024 * 1024;
 /** Keep at most this many rotated segments (including the active file). */
-export const DEFAULT_LOG_MAX_FILES = 5;
-/** Coalesce writes for this long before flushing (ms). */
+export const DEFAULT_LOG_MAX_FILES = 5; /** Coalesce writes for this long before flushing (ms). */
 export const DEFAULT_LOG_FLUSH_INTERVAL_MS = 250;
 /**
  * Cap on the failed-batch retry buffer.
@@ -102,6 +101,13 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
   const maxFiles = options.maxFiles ?? DEFAULT_LOG_MAX_FILES;
   const flushIntervalMs = options.flushIntervalMs ?? DEFAULT_LOG_FLUSH_INTERVAL_MS;
   const filePath = `${dir}/${filename}`;
+  /**
+   * Identity for segments archived when a rotation destination is already taken.
+   *
+   * Process-scoped: the sink registry serializes rotation WITHIN one process, so two writers here
+   * can only collide through another process sharing the workspace.
+   */
+  const writerToken = Math.random().toString(36).slice(2, 10);
 
   let buffer: string[] = [];
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -197,13 +203,37 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
       await envFs.writeFile(filePath, "");
       return;
     }
+    // Two runtimes over the same workspace are supported (`sharedSessionOwnership`), and a CLI +
+    // `codent acp` pair can write one file from two PROCESSES. The sink registry cannot serialize
+    // that (it is process-wide), and `CoreEnv.mkdir` is recursive — not an exclusive create — so a
+    // lock is not available. The oldest slot is dropped as usual (rotation is count-bounded), but a
+    // destination that is already taken while shifting is PRESERVED under a unique name before we
+    // move onto it: never overwrite the segment another writer just produced.
     const oldest = `${filePath}.${maxFiles - 1}`;
     if (await envFs.exists(oldest)) await envFs.remove(oldest);
     for (let i = maxFiles - 2; i >= 1; i--) {
       const from = `${filePath}.${i}`;
-      if (await envFs.exists(from)) await moveSegment(from, `${filePath}.${i + 1}`);
+      if (!(await envFs.exists(from))) continue;
+      const to = `${filePath}.${i + 1}`;
+      // Normal sequential rotation finds `to` already vacated by the previous iteration, so this
+      // only archives in a race (or when a writer re-created the segment between steps).
+      await archiveSegment(to);
+      await moveSegment(from, to);
     }
+    await archiveSegment(`${filePath}.1`);
     if (await envFs.exists(filePath)) await moveSegment(filePath, `${filePath}.1`, { active: true });
+  };
+
+  /**
+   * Move an existing segment aside instead of letting `rename` overwrite it.
+   *
+   * The archived name still matches the `.log.*` sweeper, so it ages out normally; it is never
+   * deleted here, because the whole point is that we cannot tell whether another process is still
+   * appending to it.
+   */
+  const archiveSegment = async (path: string): Promise<void> => {
+    if (!(await envFs.exists(path))) return;
+    await moveSegment(path, `${path}.${Date.now()}.${writerToken}`);
   };
 
   const flushBatch = async (): Promise<void> => {

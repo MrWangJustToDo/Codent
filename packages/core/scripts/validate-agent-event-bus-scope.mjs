@@ -67,11 +67,27 @@ assert.equal(failures[0].payload.pattern, "tool:before:*");
 assert.equal(failures[0].payload.event, "tool:before:run_command");
 assert.match(failures[0].payload.error, /boom/);
 
-// Root-scoped failures with no owning log emit nothing (nothing could record them) and do not throw.
-const before = failures.length;
-await assert.doesNotReject(() =>
-  scope.root.intercept({ type: "tool:before:run_command", payload: {}, defaultReturn: undefined })
-);
-assert.equal(failures.length, before, "an unattributable failure is not emitted");
+// Root-scoped failures have no owning log (`resolveLogOwner` returns undefined), so the report
+// still reaches root observers but the log bridge cannot record it. The scope must say it on
+// stderr instead of dropping it, and must not repeat the same (scope, event, pattern).
+scope.root.onIntercept("tool:before:*", () => {
+  throw new Error("root boom");
+});
+const errs = [];
+const originalError = console.error;
+console.error = (...args) => errs.push(args);
+try {
+  const before = failures.length;
+  await assert.doesNotReject(() =>
+    scope.root.intercept({ type: "tool:before:run_command", payload: {}, defaultReturn: undefined })
+  );
+  await assert.doesNotReject(() =>
+    scope.root.intercept({ type: "tool:before:run_command", payload: {}, defaultReturn: undefined })
+  );
+  assert.equal(failures.length, before + 2, "each report still reaches root observers");
+} finally {
+  console.error = originalError;
+}
+assert.equal(errs.length, 1, "an unattributable failure is reported once on stderr");
 
 console.log("agent-event-bus-scope validation passed");

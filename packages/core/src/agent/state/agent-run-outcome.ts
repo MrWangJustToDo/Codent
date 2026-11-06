@@ -4,6 +4,7 @@
 
 import type { AgentState } from "../../runtime-types/agent-state.js";
 import type { AgentRunOutcomeKind } from "../../runtime-types/agent-status.js";
+import type { WhenClearStatus } from "../../runtime-types/session-payloads.js";
 import type { UIMessage } from "@tanstack/ai";
 
 /**
@@ -32,8 +33,6 @@ export interface AgentRunOutcome {
 
 /** Named mid-run / load-time reconcile policies (replaces raw whenClear literals at call sites). */
 export type StatusReconcilePolicy = "during-run" | "after-chat-run" | "idle-clear";
-
-export type WhenClearStatus = "idle" | "running" | "completed";
 
 /**
  * The pump's outcome, read from the state axes rather than from status strings.

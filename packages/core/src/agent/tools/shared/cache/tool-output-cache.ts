@@ -222,13 +222,38 @@ export async function maybeCacheOutput(
   env: ResolvedCoreEnv,
   content: string,
   id: string,
-  opts?: { headLines?: number; tailLines?: number; truncated?: boolean; pageOnly?: boolean }
+  opts?: {
+    headLines?: number;
+    tailLines?: number;
+    truncated?: boolean;
+    pageOnly?: boolean;
+    /**
+     * Re-throw a failed spill instead of degrading to the uncached content.
+     *
+     * `task` sets this: its summary is advertised downstream as "full output at
+     * `<path>`", so a write failure has to end the row as a failure (the caller reports
+     * "could not be recorded") rather than silently hand back an unreferenced summary.
+     * Every other tool keeps the default — a cache is a display optimization, not part of
+     * the result contract, and losing a successful grep/tree/command result to it is worse.
+     */
+    failClosed?: boolean;
+  }
 ): Promise<{ content: string; cachedOutputPath: string | null }> {
   if (!shouldCache(content)) {
     return { content, cachedOutputPath: null };
   }
 
-  const cachedPath = await cacheToolOutput(env, content, id);
+  // The cache is a display optimization, never part of a tool's result contract. A read-only
+  // workspace, a sandbox that refuses `.agents/cache`, or a remote fs error used to reject the
+  // whole call: a cancelled `run_command` lost its partial output, and grep/tree reported a tool
+  // error for content they had already produced. Degrade to the uncached result instead.
+  let cachedPath: string;
+  try {
+    cachedPath = await cacheToolOutput(env, content, id);
+  } catch (error) {
+    if (opts?.failClosed) throw error;
+    return { content, cachedOutputPath: null };
+  }
   const preview = buildCachedPreview(content, cachedPath, opts);
   return { content: preview, cachedOutputPath: cachedPath };
 }

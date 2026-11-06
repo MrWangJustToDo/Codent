@@ -104,7 +104,7 @@ export const AGENT_EVENT_META = {
   // Subagents
   // ==========================================================================
   "subagent:created": { mode: "emit", channel: "lifecycle", visibility: "observable" },
-  "subagent:queue": { mode: "emit", channel: "lifecycle", visibility: "observable" },
+  "subagent:queue": { mode: "emit", channel: "lifecycle", retained: true, visibility: "observable" },
   "subagent:started": { mode: "emit", channel: "lifecycle", visibility: "observable" },
   "subagent:prefork-discarded": { mode: "emit", channel: "lifecycle", visibility: "observable" },
   "subagent:completed": { mode: "emit", channel: "lifecycle", visibility: "observable" },

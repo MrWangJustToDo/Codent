@@ -47,14 +47,7 @@ export async function emitSessionBootstrapEvents(
 
   const mcpManager = managed.getMcpManager();
   if (mcpManager) {
-    const servers = mcpManager.getServerStatuses() ?? [];
-    emitAgentTelemetry(managed, "session:mcp", {
-      configPath: mcpManager.configPath,
-      configLoadedFrom: mcpManager.configLoadedFrom,
-      configSourceKind: mcpManager.configSourceKind,
-      servers,
-      toolCount: servers.reduce((sum, server) => sum + server.toolCount, 0),
-    });
+    emitAgentTelemetry(managed, "session:mcp", mcpManager.getStatusPayload());
   }
 
   const memoryManager = managed.memory.getManager();

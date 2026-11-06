@@ -100,6 +100,7 @@ const PATTERNS = [
       ["runtime-types/chat-host.ts", "port declaration — keeps the predicate"],
       ["agent/run/chat-controller.ts", "pump admission — keeps the synchronous predicate"],
       ["managers/managed-agent.ts", "definition — the flag itself"],
+      ["managers/agent-run-deps.ts", "deps-bag wiring for the background middleware (synchronous predicate)"],
       ["managers/run-agent.ts", "background-middleware delivery wiring (synchronous)"],
     ]),
   },

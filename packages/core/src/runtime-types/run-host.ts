@@ -6,7 +6,7 @@
  */
 
 import type { EmitAgentTelemetryFn } from "./agent-events.js";
-import type { AgentStateEventType, AgentTransitionEvent } from "./agent-state.js";
+import type { AgentStateEventType, AgentTransitionEvent, AgentState } from "./agent-state.js";
 import type { AgentStatus } from "./agent-status.js";
 import type { Epoch } from "./epoch.js";
 import type { BackgroundWakeCause } from "../agent/jobs/background-work.js";
@@ -23,6 +23,8 @@ export interface RunLifecycleHost {
   parentId?: string;
   captureEpoch?: () => Epoch;
   getStatus: () => AgentStatus;
+  /** The axes behind `getStatus`, when the host exposes them (needed where the projection hides a verdict). */
+  getAgentState?: () => AgentState;
   setStatus: (status: AgentStatus, event?: AgentStateEventType) => void;
   transitionStatus?: (event: AgentTransitionEvent) => AgentStatus;
   syncPendingWait?: (messages: UIMessage[]) => void;

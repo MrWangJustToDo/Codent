@@ -45,6 +45,16 @@ export class AgentEventBusScope {
    * dropped instead, which is the same trade-off `extension:log` makes for its own observer loop.
    */
   private reportingHandlerError = false;
+  /**
+   * Root-scope failures are reported once per (event, pattern).
+   *
+   * The bus's own default reporter (dedupe + stderr) is bypassed whenever a host sink is supplied,
+   * and `AgentEventBusScope` always supplies one. A failure on a root-scoped listener (`agentManager
+   * .on`, the log bridge itself) has no owning `AgentLog`, so the event that reports it has no
+   * `agentId` the bridge can resolve — it was dropped in silence. This is the fallback that used to
+   * exist on the default reporter.
+   */
+  private readonly reportedRootFailures = new Set<string>();
 
   constructor(private readonly deps: AgentEventBusScopeDeps) {
     this.root = createAgentEventBus("root", (info) => this.reportHandlerError(info), {
@@ -69,6 +79,19 @@ export class AgentEventBusScope {
     if (this.reportingHandlerError) return;
     const ownerId = this.deps.resolveLogOwner(info.scopeId);
     const parentId = ownerId ? this.parents.get(info.scopeId) : undefined;
+    if (ownerId === undefined) {
+      // Nothing owns an `AgentLog` here, so the emitted report cannot reach disk. Say it on stderr
+      // instead of dropping the only evidence that a root listener is broken.
+      const key = `${info.scopeId}\0${info.event}\0${info.pattern}`;
+      if (!this.reportedRootFailures.has(key)) {
+        if (this.reportedRootFailures.size >= 100) this.reportedRootFailures.clear();
+        this.reportedRootFailures.add(key);
+        console.error(
+          `[agent:event] ${info.kind ?? "interceptor"} handler failed for "${info.event}" (no owning log, scope ${info.scopeId}):`,
+          info.error
+        );
+      }
+    }
     this.reportingHandlerError = true;
     try {
       // Emit on the OWNING agent's bus, not the root. `emit` travels self → ancestors, so a root

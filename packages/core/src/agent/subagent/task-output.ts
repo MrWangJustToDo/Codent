@@ -105,7 +105,7 @@ export async function buildTaskOutput(
   result: SubagentResult,
   options: { runInBackground?: boolean } = {}
 ): Promise<TaskOutput> {
-  const cached = await maybeCacheOutput(coreEnv, result.output, `${toolCallId}-task`);
+  const cached = await maybeCacheOutput(coreEnv, result.output, `${toolCallId}-task`, { failClosed: true });
   return {
     subagentId: result.subagentId,
     ...(result.profile ? { profile: result.profile } : {}),

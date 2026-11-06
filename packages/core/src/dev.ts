@@ -14,7 +14,7 @@ export { createEpoch } from "./runtime-types/epoch.js";
 export { SessionLease } from "./agent/session/session-lease.js";
 // The mode read surface: validators build it over a real controller (or a fake) and assert the
 // consumers below it, instead of reaching into the controllers themselves.
-export { createModeState, ModeStateReader } from "./agent/mode/mode-state.js";
+export { createModeState } from "./agent/mode/mode-state.js";
 export { resolveAgentPolicyFacts } from "./agent/mode/policy-facts.js";
 // State axes + projection; the matrix asserts the round-trip and the transition table.
 export {
@@ -25,13 +25,12 @@ export {
   projectAgentStatus,
   transition,
 } from "./runtime-types/agent-state.js";
-// The authorization pipeline and the declarative requirement it reads. Validators assert the stage
-// order, deny precedence and fail-closed default against the real composer.
+// The authorization pipeline and the declarative requirement shape it reads. Validators assert the
+// stage order, deny precedence and fail-closed default against the real composer.
 export { authorizeToolCall } from "./agent/approval/authorize-tool-call.js";
-export { resolveApprovalRequirement } from "./agent/approval/approval-requirement.js";
 // `tool:before:*` runs once per call across the pipeline and the execution middleware.
 export { emitToolBeforeHook, ToolBeforeHookLedger } from "./agent/extension/tool-before-hook.js";
-export { classifyShell, isShellParsable, resolveShellKind } from "./agent/tools/builtin/shell/safety/command-parser.js";
+export { classifyShell, isShellParsable } from "./agent/tools/builtin/shell/safety/command-parser.js";
 export { tokenizeCommandString } from "./agent/tools/builtin/shell/safety/command-tokenizer.js";
 export { walkTree, formatAsTree } from "./agent/tools/builtin/fs/tree-tool.js";
 // Tool factories for behavioural validators. These live here (not in the published entry) so a
@@ -66,7 +65,7 @@ export { BUILTIN_PRESENTATION } from "./agent/tools/presentation/builtin.js";
 export { formatToolOutput } from "./agent/tools/presentation/format/output-format.js";
 export { classifyServerFailure } from "./agent/lsp/extension.js";
 export { execArgsCapture, canExecArgs } from "./agent/tools/builtin/shell/exec-args.js";
-export { fileUriToPath, formatLocation, formatLocationLink } from "./agent/lsp/shared/format.js";
+export { fileUriToPath, formatLocation } from "./agent/lsp/shared/format.js";
 // `pathToFileUrl` already reaches this barrel through `dev-agent.ts` (the extension barrel re-exports
 // it); a second explicit export made the barrel declare the same name twice, which fails `pnpm lint`.
 export {
@@ -97,11 +96,8 @@ export type { CoreEnv } from "./env";
 // Agent-log crash/exit guards (internal validation exports)
 export {
   installAgentLogProcessGuards,
-  registerActiveAgentLog,
-  unregisterActiveAgentLog,
   registerExtensionExitFlush,
   flushExtensionExitFlushesSync,
-  flushActiveAgentLogsSync,
 } from "./agent/agent-log/lifecycle-guards.js";
 // ============================================================================
 // Built-in LSP extension (internal validation exports — not part of public API)
@@ -116,7 +112,6 @@ export { LANGUAGE_TO_GRAMMAR } from "./agent/tree-sitter/parser-manager.js";
 // ============================================================================
 // `ExtensionRunner` / `createLifecycleMiddleware` / `createAgentEventBus` are already re-exported by
 // the dev modules above; only the extension-runtime additions live here.
-export { createObserverSurface } from "./agent/extension/observer-surface.js";
 export { BUILTIN_EXTENSION_ORDER } from "./agent/dispatch-order.js";
 export { completeExtensionQuery } from "./managers/extension-completion.js";
 export { ExtensionLlmError } from "./agent/extension/extension-llm-error.js";
@@ -125,7 +120,7 @@ export { copyModelMessages } from "./utils/model-messages.js";
 // Already reachable through the published entry (`formatDuration`); re-exported here so every
 // validator import stays on `dist/dev.mjs`.
 export { formatDuration } from "./agent/tools/presentation/format/format.js";
-export { createCodeModeExtension, type CodeModeExtensionConfig } from "./agent/code-mode/extension.js";
+export { createCodeModeExtension } from "./agent/code-mode/extension.js";
 // Binding-name normalisation: a validator must exercise the real helper against the
 // real upstream `createCodeMode`, not a replica of the rename rule.
 export { normalizeBindingName, renameCodeModeTools } from "./agent/code-mode/binding-names.js";

@@ -4,47 +4,33 @@
  */
 
 export {
-  areAllUIMessagesStable,
   computeSessionSyncSnapshot,
   createSessionSyncTracker,
   fingerprintUIMessage,
   isUIMessageStable,
   shouldPersistUIMessages,
 } from "../agent/persistence/session-sync-tracker.js";
-export type { SessionSaveReason, SessionSyncSnapshot } from "../agent/persistence/session-sync-tracker.js";
 export { AgentLog, MAX_PENDING_LOG_ENTRIES } from "../agent/agent-log/agent-log.js";
 export { logEntrySchema, logCategorySchema } from "../agent/log/schemas.js";
 export { AgentUIChannel } from "../agent/ui/ui-channel.js";
-export {
-  findToolCallPart,
-  shouldSuppressReplayedToolChunk,
-} from "../agent/stream/suppress-replayed-tool-chunks.js";
+export { findToolCallPart, shouldSuppressReplayedToolChunk } from "../agent/stream/suppress-replayed-tool-chunks.js";
 export { shouldSuppressStaleTextChunk } from "../agent/stream/suppress-stale-text-chunks.js";
 export { shouldSuppressMessagesSnapshot } from "../agent/stream/suppress-messages-snapshot.js";
 export { PendingMessageQueue } from "../agent/queue/pending-message-queue.js";
-export type { QueueMode } from "../agent/queue/pending-message-queue.js";
 export { SessionStore } from "../agent/persistence/session-store.js";
 export { autoCompact } from "../agent/compaction/auto-compact.js";
 export { applyCompactionResult, findOrphanedToolCut } from "../agent/compaction/apply-compaction-result.js";
 export { compactionAbortError, isCompactionCancel } from "../agent/compaction/abort-classification.js";
-export {
-  CONTEXT_OVERFLOW_CODES,
-  isPromptTooLongError,
-  reactiveCompact,
-} from "../agent/compaction/reactive-compact.js";
+export { CONTEXT_OVERFLOW_CODES, isPromptTooLongError, reactiveCompact } from "../agent/compaction/reactive-compact.js";
 export {
   attachRunErrorCode,
   attachRunErrorRetryAfterMs,
   extractRunErrorMessage,
   throwOnRunError,
-  type RunErrorSignals,
 } from "../agent/stream/stream-errors.js";
 export { AgentConfigSchema } from "../managers/agent-types.js";
 export { DEFAULT_AGENT_MAX_ITERATIONS, MAX_AGENT_ITERATIONS } from "../runtime-types/agent-limits.js";
-export {
-  mergeModelsConfigToolConfig,
-  websearchToolConfigFromEnv,
-} from "../agent/tools/tool-config.js";
+export { mergeModelsConfigToolConfig, websearchToolConfigFromEnv } from "../agent/tools/tool-config.js";
 export { formatReadFileToolResult } from "../agent/tools/builtin/fs/read/format-result.js";
 // Code-mode's `execute_typescript` projection: a script that returns a media result from an
 // `external_*` binding must reach the model as multimodal parts, not base64 text.
@@ -61,19 +47,17 @@ export {
   expandMatchVariants,
   findEditMatch,
   formatNotFoundHint,
-  fromLF,
   splitBom,
   toLF,
   unescapeCommonEscapes,
 } from "../agent/tools/builtin/fs/edit/find-edit-match.js";
 export { BEGIN_SUMMARY_TOOL_NAME } from "../agent/subagent/begin-summary-tool.js";
-export { buildExploreSystemPrompt, SUBAGENT_EXPLORE_SYSTEM_PROMPT } from "../agent/subagent/explore-prompt.js";
+export { buildExploreSystemPrompt } from "../agent/subagent/explore-prompt.js";
 export {
   mcpContentHasMultimodal,
   mcpContentToTanstack,
   resolveMcpModelOutput,
   resolveMcpToolExecuteResult,
-  wrapMcpToolForMultimodalContent,
 } from "../agent/mcp/prefer-multimodal-content.js";
 export { extractAssistantText } from "../agent/stream/extract-assistant-text.js";
 export { countSubagentIterations, deriveSubagentRunStats, hasBeginSummaryCall } from "../agent/subagent/run-stats.js";
@@ -92,7 +76,6 @@ export {
 } from "../agent/tools/builtin/shell/run-command-tool.js";
 export { createWebfetchTool } from "../agent/tools/builtin/web/fetch/tool.js";
 export { createWebsearchTool } from "../agent/tools/builtin/web/search/tool.js";
-export { truncateSummary } from "../agent/subagent/subagent-output.js";
 export {
   applySubagentFailureNotice,
   applySubagentStopNotice,
@@ -106,7 +89,6 @@ export {
   SUBAGENT_PARENT_STOP_NOTICE,
   SUBAGENT_RUN_RESTART_REASONS,
   SUBAGENT_STOP_NOTICES,
-  SUBAGENT_STOP_REASONS,
 } from "../agent/subagent/subagent-stop-reason.js";
 export {
   buildProgressSummaryPrompt,
@@ -134,27 +116,21 @@ export {
   beginTaskRun,
   clearTaskRuns,
   enterTaskLimitPhase,
-  enterTaskPhase,
   enterTaskSummaryPhase,
   getTaskRunState,
   readTaskRunPhase,
   readTaskRunSpawnId,
 } from "../agent/subagent/subagent-runs.js";
 export { TaskRunState } from "../agent/subagent/task-run-state.js";
-export {
-  consumeAgentStream,
-  ensureUIChannel,
-  runAgentOnce,
-  type RunAgentOnceOutcome,
-} from "../agent/run/run-agent-skeleton.js";
+export { consumeAgentStream, ensureUIChannel, runAgentOnce } from "../agent/run/run-agent-skeleton.js";
 export { extractFileOpsFromMessages, formatFileOperations } from "../agent/compaction/file-ops-tracker.js";
 export { buildDefaultSystemPrompt } from "../agent/prompt/default-prompt.js";
 export { AgentRuntime } from "../runtime/agent-runtime.js";
 export { CodentAgent } from "../runtime/codent-agent.js";
 export { createListFileTool } from "../agent/tools/builtin/fs/list-file-tool.js";
 export { createTreeTool } from "../agent/tools/builtin/fs/tree-tool.js";
-export { PR_SUMMARY_SYSTEM_PROMPT, TITLE_SYSTEM_PROMPT } from "../agent-session/session-summary-prompt.js";
-export { assertNotCompactionSummaryInput, applyToolCompact, ToolCompactCache, toolCompactCacheKey } from "../agent/compaction";
+export { PR_SUMMARY_SYSTEM_PROMPT, TITLE_SYSTEM_PROMPT } from "../agent/prompt/session-summary-prompts.js";
+export { applyToolCompact, ToolCompactCache, toolCompactCacheKey } from "../agent/compaction";
 export {
   buildCompactionPrompt,
   buildSegmentedConversationText,
@@ -170,7 +146,6 @@ export {
   extractCompactionSummaryBody,
   getModelVisibleMessages,
   isCompactionSummaryModelMessage,
-  isCompactionSummaryText,
   isCompactionSummaryUIMessage,
   isLatestDurableMessageCompactionSummary,
   keepPolicyProjectionOptions,
@@ -195,23 +170,13 @@ export { createTimeoutAbort, withTimeoutAbort } from "../agent/tools/shared/abor
 export { braveProvider } from "../agent/tools/builtin/web/search/providers/brave.js";
 export { tavilyProvider } from "../agent/tools/builtin/web/search/providers/tavily.js";
 export { parseParallelResults } from "../agent/tools/builtin/web/search/providers/parallel.js";
-export { parseExaResults } from "../agent/tools/builtin/web/search/providers/exa.js";
 export { parseMcpResponse } from "../agent/tools/builtin/web/search/providers/mcp-client.js";
 // models.json global.toolConfig normalization (internal validation exports).
-export {
-  normalizeGlobalToolConfig,
-  normalizeRawGlobalToolConfig,
-  parseModelsConfig,
-} from "../models/config/models-config.js";
+export { normalizeRawGlobalToolConfig, parseModelsConfig } from "../models/config/models-config.js";
 export { resolveSelectedMemoryFilename } from "../agent/memory/memory-retrieval.js";
 export { MemoryManager } from "../agent/memory/memory-manager.js";
 export { extractMemories, consolidateMemories } from "../agent/memory/memory-extractor.js";
-export {
-  extractUserQuery,
-  findRelevantMemories,
-  formatRelevantMemories,
-} from "../agent/memory/memory-retrieval.js";
-export type { RelevantMemory } from "../agent/memory/memory-retrieval.js";
+export { findRelevantMemories, formatRelevantMemories } from "../agent/memory/memory-retrieval.js";
 export {
   DEFAULT_SUMMARIZATION_CONTEXT_WINDOW,
   SUMMARY_OUTPUT_CAP,
@@ -242,13 +207,10 @@ export {
 export { buildAutoModePrompt } from "../agent/approval/auto-mode-prompt.js";
 export {
   CONTEXT_OPEN_PREFIX,
-  CONTEXT_CLOSE,
   REMINDER_TAGS,
   formatSectionTag,
   hashTurnContextPayload,
   formatContextSectionUserContent,
-  sectionTagOf,
-  isContextText,
   contextAttributesFromText,
   contextKindFromText,
   isContextModelMessage,
@@ -267,11 +229,8 @@ export {
   buildRepeatReminderBody,
   buildTodoReminderBody,
   canonicalizeRepeatArguments,
-  DEFAULT_ARGUMENTS_PREVIEW_CHARS,
-  DEFAULT_REPEAT_EXCLUDED_TOOLS,
   DEFAULT_REPEAT_THRESHOLDS,
   previewRepeatArguments,
-
   readRepeatReminderWindowState,
   readTodoReminderWindowState,
   readTrailingRepeatChain,
@@ -279,7 +238,6 @@ export {
   resolveTodoReminder,
 } from "../agent/turn-context";
 export {
-  INSTRUCTION_FILENAMES,
   INSTRUCTION_MAX_BYTES,
   diffInstructionStates,
   formatInstructionContextSection,
@@ -290,9 +248,6 @@ export {
 export { TURN_CONTEXT_KINDS } from "../agent/turn-context";
 export { captureSessionStaleness } from "../agent/turn-context";
 export { collectRunCommandToolCallIds, formatBackgroundJobsSection } from "../agent/turn-context";
-export type { BackgroundJobContextRow } from "../agent/turn-context";
-export type { TurnContextKind } from "../agent/turn-context";
-export type { InstructionContextState, InstructionFile, LoadedInstructionContent } from "../agent/turn-context";
 export {
   SESSION_RETRIEVAL_KIND,
   formatSessionRetrievalSection,
@@ -303,24 +258,13 @@ export {
   MAX_INSTRUCTION_IMPORT_DEPTH,
   expandInstructionImports,
   findCodeRegions,
-  overrideFilenameFor,
-  resolveOverrideInstruction,
-  resolvePrimaryInstruction,
-  truncateToBudget,
 } from "../agent/prompt/instruction-files.js";
-export type {
-  InstructionDiscoveryOptions,
-  ResolvedInstructionFile,
-} from "../agent/prompt/instruction-files.js";
-export { loadAgentDoc, formatAgentDocResult } from "../agent/prompt/agent-doc-loader.js";
-export type { AgentDocLoadResult, AgentDocLoaderConfig } from "../agent/prompt/agent-doc-loader.js";
+export { loadAgentDoc } from "../agent/prompt/agent-doc-loader.js";
 export { toolsToArray } from "../agent/tools/catalog/tool-set.js";
 export { defineServerTool, getToolMetadata } from "../agent/tools/runtime/define-tool.js";
-export { createSessionSearchTool, sessionSearchOutputSchema } from "../agent/tools/builtin/session/search-tool.js";
-export { createSessionReadTool, sessionReadOutputSchema } from "../agent/tools/builtin/session/read-tool.js";
+export { createSessionSearchTool } from "../agent/tools/builtin/session/search-tool.js";
+export { createSessionReadTool } from "../agent/tools/builtin/session/read-tool.js";
 export {
-  DEFAULT_SEARCH_ROLES,
-  MAX_MATCHES_COLLECTED,
   listSessionIds,
   makeSnippet,
   messageText,
@@ -333,11 +277,7 @@ export { SUBAGENT_ALLOWED_KINDS } from "../managers/middleware/turn-context-midd
 export { injectSyntheticMessages, syntheticMessageId } from "../agent/turn-context/synthetic-injection.js";
 export { AgentRunner } from "../agent/runner/agent-runner.js";
 export { assertAsyncIterable, formatAgentStreamError } from "../agent/stream/assert-async-iterable.js";
-export {
-  applyToolDenialReason,
-  buildToolDenialResultContent,
-  DEFAULT_TOOL_DENIAL_MESSAGE,
-} from "../agent/stream/apply-tool-denial-reason.js";
+export { applyToolDenialReason } from "../agent/stream/apply-tool-denial-reason.js";
 export {
   findLastMeaningfulAssistant,
   isEmptyAssistantShell,
@@ -345,7 +285,6 @@ export {
 } from "../agent/stream/empty-assistant-shell.js";
 export {
   EMPTY_MODEL_STREAM_MESSAGE,
-  assistantProgressSignature,
   didStreamProduceModelOutput,
   shouldFlagEmptyModelStream,
 } from "../agent/stream/empty-model-stream.js";
@@ -364,7 +303,6 @@ export {
 } from "../agent/stream/incomplete-tool-calls.js";
 export {
   MULTIMODAL_OMITTED_PLACEHOLDER,
-  MULTIMODAL_PART_CAPABILITY,
   chatMessagesHaveMultimodal,
   isMultimodalUnsupportedError,
   sanitizeMessagesForCapabilities,
@@ -373,11 +311,9 @@ export {
   unsupportedMultimodalPartTypes,
 } from "../models/adapter/capability-message-utils.js";
 export type { CapabilityProbe } from "../models/adapter/capability-message-utils.js";
-export type { MultimodalPartType } from "../utils/multimodal-part-types.js";
 export {
   hasDeferredToolExecution,
   hasApprovedToolsPendingExecution,
-  hasApprovalRespondedToolsPendingExecution,
   hasPendingRunContinuation,
   needsAgentResponseAfterTools,
   needsToolPhaseContinue,
@@ -391,9 +327,8 @@ export {
   resolvePendingInteractions,
 } from "../agent/stream/tool-phase-utils.js";
 export { shouldDeferMidRunQueue } from "../agent/queue/defer-mid-run-queue.js";
-export { BUILTIN_TOOL_NAMES, type BuiltinToolName } from "../agent/tools/catalog/tool-names.js";
+export { BUILTIN_TOOL_NAMES } from "../agent/tools/catalog/tool-names.js";
 export {
-  AGENT_STREAM_SNAPSHOT_LINE_CAP,
   AgentStreamHub,
   applyAppendToAgentStreamWindow,
   applyAgentStreamAppend,
@@ -408,27 +343,12 @@ export { createJobsExtension, summarizeJobs } from "../agent/jobs/extension.js";
 // drive the real objects (`validate:background-task`), so they must be reachable from here rather
 // than re-implemented against a replica.
 export { BackgroundWorkService } from "../managers/services/background-work-service.js";
-export type { BackgroundWorkChange } from "../managers/services/background-work-service.js";
-export type {
-  BackgroundWorkCompletion,
-  BackgroundWorkRow,
-  BackgroundWorkSource,
-  BackgroundWorkTerminalStatus,
-} from "../agent/jobs/background-work.js";
-export {
-  backgroundWakeCause,
-  backgroundWorkKind,
-  settledTerminalStatus,
-  SESSION_END_CANCELLED_MESSAGE,
-  TASK_JOB_KIND,
-  COMMAND_JOB_KIND,
-} from "../agent/jobs/background-work.js";
-export { peekSubagentRuns, SubagentRuns, subagentRuns } from "../agent/subagent/subagent-runs.js";
+export type { BackgroundWorkCompletion } from "../agent/jobs/background-work.js";
+export { SESSION_END_CANCELLED_MESSAGE } from "../agent/jobs/background-work.js";
+export { SubagentRuns, subagentRuns } from "../agent/subagent/subagent-runs.js";
 export {
   failedTaskOutput,
-  formatRunningTaskText,
   formatTaskModelText,
-  interruptedTaskOutput,
   isRunningTaskOutput,
   runningTaskOutput,
 } from "../agent/subagent/task-output.js";
@@ -436,17 +356,9 @@ export {
   cancelInterruptedBackgroundTasks,
   reconcileSettledTaskParts,
   startBackgroundTask,
-  taskStatusForResult,
 } from "../agent/subagent/task-background.js";
-export { createTaskWorkSource } from "../agent/subagent/task-work-source.js";
 export { formatNotifications } from "../managers/middleware/background-middleware.js";
 export { CommandJobRegistry } from "../agent/tools/builtin/shell/jobs/registry.js";
-export type {
-  CommandJobChange,
-  CommandJobChangeListener,
-  CommandJobRecord,
-  CommandJobPollResult,
-} from "../agent/tools/builtin/shell/jobs/registry.js";
 export { sweepStaleJobLogs } from "../agent/tools/builtin/shell/jobs/output-log.js";
 export { sweepStaleJobRecords } from "../agent/tools/builtin/shell/jobs/store.js";
 export {
@@ -455,15 +367,9 @@ export {
   MAX_JOB_RECORD_AGE_MS,
   WORKSPACE_CACHE_RETENTION,
   resetWorkspaceCacheSweeps,
-  sweepWorkspaceCache,
   sweepWorkspaceCaches,
 } from "../agent/tools/shared/cache/workspace-cache.js";
-export {
-  AGENT_LOG_DIR,
-  LOG_MAX_AGE_MS,
-  resetAgentLogSweep,
-  sweepAgentLogs,
-} from "../agent/log/log-retention.js";
+export { AGENT_LOG_DIR, LOG_MAX_AGE_MS, resetAgentLogSweep, sweepAgentLogs } from "../agent/log/log-retention.js";
 export {
   CACHE_THRESHOLD,
   TOOL_OUTPUT_CACHE_DIR,
@@ -477,22 +383,35 @@ export {
 } from "../agent/tools/shared/cache/tool-output-cache.js";
 export { PlanModeController, PLAN_TODO_TITLE } from "../agent/plan/plan-mode-controller.js";
 export { cleanStepText, extractDoneSteps, extractPlan } from "../agent/plan/extract-plan.js";
-export { getPlanModeToolExcludeSet, getPlanModeToolBlockReason, isMcpToolName, isPlanModeForbiddenTool, isWorkspaceEditingTool, PLAN_AUTHORING_TOOL_NAMES, PLAN_COMPLETION_TOOL_NAMES, PLAN_MODE_EXCLUDED_NON_EDIT_TOOL_NAMES } from "../agent/plan/plan-tools.js";
+export {
+  getPlanModeToolExcludeSet,
+  getPlanModeToolBlockReason,
+  isPlanModeForbiddenTool,
+  isWorkspaceEditingTool,
+  PLAN_AUTHORING_TOOL_NAMES,
+  PLAN_COMPLETION_TOOL_NAMES,
+  PLAN_MODE_EXCLUDED_NON_EDIT_TOOL_NAMES,
+} from "../agent/plan/plan-tools.js";
 export { PLAN_STORE_DIR, slugifyPlanName, planFilePath } from "../agent/plan/plan-store.js";
 export { formatPlanModeFooterLabel, todoProgressFromItems } from "../agent/plan/plan-footer-label.js";
-export { formatStructuredPlanMarkdown, stepsFromTexts, stripLeadingStepNumber } from "../agent/plan/plan-format.js";
+export { formatStructuredPlanMarkdown, stripLeadingStepNumber } from "../agent/plan/plan-format.js";
 export { formatPlanSummary, extractGoalFromPlanMarkdown } from "../agent/plan/plan-summary.js";
-export { buildModeInactivePrompt, buildPlanModePrompt, buildPlanModePlanningPrompt, buildPlanModeReadyPrompt, buildPlanModeRetroPrompt } from "../agent/plan/plan-prompts.js";
-export { gateCompletePlanVerification, isUsableVerification, parseVerificationItemsFromPlanMarkdown, parseVerificationItemsFromText } from "../agent/plan/plan-verification.js";
-export type { BeginPlanExecutionResult, ApplyPlanResult, PlanModePhase, PlanModeState } from "../agent/plan/plan-mode-controller.js";
-export type { PlanStep, ExtractedPlan } from "../agent/plan/extract-plan.js";
-export type { StructuredPlanInput } from "../agent/plan/plan-format.js";
-export type { VerificationResultItem } from "../agent/plan/plan-verification.js";
+export {
+  buildModeInactivePrompt,
+  buildPlanModePlanningPrompt,
+  buildPlanModeReadyPrompt,
+  buildPlanModeRetroPrompt,
+} from "../agent/plan/plan-prompts.js";
+export {
+  gateCompletePlanVerification,
+  isUsableVerification,
+  parseVerificationItemsFromPlanMarkdown,
+  parseVerificationItemsFromText,
+} from "../agent/plan/plan-verification.js";
 export { TodoManager } from "../agent/todo";
 export { createTodoTool } from "../agent/todo/todo-tool.js";
-export { extractBase64Content, buildDataUrl, sha256Stable } from "../agent/media/media-store.js";
+export { extractBase64Content, buildDataUrl } from "../agent/media/media-store.js";
 export { MediaStore } from "../agent/media/media-store.js";
-export type { MediaRef } from "../agent/media/types.js";
 export { MEDIA_DIR, mimeToExtension, parseMediaRefPath, buildMediaRefPath } from "../agent/media/types.js";
 export { dehydrateUIMessages, hydrateUIMessages } from "../agent/media/media-utils.js";
 export {
@@ -503,19 +422,11 @@ export {
 } from "../agent/media/repair-stringified-multimodal.js";
 export { createLspExtension } from "../agent/lsp";
 export { DEFAULT_DISABLED_LSP_TOOLS } from "../agent/lsp";
-export type { LspExtensionConfig } from "../agent/lsp";
-export { EXT_TO_LANGUAGE, getLanguageIdFromPath } from "../agent/lsp/language-map.js";
-export {
-  LspManager,
-  type LspServerConfigRecord,
-  type ServerStatus,
-  type LspClient,
-  type LspManagerCallbacks,
-} from "../agent/lsp/lsp-manager.js";
+export { LspManager } from "../agent/lsp/lsp-manager.js";
 export { findLombokJar } from "../agent/lsp/lombok.js";
 export { applyDiagnosticsToToolAfterPayload } from "../agent/lsp/shared/apply-tool-diagnostics.js";
 export { extractToolPath, parseToolCallArgs } from "../agent/lsp/shared/parse-tool-args.js";
-export { insertDot, shouldSyntheticTrigger, syntheticDotLocks } from "../agent/lsp/shared/synthetic-dot.js";
+export { insertDot, shouldSyntheticTrigger } from "../agent/lsp/shared/synthetic-dot.js";
 export {
   DIAGNOSTIC_SETTLE_DELAY_MS,
   RESTART_INITIAL_BACKOFF_MS,
@@ -523,19 +434,15 @@ export {
 } from "../agent/lsp/shared/timing.js";
 export { lspTextToModelOutput } from "../agent/lsp/shared/tool-output.js";
 export { truncateHead } from "../agent/lsp/tools/tool-shared.js";
-export { createMemoryExtension, type MemoryExtensionConfig, type CreateMemoryExtensionOptions } from "../agent/memory";
+export { createMemoryExtension, type MemoryExtensionConfig } from "../agent/memory";
 export {
   SkillRegistry,
   SkillLoader,
   BUILTIN_SKILLS,
   skillSchema,
   createSkillsExtension,
-  type SkillSource,
-  type SkillDirectory,
   type SkillsExtensionConfig,
-  type CreateSkillsExtensionOptions,
 } from "../agent/skills";
-export { createMcpExtension, type McpExtensionConfig, type CreateMcpExtensionOptions } from "../agent/mcp";
-export { mcpConfigFromServers, type McpConfigSourceKind } from "../agent/mcp/options.js";
-// The owner every MCP registration carries, so a validator can assert the removal matches.
-export { MCP_TOOL_OWNER, McpManager } from "../agent/mcp/manager.js";
+export { createMcpExtension } from "../agent/mcp";
+export { mcpConfigFromServers } from "../agent/mcp/options.js";
+export { McpManager } from "../agent/mcp/manager.js";

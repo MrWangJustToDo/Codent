@@ -80,7 +80,7 @@ export type {
 export type { AgentEventPayloadMap, EmptyAgentEventPayload } from "./runtime-types/agent-event-payloads.js";
 export { ManagedAgent, type ManagedAgentConfig } from "./managers/managed-agent.js";
 export type { AgentMode } from "./runtime-types/session-payloads.js";
-export { isActiveStatus } from "./runtime-types/agent-status.js";
+export { isActiveStatus, isBusyStatus } from "./runtime-types/agent-status.js";
 export type { AgentStatus } from "./runtime-types/agent-status.js";
 export type { QueuedMessageContent, QueuedMessagesSnapshot } from "./agent/run/chat-controller.js";
 export type { PlanModePhase, PlanModeState, BeginPlanExecutionResult } from "./agent/plan/plan-mode-controller.js";

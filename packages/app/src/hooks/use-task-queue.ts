@@ -9,9 +9,8 @@
  * The snapshot is replaced, never merged — that is what makes a dropped, duplicated or re-ordered
  * event harmless, and what keeps this hook free of any per-task bookkeeping.
  *
- * Not retained (an `emit` event, not a channel value): a remount mid-turn starts with an empty
- * queue and re-fills on the next transition. The row falls back to its own label, so the worst case
- * is a row that does not mention the wait.
+ * Retained: a remount/subscription receives the current queue snapshot, and every mutation still
+ * emits a full snapshot. Both carry the same payload; a late subscriber no longer starts empty.
  */
 
 import { useEffect, useState } from "react";

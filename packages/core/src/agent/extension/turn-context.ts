@@ -45,6 +45,8 @@ export interface ExtensionTurnContextDeps {
   /** Producer failures converge on `agent:extension-error` (never a bare console write). */
   reportFailure: (extensionId: string, phase: "turn-context" | "disable-notice", error: string) => void;
   log: (level: "warn", extensionId: string, message: string) => void;
+  /** A hook-level failure that belongs to no extension (its `hook` is not an extension id). */
+  logLifecycle: (level: "warn", hook: string, message: string) => void;
   /** Bound for one callback; defaults to {@link EXTENSION_CALLBACK_TIMEOUT_MS}. */
   callbackTimeoutMs?: number;
 }
@@ -116,7 +118,7 @@ export class ExtensionTurnContext {
         "before_agent_start"
       );
     } catch (err) {
-      this.deps.log("warn", "before_agent_start", errorMessage(err));
+      this.deps.logLifecycle("warn", "before_agent_start", errorMessage(err));
     }
 
     const turnContextSections: ExtensionTurnContextSection[] = [];

@@ -2,10 +2,10 @@ import type { ExtensionContextUsage, ExtensionLlm } from "./context-access.js";
 import type { DispatchRank } from "../dispatch-order.js";
 import type { ExtensionObserverSurface } from "./event-visibility.js";
 import type { ExtensionZod } from "./extension-zod.js";
+import type { MessageTransformer } from "./message-transform-types.js";
+import type { ToolCallResult, ToolExecutionOptions } from "./tool-execution-types.js";
 import type { ExtensionUI } from "./ui-types.js";
-import type { CoreEnv, ResolvedCoreEnv } from "../../env";
-import type { ModelCapability } from "../../models/types.js";
-import type { MultimodalPartType } from "../../utils/multimodal-part-types.js";
+import type { CoreEnv } from "../../env";
 import type { LogCategory, LogLevel } from "../agent-log/types.js";
 import type { ToolPresentation } from "../tools/presentation/types.js";
 import type { ModelToolContent, ToModelOutputContext, ToModelOutputDecorator } from "../tools/runtime/contract.js";
@@ -18,189 +18,21 @@ export type { MultimodalPartType } from "../../utils/multimodal-part-types.js";
 export type { ModelCapability } from "../../models/types.js";
 
 // ============================================================================
-// Tool execution types (mirrored from @tanstack/ai to avoid ai package dep)
+// Split-out contracts
 // ============================================================================
+//
+// These two blocks used to live here and pushed the file to the `max-lines` ceiling. They are
+// re-exported so every existing `./types.js` import keeps working — the definitions themselves
+// (including the one runtime value, `MODEL_CAPABILITY_FLAGS`) have a single home.
 
-export interface ToolExecutionOptions {
-  toolCallId: string;
-  /**
-   * The RUN's abort signal — aborted only when the run is stopped (user / parent), never by the
-   * tool's own `timeoutMs`. Classify a caught error against THIS signal to decide "cancelled".
-   */
-  abortSignal?: AbortSignal;
-  /**
-   * The run signal composed with the extension tool's declared `timeoutMs`.
-   *
-   * Aborts on a run abort OR on deadline expiry (its reason is then `ExecutionError("timeout")`),
-   * so pass it to cancellable work (fetch). Present only when the tool declared `timeoutMs`.
-   * Deliberately separate from {@link abortSignal}: classifying with this signal would read a
-   * timeout as a cancel (`isAbortError` short-circuits on `signal.aborted`).
-   */
-  deadlineSignal?: AbortSignal;
-  /**
-   * The deadline the tool declared (`timeoutMs`), when it has one.
-   *
-   * Present only on the execution context the framework builds; a tool that declared no deadline
-   * sees `undefined`. Useful for reporting the budget without re-reading its own definition.
-   */
-  timeoutMs?: number;
-  /**
-   * Id of the agent running this tool call.
-   *
-   * Supplied by the run context (`ToolRunContext.agentId`) — the authoritative value, since
-   * this same tool set is served to a subagent's runs too. A tool that keys per-agent
-   * resources (caches, sandboxes) must use THIS id, not the registration-time one. Hosts
-   * that register tools without a run context fall back to the registering agent's id.
-   */
-  agentId?: string;
-  /**
-   * The owning runtime's workspace env (with defaults resolved).
-   *
-   * Present whenever the call came from a run (`defineServerTool` resolves it from the
-   * `ToolRunContext`). A tool that executes ANOTHER tool — code-mode's `external_*` bindings are
-   * the shipped case — must forward this to that call. Without it the nested tool falls back to
-   * the process-ambient env, which is the wrong workspace in a multi-runtime process and throws
-   * outright when no ambient env is registered.
-   */
-  coreEnv?: ResolvedCoreEnv;
-}
-
-export type ToolCallResult = Record<string, unknown>;
-
-// ============================================================================
-// Message transform — per-wire-call rewrite of the model-facing message chain
-// ============================================================================
-
-/**
- * Where in a run the wire is being built.
- *
- * - `init` — the first model call of the run.
- * - `iteration` — any later call (after tool results / mid-loop appends).
- *
- * Deliberately not a numeric iteration index: a transformer must not need to
- * track run history, and the value stays meaningful across restart-style retries.
- */
-export type MessageTransformPhase = "init" | "iteration";
-
-/**
- * Capability → the transformer-context flag name that exposes it.
- *
- * `satisfies Record<ModelCapability, ...>` is the guard that matters: adding a member to
- * `MODEL_CAPABILITIES` breaks compilation HERE until this map names it. That is what keeps
- * the capability list and the transformer's flag surface from drifting apart — the failure
- * is a type error at the definition site, not a silently missing flag at runtime.
- *
- * Flag names are flat (`modelHasToolCalling`, not `modelHas.toolCalling`) so extension code
- * reads as prose and existing consumers keep working.
- */
-export const MODEL_CAPABILITY_FLAGS = {
-  reasoning: "modelHasReasoning",
-  vision: "modelHasVision",
-  audio: "modelHasAudio",
-  video: "modelHasVideo",
-  document: "modelHasDocument",
-  tool_calling: "modelHasToolCalling",
-  prompt_caching: "modelHasPromptCaching",
-  json_output: "modelHasJsonOutput",
-} as const satisfies Record<ModelCapability, string>;
-
-/** The per-capability boolean flags carried by {@link MessageTransformContext}. */
-export type ModelCapabilityFlags = {
-  [K in keyof typeof MODEL_CAPABILITY_FLAGS as (typeof MODEL_CAPABILITY_FLAGS)[K]]: boolean;
-};
-
-/**
- * Build the flag record for a capability probe.
- *
- * Iterates {@link MODEL_CAPABILITY_FLAGS} rather than listing capabilities, so the values
- * and the type come from the same table. A capability absent from the probe's declared set
- * falls back to the probe's own permissive `hasCapability` semantics.
- */
-export function buildModelCapabilityFlags(has: (cap: ModelCapability) => boolean): ModelCapabilityFlags {
-  const flags: Record<string, boolean> = {};
-  for (const [capability, flag] of Object.entries(MODEL_CAPABILITY_FLAGS)) {
-    flags[flag] = has(capability as ModelCapability);
-  }
-  return flags as ModelCapabilityFlags;
-}
-
-export interface MessageTransformContext extends ModelCapabilityFlags {
-  /** Id of the extension that registered this transformer. */
-  extensionId: string;
-  /**
-   * Id of the agent whose run is building this wire call.
-   *
-   * Per-run authoritative value (same source as {@link ToolExecutionOptions.agentId}),
-   * not the registration-time agent id.
-   */
-  agentId: string;
-  /** Which model call of the run this is. */
-  phase: MessageTransformPhase;
-  /**
-   * Model messages produced by the channel-anchored wire projection, exclusively
-   * owned by the transformer for the duration of this call.
-   *
-   * Tool results have already been projected through their tool's `toModelOutput`
-   * (`tool-compact` runs BEFORE this seam), so rewriting a tool message here is
-   * final for this call instead of being re-projected over.
-   *
-   * Returning a new array replaces them for this call only; mutating in place also
-   * works but is not required (see {@link MessageTransformer}). Mutation can never
-   * reach a shared cache while a transformer is registered.
-   */
-  messages: ModelMessage[];
-  /**
-   * Multimodal part types the current model does not accept, derived from the same
-   * capability probe that gates pre-send stripping. Empty when capabilities are
-   * unknown (permissive — never assume a model lacks a capability it did not deny).
-   */
-  unsupportedPartTypes: ReadonlySet<MultimodalPartType>;
-  /**
-   * Every model capability as a set, or `null` when the model's capabilities are **unknown**.
-   *
-   * `null` and an empty set are different on purpose. `null` means nothing was declared, and
-   * the `modelHas*` booleans below are then all `true` (permissive — never assume a model lacks
-   * a capability it did not deny). An empty set means capabilities were resolved and the model
-   * declares none of them, so every boolean is `false`. Read this property when you need to tell
-   * "the model declared this capability" apart from "the model declared nothing" — the booleans
-   * cannot express that difference on purpose.
-   */
-  capabilities: ReadonlySet<ModelCapability> | null;
-  /**
-   * Per-capability convenience flags. All permissive: `true` when capabilities are unknown
-   * (`capabilities === null`); all `false` when the model declared an empty set.
-   */
-  modelHasVision: boolean;
-  modelHasAudio: boolean;
-  modelHasVideo: boolean;
-  modelHasDocument: boolean;
-  modelHasReasoning: boolean;
-  modelHasToolCalling: boolean;
-  modelHasPromptCaching: boolean;
-  modelHasJsonOutput: boolean;
-  /** Aborts when the owning run is cancelled. */
-  abortSignal?: AbortSignal;
-}
-
-/**
- * Rewrites the messages the model will see. Registered via
- * {@link ExtensionContext.registerMessageTransformer}.
- *
- * Contract:
- * - Runs on **every** model call of the run, not once per turn — including after
- *   tool results land. Anything that must hold for the whole run belongs here.
- * - Wire-only: the returned messages affect this call only. They are never written
- *   back to the UI channel, the session store, or the conversation chain.
- * - Return `void` to leave the messages unchanged, or a message array to replace them.
- * - Not guaranteed to preserve message count; do not rely on it. Pruning and
- *   compaction remain the core `context-transform` phase's job.
- * - An extension may hold at most one active transformer; registering again replaces it.
- */
-export type MessageTransformer = (
-  ctx: MessageTransformContext,
-  /** The extension's live context for this call. */
-  extensionCtx?: ExtensionContext
-) => ModelMessage[] | void | Promise<ModelMessage[] | void>;
+export type { ToolCallResult, ToolExecutionOptions } from "./tool-execution-types.js";
+export type {
+  MessageTransformContext,
+  MessageTransformPhase,
+  MessageTransformer,
+  ModelCapabilityFlags,
+} from "./message-transform-types.js";
+export { MODEL_CAPABILITY_FLAGS, buildModelCapabilityFlags } from "./message-transform-types.js";
 
 // ============================================================================
 // Lifecycle Hooks

@@ -36,6 +36,8 @@
 import { cloneOwnedValue, MODEL_MESSAGE_OWNERSHIP_DEPTH } from "../../utils/model-messages.js";
 import { compareDispatchRank } from "../dispatch-order.js";
 
+import { EXTENSION_CALLBACK_TIMEOUT_MS, withCallbackTimeout } from "./callback-timeout.js";
+
 import type { DispatchRank } from "../dispatch-order.js";
 import type { ExtensionContext, MessageTransformContext, MessageTransformer } from "./types.js";
 import type { ModelMessage } from "@tanstack/ai";
@@ -155,7 +157,15 @@ export class MessageTransformerRegistry {
         // are observable: a host without `getContext` keeps the old (permissive) behaviour, which
         // is the validator/embedded harness shape.
         if (context !== undefined && liveContext !== context) continue;
-        const result = await transformer({ ...ctx, extensionId, messages: current }, liveContext);
+        // This middleware runs inside EVERY model call, so an unbounded await belongs to the
+        // "quit does not quit" class the callback timeout exists for: the documented example (an
+        // external multimodal endpoint) is network I/O this process does not control. A timeout is
+        // reported like any other transformer failure and keeps the last valid message set.
+        const result = await withCallbackTimeout(
+          Promise.resolve(transformer({ ...ctx, extensionId, messages: current }, liveContext)),
+          `message transformer (${extensionId})`,
+          EXTENSION_CALLBACK_TIMEOUT_MS
+        );
         if (result === undefined) continue;
         if (!isModelMessageArray(result)) {
           this.host.reportTransformerFailure(

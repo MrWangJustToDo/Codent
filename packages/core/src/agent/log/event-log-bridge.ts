@@ -34,7 +34,20 @@ function resolveRule(type: AgentEventType, policy?: EventLogPolicy): EventLogRul
 }
 
 function writeLog(log: AgentLog, rule: EventLogRule, event: AgentEvent, message: string): void {
-  const data = summarizePayload(p(event));
+  const payload = p(event);
+  // A `cancelled` payload is not a fault: it must not go through the error path (that attaches the
+  // payload's text as a synthesized exception — for a cancelled subagent that text is partial
+  // narration). The level drops to `warn` for the same reason `agent:tool-error` does: a cancel is
+  // not a failure, and `AGENT_LOG_LEVEL=error` used to keep cancels while hiding tool cancels.
+  const cancelled = payload.cancelled === true;
+  const level = rule.level === "error" && cancelled ? "warn" : rule.level;
+  // Filter BEFORE summarizing: `summarizePayload` stringifies arbitrary tool input/output (up to
+  // 50 KB each), and the seam dropped the result afterwards. Raising AGENT_LOG_LEVEL is exactly
+  // when that work should not happen. Optional-call: a duck-typed sink used by validators/embedded
+  // hosts may only implement `eventEntry`, and it must keep working.
+  if (log.isLevelEnabled?.(level) === false) return;
+
+  const data = summarizePayload(payload);
   // The run identity comes from the envelope, never from seam state: the producer stamps it once and
   // every consumer reads the same value.
   const run = event.runId;
@@ -43,12 +56,8 @@ function writeLog(log: AgentLog, rule: EventLogRule, event: AgentEvent, message:
   // as the `error` message below, and an error object's `message` is not bounded by the schema.
   message = truncateText(message, MAX_LOG_MESSAGE_CHARS);
 
-  // A `cancelled` payload is not a fault: it must not go through the error path (that attaches the
-  // payload's text as a synthesized exception — for a cancelled subagent that text is partial
-  // narration). The level drops to `warn` for the same reason `agent:tool-error` does: a cancel is
-  // not a failure, and `AGENT_LOG_LEVEL=error` used to keep cancels while hiding tool cancels.
   if (rule.level === "error") {
-    if (p(event).cancelled === true) {
+    if (cancelled) {
       log.eventEntry("warn", rule.category, event.type, message, data, undefined, run, event.sessionId);
       return;
     }
@@ -56,15 +65,15 @@ function writeLog(log: AgentLog, rule: EventLogRule, event: AgentEvent, message:
     // `entry.error.message`. The seam (`AgentLog.log`) bounds every writer's error message, so this
     // is deliberately not truncated here — a second, narrower bound would let the specialized
     // handlers (which do not pass through this function) keep their own behaviour.
-    const errorMessage = (p(event).error as string | undefined) ?? message;
+    const errorMessage = (payload.error as string | undefined) ?? message;
     const error = eventError(errorMessage);
     // A producer that had an `Error` supplies its stack; `eventError` deliberately invents none.
-    const stack = p(event).stack;
+    const stack = payload.stack;
     if (typeof stack === "string") error.stack = stack;
     log.eventEntry("error", rule.category, event.type, message, data, error, run, event.sessionId);
     return;
   }
-  log.eventEntry(rule.level, rule.category, event.type, message, data, undefined, run, event.sessionId);
+  log.eventEntry(level, rule.category, event.type, message, data, undefined, run, event.sessionId);
 }
 
 /**

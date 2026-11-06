@@ -289,6 +289,7 @@ export class ExtensionRunner {
       reportFailure: (extensionId, phase, error) =>
         this.emitExtensionEvent("agent:extension-error", { extensionId, phase, error }),
       log: (level, extensionId, message) => this.writeExtensionLog(level, extensionId, message),
+      logLifecycle: (level, hook, message) => this.writeLifecycleLog(level, hook, message),
       callbackTimeoutMs: this.callbackTimeoutMs,
     });
 
@@ -562,7 +563,7 @@ export class ExtensionRunner {
       // A handler that throws is reported by the bus; one that never settles only produces this
       // timeout rejection. Swallowing it made a hung initialization hook look like "startup was
       // slow" with nothing in the timeline.
-      this.writeExtensionLog("warn", "session:bootstrap", errorMessage(error));
+      this.writeLifecycleLog("warn", "session:bootstrap", errorMessage(error));
     });
   }
 
@@ -591,7 +592,7 @@ export class ExtensionRunner {
       "session:shutdown",
       this.callbackTimeoutMs
     ).catch((error) => {
-      this.writeExtensionLog("warn", "session:shutdown", errorMessage(error));
+      this.writeLifecycleLog("warn", "session:shutdown", errorMessage(error));
     });
   }
 
@@ -1506,12 +1507,38 @@ export class ExtensionRunner {
    * validation script builds.
    */
   private writeExtensionLog(level: LogLevel, extensionId: string, msg: string, category: LogCategory = "hooks"): void {
+    this.writeLogPayload({ extensionId, level, message: msg, category });
+  }
+
+  /**
+   * A lifecycle-hook failure (`session:bootstrap` / `session:shutdown`).
+   *
+   * No extension owns it, so putting the hook name in `extensionId` produced
+   * `[extension:session:bootstrap]` — a row that named an extension which does not exist and broke
+   * any per-extension aggregation. `source: "lifecycle"` keeps the attribution truthful.
+   */
+  private writeLifecycleLog(level: LogLevel, hook: string, msg: string): void {
+    this.writeLogPayload({ source: "lifecycle", hook, level, message: msg, category: "hooks" });
+  }
+
+  private writeLogPayload(payload: {
+    extensionId?: string;
+    source?: "lifecycle";
+    hook?: string;
+    level: LogLevel;
+    message: string;
+    category: LogCategory;
+  }): void {
     if (!this.options.eventBus) {
       // No agent wired (standalone runner): keep the pre-existing console behaviour, which prints
       // debug/info through `log` and never emits to stderr for a non-warning.
-      const message = `[extension:${extensionId}] ${msg}`;
-      if (level === "error") console.error(message);
-      else if (level === "warn") console.warn(message);
+      const label =
+        payload.source === "lifecycle"
+          ? `lifecycle:${payload.hook ?? "hook"}`
+          : `extension:${payload.extensionId ?? "unknown"}`;
+      const message = `[${label}] ${payload.message}`;
+      if (payload.level === "error") console.error(message);
+      else if (payload.level === "warn") console.warn(message);
       else console.log(message);
       return;
     }
@@ -1521,7 +1548,7 @@ export class ExtensionRunner {
     if (this.emittingExtensionLog) return;
     this.emittingExtensionLog = true;
     try {
-      this.emitExtensionEvent("extension:log", { extensionId, level, message: msg, category });
+      this.emitExtensionEvent("extension:log", payload);
     } finally {
       this.emittingExtensionLog = false;
     }

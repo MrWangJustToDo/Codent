@@ -8,7 +8,7 @@
  */
 
 import { deriveAgentState, projectAgentStatus, transition } from "../../runtime-types/agent-state.js";
-import { isActiveStatus, isTerminalStatus } from "../../runtime-types/agent-status.js";
+import { isActiveStatus, isBusyStatus, isTerminalStatus } from "../../runtime-types/agent-status.js";
 import {
   countPendingToolApprovals,
   firstPendingInteraction,
@@ -16,16 +16,12 @@ import {
   needsToolPhaseContinue,
 } from "../stream/tool-phase-utils.js";
 
-import {
-  whenClearForReconcilePolicy,
-  type AgentRunOutcome,
-  type StatusReconcilePolicy,
-  type WhenClearStatus,
-} from "./agent-run-outcome.js";
+import { whenClearForReconcilePolicy, type AgentRunOutcome, type StatusReconcilePolicy } from "./agent-run-outcome.js";
 
 import type { EmitAgentTelemetryFn } from "../../runtime-types/agent-events.js";
 import type { AgentState, AgentStateEventType, AgentTransitionEvent } from "../../runtime-types/agent-state.js";
 import type { AgentStatus } from "../../runtime-types/agent-status.js";
+import type { WhenClearStatus } from "../../runtime-types/session-payloads.js";
 import type { StreamChunk, ToolPhaseCompleteInfo, UIMessage } from "@tanstack/ai";
 
 export type { AgentRunOutcome, AgentRunOutcomeKind, AgentRunPath, StatusReconcilePolicy } from "./agent-run-outcome.js";
@@ -401,7 +397,7 @@ export class AgentStatusController {
     if (needsAgentResponseAfterTools(messages)) return;
     if (isTerminalStatus(status)) return;
 
-    if (status === "running" || status === "thinking" || status === "responding" || status === "compacting") {
+    if (isBusyStatus(status)) {
       const result = this.deps.getError() ? "error" : "completed";
       if (status === "compacting") this.dispatch({ type: "stream-end", result });
       else this.dispatch({ type: "settle", result });
@@ -492,7 +488,7 @@ export class AgentStatusController {
     }
     if (isTerminalStatus(status) || status === "completed" || status === "idle") return;
 
-    if (status === "running" || status === "thinking" || status === "responding" || status === "compacting") {
+    if (isBusyStatus(status)) {
       const result = this.deps.getError() ? "error" : "completed";
       if (status === "compacting") this.dispatch({ type: "stream-end", result });
       else this.dispatch({ type: "settle", result, clearWait: true });

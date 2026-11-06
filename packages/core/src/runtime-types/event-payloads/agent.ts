@@ -127,7 +127,12 @@ export type AgentEventPayloads = {
    * would never be recorded (the same trap `validate-extension-event-observation` §7b documents).
    */
   "extension:log": {
-    extensionId: string;
+    /** The extension that logged. Absent for a lifecycle-hook row (see `source`). */
+    extensionId?: string;
+    /** `lifecycle` = a core hook timed out/failed and no extension owns the row. */
+    source?: "extension" | "lifecycle";
+    /** Hook name when `source: "lifecycle"`. */
+    hook?: string;
     level: "debug" | "info" | "warn" | "error";
     message: string;
     /**

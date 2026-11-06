@@ -369,6 +369,9 @@ const view = ctx.ui.getContext();                             // model/status/us
   cleared when it is disabled.
 - Use \`notify\` for one-off events and \`render\` for anything that should persist.
 - \`ctx.ui.subscribe("context", handler)\` pushes UI-context changes instead of polling.
+- \`ctx.ui.getContext().usage\` (when the host has a reading) is
+  \`{ fillTokens, limitTokens, percent, costUsd }\` — the same reading and field names as
+  \`ctx.getContextUsage()\`, plus the percentage and session cost. \`undefined\` when unknown.
 
 ## Runtime access
 

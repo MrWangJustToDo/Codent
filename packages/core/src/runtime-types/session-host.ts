@@ -13,6 +13,7 @@ import type { PlanModeController, PlanModeState } from "../agent/plan/plan-mode-
 import type { ResolvedCoreEnv } from "../env";
 import type { EmitAgentTelemetryFn } from "./agent-events.js";
 import type { Epoch } from "./epoch.js";
+import type { WhenClearStatus } from "./session-payloads.js";
 import type { AgentLog } from "../agent/agent-log";
 import type { ToolApprovalTable } from "../agent/approval/tool-approval-table.js";
 import type { ToolCompactCache } from "../agent/compaction/tool-compact/tool-compact-cache.js";
@@ -123,7 +124,7 @@ export interface SessionHost {
   /** Reconcile approval / ask_user pause from restored UIMessages. */
   syncInteractionStateFromUIMessages: (
     messages: TanStackUIMessage[],
-    options?: { whenClear?: "idle" | "running" | "completed" }
+    options?: { whenClear?: WhenClearStatus }
   ) => void;
 }
 

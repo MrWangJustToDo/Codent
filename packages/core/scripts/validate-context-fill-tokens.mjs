@@ -208,7 +208,7 @@ const mk = () => {
 }
 
 // ---------------------------------------------------------------------------
-// 7. window.totalTokens (extension `windowTokens`) tracks the fill, not input-only
+// 7. window.totalTokens (extension `fillTokens`) tracks the fill, not input-only
 // ---------------------------------------------------------------------------
 {
   const usage = mk();

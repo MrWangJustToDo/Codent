@@ -92,12 +92,8 @@ export function createTaskPreforkMiddleware(deps: TaskPreforkMiddlewareDeps): Ch
     for (const toolCallId of [...descriptions.keys()]) {
       if (!coordinator.has(toolCallId)) descriptions.delete(toolCallId);
     }
-    deps.emitEvent?.("subagent:queue", {
-      queued: coordinator.queuedToolCallIds().map((toolCallId) => {
-        const description = descriptions.get(toolCallId);
-        return description ? { toolCallId, description } : { toolCallId };
-      }),
-    });
+    coordinator.syncQueuedDescriptions(descriptions);
+    deps.emitEvent?.("subagent:queue", { queued: coordinator.queueSnapshot() });
   };
 
   /**

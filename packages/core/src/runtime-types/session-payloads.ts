@@ -17,6 +17,15 @@ import type { ContentPart } from "@tanstack/ai";
 /** Active agent mode — mutually exclusive modes for the agent. */
 export type AgentMode = "normal" | "auto" | "plan";
 
+/**
+ * Which status a reconcile may clear a transient wait INTO.
+ *
+ * Shared by the state controller, the session host port and the agent's reconcile entry point; it
+ * used to be a local alias plus two hand-written literal unions, which drifted the moment one of
+ * them gained a value.
+ */
+export type WhenClearStatus = "idle" | "running" | "completed";
+
 /** L1 runtime status surface projected to AgentSession `state` channel. */
 export interface AgentL1State {
   status: AgentStatus;

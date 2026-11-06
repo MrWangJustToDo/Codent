@@ -10,17 +10,25 @@
 import { truncateText } from "../../utils/text-truncation.js";
 
 const STRING_PATTERNS: ReadonlyArray<[RegExp, string]> = [
-  // Authorization: Bearer xxx / x-api-key: xxx / api_key=xxx (quoted or bare)
-  [/(authorization\s*[:=]\s*)(?:bearer\s+)?[^\s"',;}]+/gi, "$1[redacted]"],
-  [/(x-api-key\s*[:=]\s*)[^\s"',;}]+/gi, "$1[redacted]"],
+  // Private keys first: they span lines and would otherwise be partly consumed by later rules.
   [
-    /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|passwd|pwd)\s*[:=]\s*)["']?[^\s"',;}]+/gi,
+    /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/g,
+    "[redacted private key]",
+  ],
+  // A tool-input preview is truncated, so an END marker is often cut off — redact the rest.
+  [/-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*/g, "[redacted private key]"],
+  // Authorization: Bearer xxx / x-api-key: xxx / api_key=xxx. `["']?` after the key covers JSON
+  // (`{"api_key":"…"}`), whose quote used to sit between the key and the `:` and defeat the rule.
+  [/(authorization["']?\s*[:=]\s*)["']?(?:bearer\s+)?[^\s"',;}]+/gi, "$1[redacted]"],
+  [/(x-api-key["']?\s*[:=]\s*)["']?[^\s"',;}]+/gi, "$1[redacted]"],
+  [
+    /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|passwd|pwd)["']?\s*[:=]\s*)["']?[^\s"',;}]+/gi,
     "$1[redacted]",
   ],
   // Env-style keys: AWS_SECRET_ACCESS_KEY=…, GITHUB_TOKEN=…, DEPLOY_KEY=… (the generic rule above
   // requires the keyword to be followed immediately by `:`/`=`, which `_` breaks).
   [
-    /(\b[A-Za-z0-9_]*(?:_KEY|_TOKEN|_SECRET|_SECRET_ACCESS_KEY|_PASSWORD|_PASS|_PWD)\s*[:=]\s*)["']?[^\s"',;}]+/gi,
+    /(\b[A-Za-z0-9_]*(?:_KEY|_TOKEN|_SECRET|_SECRET_ACCESS_KEY|_PASSWORD|_PASS|_PWD)\s*["']?\s*[:=]\s*)["']?[^\s"',;}]+/gi,
     "$1[redacted]",
   ],
   // Well-known token shapes even without a key name.
@@ -30,6 +38,11 @@ const STRING_PATTERNS: ReadonlyArray<[RegExp, string]> = [
   ],
   [/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, "[redacted]"],
   [/(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi, "$1[redacted]"],
+  // JWT (three base64url segments) and credentials embedded in a URL.
+  [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, "[redacted]"],
+  // Bounded scheme length: `[a-z0-9+.-]*` before a literal `://` backtracks quadratically on a
+  // long scheme-like token, and this runs on raw (pre-truncation) tool output.
+  [/(\b[a-z][a-z0-9+.-]{0,20}:\/\/)[^\s/@:]+:[^\s/@]+@/gi, "$1[redacted]@"],
   // Query-string credentials.
   [/([?&](?:api[_-]?key|access_token|refresh_token|token|key)=)[^&\s]+/gi, "$1[redacted]"],
 ];

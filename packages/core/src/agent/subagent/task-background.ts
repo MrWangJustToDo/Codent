@@ -24,6 +24,7 @@
  * (`reconcileSettledTaskParts` replays the settled payload from the ledger at the next model call).
  */
 
+import { isBusyStatus } from "../../runtime-types/agent-status.js";
 import { errorMessage } from "../../utils/errors.js";
 import { SESSION_END_CANCELLED_MESSAGE } from "../jobs/background-work.js";
 import { settleToolCallsAs } from "../stream/incomplete-tool-calls.js";
@@ -162,6 +163,17 @@ export function startBackgroundTask(input: StartBackgroundTaskInput): void {
   function settlePart(output: unknown, row: { status: BackgroundWorkTerminalStatus; body: string }): void {
     const display = writePart(output);
     runs.settleBackground(toolCallId, { ...row, output, display }, epoch);
+    // The settle is an ASYNC event outside the run. When the run that started this task has since
+    // been aborted, `wakeForBackgroundCompletion` refuses (deliberately), so no pump and no
+    // pump-complete persist follow — the channel write above would live only in memory. The next
+    // restore would then see the on-disk `running` handle and mark a FINISHED task interrupted.
+    // Persist here, under the same switch guard `writePart` uses. Only when no run is busy: a live
+    // pump owns the next `pump-complete`, and writing its mid-stream transcript here would land a
+    // partial assistant message on disk.
+    const channel = managed.getUI?.();
+    if (channel && managed.isSessionSwitching?.() !== true && !isBusyStatus(managed.getStatus())) {
+      managed.maybeSaveSessionUIMessages?.(channel.getMessages(), "pump-complete");
+    }
   }
 
   /**

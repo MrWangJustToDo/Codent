@@ -37,7 +37,9 @@ export const LOG_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
  * suffix test would leave every segment behind.
  */
 function isAgentLogFile(name: string): boolean {
-  return name.endsWith(".log") || /\.log\.\d+$/.test(name);
+  // `.log` is the active file, `.log.N` the rotated segments, and `.log.N.<ts>.<token>` a segment
+  // archived when two processes raced the same rotation destination.
+  return name.endsWith(".log") || /\.log\..+$/.test(name);
 }
 
 const LOG_SWEEPER = createStaleFileSweeper({

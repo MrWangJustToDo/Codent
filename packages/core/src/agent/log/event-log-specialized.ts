@@ -200,6 +200,7 @@ const NOTABLE_STATUSES: ReadonlySet<string> = new Set(["error", "aborted"]);
 function logAgentStatus(log: AgentLog, event: AgentEvent): void {
   const d = p(event);
   const to = typeof d.to === "string" ? d.to : "unknown";
+  const from = typeof d.from === "string" ? d.from : "?";
   const stateEvent = typeof d.event === "string" ? d.event : undefined;
   const wait = typeof d.wait === "string" ? d.wait : undefined;
   if (!NOTABLE_STATUSES.has(to)) {
@@ -207,13 +208,16 @@ function logAgentStatus(log: AgentLog, event: AgentEvent): void {
     if (stateEvent) {
       if (MECHANICAL_STATE_EVENTS.has(stateEvent)) return;
       // An approval pause is bracketed by the request/resolve rows; a client question is not
-      // (ask_user emits neither), so its pause/resume stays visible.
-      if ((stateEvent === "pause" || stateEvent === "resume") && wait !== "question") return;
+      // (ask_user emits neither), so its pause stays visible. The matching RESUME carries no
+      // `wait` (the event clears it), so it must be recognized by the state it leaves: only
+      // `awaiting_user` has a visible pause to close.
+      if (stateEvent === "pause" && wait !== "question") return;
+      if (stateEvent === "resume" && from !== "awaiting_user") return;
     } else if (!stateEvent) {
       // An unexplained transition is worth a row (legacy `setStatus` without an event).
     }
   }
-  entry(log, event, "info", "agent", `Status: ${typeof d.from === "string" ? d.from : "?"} → ${to}`, {
+  entry(log, event, "info", "agent", `Status: ${from} → ${to}`, {
     from: d.from,
     to,
     ...(stateEvent ? { event: stateEvent } : {}),
@@ -276,7 +280,6 @@ function logSessionTitle(log: AgentLog, event: AgentEvent): void {
 function logExtensionLog(log: AgentLog, event: AgentEvent): void {
   const d = p(event);
   const level = d.level === "debug" || d.level === "warn" || d.level === "error" ? d.level : "info";
-  const extensionId = typeof d.extensionId === "string" ? d.extensionId : "unknown";
   const message = typeof d.message === "string" ? d.message : "";
   // `ctx.logger.log(level, category, msg)` may name a category; an unknown one falls back to the
   // historical `hooks` bucket instead of inventing a value the reader cannot filter on.
@@ -284,7 +287,13 @@ function logExtensionLog(log: AgentLog, event: AgentEvent): void {
     typeof d.category === "string" && (LOG_CATEGORIES as readonly string[]).includes(d.category)
       ? (d.category as LogCategory)
       : "hooks";
-  entry(log, event, level, category, `[extension:${extensionId}] ${message}`);
+  // A lifecycle-hook row has no extension to attribute: the hook name used to be written into
+  // `extensionId`, which produced `[extension:session:bootstrap]` and broke per-extension stats.
+  const isLifecycle = d.source === "lifecycle";
+  const label = isLifecycle
+    ? `lifecycle:${typeof d.hook === "string" ? d.hook : "hook"}`
+    : `extension:${typeof d.extensionId === "string" ? d.extensionId : "unknown"}`;
+  entry(log, event, level, category, `[${label}] ${message}`);
 }
 
 /**

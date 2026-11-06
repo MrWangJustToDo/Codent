@@ -311,7 +311,7 @@ function extContext() {
   // The deadline signal is exposed separately from the run signal, so classification stays correct.
   assert.ok(/deadlineSignal\?: AbortSignal/.test(defineSrc), "ToolExecuteCtx exposes a separate deadlineSignal");
   assert.ok(
-    /deadlineSignal\?: AbortSignal/.test(readFileSync(`${SRC}/agent/extension/types.ts`, "utf8")),
+    /deadlineSignal\?: AbortSignal/.test(readFileSync(`${SRC}/agent/extension/tool-execution-types.ts`, "utf8")),
     "ToolExecutionOptions exposes a separate deadlineSignal"
   );
 

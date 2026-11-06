@@ -118,6 +118,17 @@ export class AgentLog {
   }
 
   /**
+   * Whether an entry at `level` would be kept.
+   *
+   * Exposed so a producer can skip building an expensive payload (the bridge used to
+   * `JSON.stringify` every tool input/output BEFORE the seam dropped the row). Policy still owns
+   * the decision; this only tells a caller whether it is worth constructing.
+   */
+  isLevelEnabled(level: LogLevel): boolean {
+    return this.shouldLog(level);
+  }
+
+  /**
    * Set this agent's profile/task attribution for subsequent entries.
    */
   setScope(scope: LogScope): void {

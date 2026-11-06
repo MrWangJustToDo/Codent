@@ -8,12 +8,17 @@
  * flush is the last step, never the first.
  */
 
+import { withCallbackTimeout } from "../agent/extension/callback-timeout.js";
 import { clearTaskRuns } from "../agent/subagent/subagent-runs.js";
 import { SUBAGENT_ABORT_REASONS } from "../agent/subagent/subagent-stop-reason.js";
+import { errorMessage } from "../utils/errors.js";
 
 import type { AgentRegistry } from "./agent-registry.js";
 import type { AgentLog } from "../agent/agent-log/agent-log.js";
 import type { SessionOwnership } from "../agent/session/session-ownership.js";
+
+/** Upper bound on one external await in the async teardown chain. */
+const TEARDOWN_STEP_TIMEOUT_MS = 60_000;
 
 export interface LifecycleCoordinatorDeps {
   registry: AgentRegistry;
@@ -113,15 +118,38 @@ export class LifecycleCoordinator {
     } catch {
       runner = null;
     }
-    const teardown = (async () => {
+    // The async half awaits external work (a switch, a pump, a remote save). None of it has a
+    // timeout of its own, so one hung step made `settleTeardowns()` / `dispose()` never resolve —
+    // the same "quit does not quit" failure the extension callbacks were bounded against, one layer
+    // down. A timeout means "stop waiting", never "cancel": cleanup below still runs.
+    const settleStep = async (label: string, step: () => Promise<unknown> | undefined): Promise<void> => {
       try {
-        // A switch can still be between its awaits. Let it finish before closing persistence,
-        // flushing the sink, and releasing the disk-session claim; otherwise it can adopt a new
-        // session and re-bind writers after teardown has already run.
-        await managedAgent.sessionLifecycle?.settle?.();
-      } catch {
-        // Best-effort: teardown still has to close and flush what exists.
+        const pending = step();
+        if (!pending) return;
+        await withCallbackTimeout(pending, label, TEARDOWN_STEP_TIMEOUT_MS);
+      } catch (error) {
+        // A timeout means "stop waiting" (warn); any other throw is a real teardown failure and is
+        // reported as an error, so a broken step cannot hide behind the timeout wording.
+        const message = errorMessage(error);
+        const timedOut = /did not settle within \d+ms$/.test(message);
+        try {
+          managedAgent.emitEvent("session:diagnostic", {
+            area: "session",
+            message: timedOut ? `${label} did not settle; teardown continued` : `${label} failed; teardown continued`,
+            level: timedOut ? "warn" : "error",
+            error: message,
+          });
+        } catch {
+          // Reporting must not break teardown either.
+        }
       }
+    };
+
+    const teardown = (async () => {
+      // A switch can still be between its awaits. Let it finish before closing persistence,
+      // flushing the sink, and releasing the disk-session claim; otherwise it can adopt a new
+      // session and re-bind writers after teardown has already run.
+      await settleStep("session switch settlement", () => managedAgent.sessionLifecycle?.settle?.());
 
       // ORDER MATTERS: let the aborted run finish BEFORE removing what it writes through. The
       // pump's final tool results/usage land through registrations, and doing extension teardown
@@ -129,13 +157,9 @@ export class LifecycleCoordinator {
       // the last assistant message could be lost). Background jobs stay after the extensions on
       // purpose: their delivery goes through the extension middleware, so tearing that down first
       // stops new work from being pushed into a session that is closing.
-      try {
-        // Let the pump write its final tool results/usage before persistence closes. The abort
-        // above should end it; a parked approval has no live pump and resolves immediately.
-        await managedAgent.getChatController?.()?.settleRun?.();
-      } catch {
-        // Best effort; close() still drains what was admitted.
-      }
+      // Let the pump write its final tool results/usage before persistence closes. The abort above
+      // should end it; a parked approval has no live pump and resolves immediately.
+      await settleStep("chat pump settlement", () => managedAgent.getChatController?.()?.settleRun?.());
 
       try {
         if (runner) {
@@ -155,22 +179,13 @@ export class LifecycleCoordinator {
         // A failed job teardown must not skip the log flush below.
       }
 
-      try {
-        // Close first: it waits both the serialized queue and direct pendingSaves
-        // (e.g. the async title write) and refuses new writes. awaitPersistIdle alone
-        // only covers the queue.
-        await managedAgent.session?.close?.();
-      } catch {
-        // Best effort; the fallback drain/log flush below still runs.
-      }
-      try {
-        // The abort/finalize path may have queued a final session write. Drain it as a
-        // fallback before releasing the disk-session claim: otherwise another agent can
-        // resume the id and receive this agent's late `pump-complete`.
-        await managedAgent.session?.awaitPersistIdle?.();
-      } catch {
-        // Best effort; the log flush below still runs.
-      }
+      // Close first: it waits both the serialized queue and direct pendingSaves (e.g. the async
+      // title write) and refuses new writes. `awaitPersistIdle` alone only covers the queue.
+      await settleStep("session close", () => managedAgent.session?.close?.());
+      // The abort/finalize path may have queued a final session write. Drain it as a fallback
+      // before releasing the disk-session claim: otherwise another agent can resume the id and
+      // receive this agent's late `pump-complete`.
+      await settleStep("session persist drain", () => managedAgent.session?.awaitPersistIdle?.());
 
       try {
         // Land buffered teardown/abort entries before the sink is dropped. Awaited: on a
