@@ -98,8 +98,10 @@ export class ToolAuthorizationService {
       // caches this outcome for the execution seam, the extension never got a second chance with
       // the real arguments.
       const hookArgs = parseToolInput(toolCall);
+      // The name check is already the left conjunct; without a registry the honest default is
+      // "this is the built-in command" (the documented fallback), not "skip command safety".
       const isCommand =
-        toolCall.name === BUILTIN_TOOL_NAMES.runCommand && (this.deps.isIncumbentTool?.(toolCall.name) ?? false);
+        toolCall.name === BUILTIN_TOOL_NAMES.runCommand && (this.deps.isIncumbentTool?.(toolCall.name) ?? true);
       // An answered call is not re-decided, but a DENY may still replace it: the analyzer can
       // resolve after the user answered (it awaits CoreEnv while the request is on screen), and
       // execution cannot happen in that window.

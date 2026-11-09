@@ -102,8 +102,9 @@ export const DEFAULT_AGENT_SESSION_CHANNELS: readonly AgentSessionChannel[] = [
   // an `extension.toggle` can add or remove a tool, and a client that had to opt in explicitly
   // would keep rendering the pre-toggle catalog until a reconnect.
   "tool-presentation",
-  // `mode` carries the retained `session:mode` projection (auto / plan phase / reasoning effort)
-  // and `extensions` the retained `session:extensions` summary. Both are session facts a default
+  // `mode` carries the retained `session:mode` projection (`{ mode, autoMode }`; reasoning effort
+  // lives on the `state` channel) and `extensions` the retained `session:extensions` summary. Both
+  // are session facts a default
   // subscriber must see: without them a remote client (whose SSE subscription omits `channels`)
   // keeps the old mode label and extension list until it reconnects. A host that wants to project
   // them already had to opt in by hand — ACP did exactly that — which is the drift this closes.

@@ -53,6 +53,9 @@ const PLAN_MUTATIONS = new Set<AgentSessionCommand["type"]>([
   // switch wrote the LEAVING session's identity while the persist was refused, then the restore
   // overwrote the live value — a divergence the host could not observe.
   "rename",
+  // The generated-title path also persists a name; without the guard a slow side query can finish
+  // inside the unload/load window and write the leaving conversation's title into the target.
+  "rename.generate",
   "model.set",
   "effort.set",
 ]);
@@ -116,7 +119,7 @@ export async function dispatchLocalAgentSessionCommand(
         if (chat) {
           chat.stop();
         } else {
-          managed.abort("user-cancelled");
+          managed.abort("user-cancelled", { userCancel: true });
         }
         return { ok: true };
       }

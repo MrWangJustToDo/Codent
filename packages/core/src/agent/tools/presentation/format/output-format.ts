@@ -260,6 +260,12 @@ function formatAskUserOutput(output: {
     }
     return lines.join("\n");
   }
+  // A multi-select question answered ONLY with free text has no picked options. It must not be
+  // labelled "Selected:" — that reads as a choice the user never made.
+  if (multiSelect && (!selected || selected.length === 0)) {
+    lines.push(`Answer: ${truncateLine(draft ?? answer ?? "")}`);
+    return lines.join("\n");
+  }
   // Single-select / no options: label distinguishes a picked option from a
   // free-form typed answer, mirroring how the question itself is shown in the
   // tool header.

@@ -222,6 +222,10 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
     }
     await archiveSegment(`${filePath}.1`);
     if (await envFs.exists(filePath)) await moveSegment(filePath, `${filePath}.1`, { active: true });
+    // `archiveSegment` creates `.log.<ts>.<token>` names that did not exist when the
+    // once-per-process sweep ran. Re-arm it after a rotation, or a long-lived process (CLI + ACP
+    // over one workspace) never ages those segments out.
+    void sweepAgentLogs(env, { force: true });
   };
 
   /**

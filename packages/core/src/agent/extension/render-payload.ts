@@ -60,17 +60,23 @@ function isRenderable(payload: unknown): payload is ExtensionRenderPayload {
 }
 
 /**
- * Normalize a published payload: empty / non-renderable / non-serializable
- * values all collapse to "remove the slot" rather than being retained.
+ * Normalize a published payload.
+ *
+ * `null`/`undefined` and a whitespace-only string mean "remove the slot". Anything else that is not a
+ * renderable node, or that cannot survive JSON serialization, is a BUG in the publisher and is
+ * thrown so `ctx.ui.render` can report it (`agent:extension-error`). Folding those into "remove"
+ * made a malformed publish indistinguishable from a deliberate clear, and the publisher's report
+ * path was unreachable because this function never threw.
  */
 export function normalizePayload(payload: unknown): NormalizedPayload {
+  // `undefined` and `null` are both the common "nothing to show" value (a JS extension passing an
+  // optional line), not a publisher bug: keep treating them as "remove the slot".
+  if (payload === null || payload === undefined) return EMPTY_PAYLOAD;
   if (typeof payload === "string") {
     return payload.trim() === "" ? EMPTY_PAYLOAD : { value: payload, fingerprint: serializePayload(payload) };
   }
-  if (!isRenderable(payload)) return EMPTY_PAYLOAD;
-  try {
-    return { value: payload, fingerprint: serializePayload(payload) };
-  } catch {
-    return EMPTY_PAYLOAD;
+  if (!isRenderable(payload)) {
+    throw new TypeError("extension render payload is not a renderable text/row/column/box value");
   }
+  return { value: payload, fingerprint: serializePayload(payload) };
 }

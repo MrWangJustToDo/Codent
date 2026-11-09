@@ -35,6 +35,15 @@ export type { RunAgentStreamInput } from "./run-agent.js";
 export const SKILL_DIRS_ENV_VAR = "AGENT_SKILL_DIRS";
 
 /**
+ * Upper bound on the "wait for an in-flight build" step of `dispose()`.
+ *
+ * Bootstrap reads workspace files through CoreEnv (agent doc, skill dirs, extension loader) and
+ * those reads have no timeout. Waiting without one let a stuck remote read turn `dispose()` — and
+ * therefore process exit — into a permanent hang.
+ */
+const BUILD_WAIT_TIMEOUT_MS = 60_000;
+
+/**
  * Default skill directories to load, tagged with the source they are attributed to.
  *
  * Load order (first loaded wins for duplicate skill names):
@@ -299,7 +308,18 @@ export class AgentManager {
     // isolate handles. Waiting for it means `dispose()` resolving really means "nothing is left",
     // instead of leaving cleanup to a microtask the host may never reach before process.exit.
     if (this.buildsInFlight > 0) {
-      await new Promise<void>((resolve) => this.buildWaiters.push(resolve));
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, BUILD_WAIT_TIMEOUT_MS);
+        // A disposed host is trying to exit: the bound must not keep the loop alive on its own.
+        // Cast: core compiles with DOM lib where `setTimeout` returns `number`.
+        (timer as { unref?: () => void }).unref?.();
+        // A build that does finish clears the timer; a timeout leaves the waiter in place, and a
+        // second `resolve` is a no-op.
+        this.buildWaiters.push(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
     }
     // Each stage runs even when an earlier one throws. A stage that FAILS leaves the manager
     // retryable: `dispose()` drops the cached promise on rejection, and `tornDown` stays false so

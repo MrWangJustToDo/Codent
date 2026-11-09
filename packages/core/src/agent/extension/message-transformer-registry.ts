@@ -79,6 +79,12 @@ export interface MessageTransformerRegistryHost {
   reportTransformerFailure(extensionId: string, err: unknown): void;
   /** The extension's live context, for the transformer's second argument. */
   getContext?: (extensionId: string) => ExtensionContext | undefined;
+  /**
+   * The runner's configured callback bound. Lazy so it reads the runner's current value at apply
+   * time (the registry is a field initializer, before the runner constructor body assigns it);
+   * omitting it keeps the process default for standalone/validator harnesses.
+   */
+  timeoutMs?: number | (() => number);
 }
 
 export class MessageTransformerRegistry {
@@ -144,6 +150,10 @@ export class MessageTransformerRegistry {
   async apply(ctx: MessageTransformContext): Promise<ModelMessage[]> {
     // Fresh outer array + fresh message objects + fresh content containers (see ownership note).
     let current: ModelMessage[] = ctx.messages.map(cloneModelMessage);
+    const timeoutMs =
+      typeof this.host.timeoutMs === "function"
+        ? this.host.timeoutMs()
+        : (this.host.timeoutMs ?? EXTENSION_CALLBACK_TIMEOUT_MS);
 
     // Declared dispatch order, load sequence as the tie-break — not insertion order.
     const ordered = Array.from(this.transformers, ([extensionId, entry]) => ({ extensionId, ...entry })).sort((a, b) =>
@@ -164,7 +174,7 @@ export class MessageTransformerRegistry {
         const result = await withCallbackTimeout(
           Promise.resolve(transformer({ ...ctx, extensionId, messages: current }, liveContext)),
           `message transformer (${extensionId})`,
-          EXTENSION_CALLBACK_TIMEOUT_MS
+          timeoutMs
         );
         if (result === undefined) continue;
         if (!isModelMessageArray(result)) {

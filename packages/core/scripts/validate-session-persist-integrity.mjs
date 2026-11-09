@@ -523,4 +523,38 @@ function newService() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// 8. A restore freezes writes until adoption, and adoption releases ONE level
+// ---------------------------------------------------------------------------
+//
+// The target's model/effort are applied to the host BEFORE the target transcript is adopted. At
+// that moment `getSessionData()` still names the LEAVING session, so an unguarded persist wrote the
+// target's selection into the departure's file. The pause is nesting-safe: adoption releases only
+// the restore's own level, not every level an outer owner may hold.
+{
+  setupEnv();
+  const { service, data } = newService();
+  data.name = "pause-gate"; // skip auto-title
+  const input = () => ({
+    usage: new UsageTracker(),
+    todoManager: null,
+    uiMessages: [textMessage("m1", "hi")],
+  });
+
+  service.pausePersist();
+  service.pausePersist();
+  assert.equal(await service.persistSession(input()), false, "a paused restore refuses writes at dispatch");
+
+  const target = { ...data, id: "ses_pause_target", name: "target" };
+  service.adoptRestoredSession({ session: target, uiMessages: [] }, { usage: new UsageTracker(), todoManager: null });
+  assert.equal(
+    await service.persistSession(input()),
+    false,
+    "adoption releases its own level only — an outer pause still holds"
+  );
+
+  service.resumePersist();
+  assert.equal(await service.persistSession(input()), true, "after the outer release writes land again");
+}
+
 console.log("session-persist-integrity validation passed");

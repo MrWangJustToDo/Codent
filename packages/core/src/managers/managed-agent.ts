@@ -209,6 +209,7 @@ import type {
   SessionInteractionsSnapshot,
   SessionJobSummary,
   SessionJobsSnapshot,
+  QueuedMessagesSnapshot,
   WhenClearStatus,
 } from "../runtime-types/session-payloads.js";
 
@@ -441,6 +442,9 @@ export class ManagedAgent {
   /** Session-transition state coalescing: publish one L1 frame after unload/load commits. */
   private stateBatchDepth = 0;
   private stateBatchPending = false;
+  /** The status the batch started from; the net move is emitted once at the end. */
+  private stateBatchStartStatus: AgentStatus | null = null;
+  private stateBatchStatusPending = false;
 
   // ============================================================================
   // Composed services / controllers
@@ -895,6 +899,7 @@ export class ManagedAgent {
         run: this.run,
         statusController: this.statusController,
         stopActiveRun: (reason) => this.stopActiveRun(reason),
+        peekQueuedInput: () => this.getChatController()?.getQueuedMessages() ?? { steer: [], followUp: [] },
         clearQueuedInput: () => this.clearQueuedMessages(),
         abortManualCompaction: (reason) => {
           this.compactions.abortForTeardown(reason);
@@ -978,7 +983,7 @@ export class ManagedAgent {
             }
           }
         },
-        resetBackgroundWork: (reason) => {
+        resetBackgroundWork: (reason, options) => {
           // Drop the facade whole: its sources are closed/generation-bumped by `reset()`, and the
           // next session builds a fresh pair (same lifecycle the command registry always had).
           // Return the promise: the switch transaction awaits it before completing (a re-resume
@@ -987,6 +992,10 @@ export class ManagedAgent {
           this.backgroundWork = undefined;
           this.commandService = undefined;
           this.backgroundWakeSignature = null;
+          // The dedupe map describes the session being left. On a SAME-session reload the jobs are
+          // the same jobs, so keeping it is what stops a still-running job from re-announcing
+          // `job:changed{running}` after the reload; a real switch clears it with the conversation.
+          if (!options?.sameSession) this.lastJobStatuses.clear();
           if (!work) return Promise.resolve();
           return work.reset(reason).catch((error: unknown) => {
             this.emitDiagnostic("jobs", "Failed to reset background work", {
@@ -1106,13 +1115,23 @@ export class ManagedAgent {
     // not this setter's: the pump's mechanical transitions — the approval bracket, chunk-derived
     // status, reconcile — are already described by the events that caused them, and suppressing
     // them here is what keeps the timeline from being 31% status lines.
+    // A state batch (session unload → load) publishes ONE final L1 frame after adoption. Emitting
+    // the intermediate `agent:status` transitions here made push consumers observe statuses the
+    // committed snapshot never contains — and the frames describe the session being left while
+    // they are delivered after/during the switch. The switch's own row records the transition.
     if (prev !== status) {
-      this.emitEvent("agent:status", {
-        from: prev,
-        to: status,
-        ...(stateEvent ? { event: stateEvent } : {}),
-        ...(wait ? { wait } : {}),
-      });
+      if (this.stateBatchDepth === 0) {
+        this.emitEvent("agent:status", {
+          from: prev,
+          to: status,
+          ...(stateEvent ? { event: stateEvent } : {}),
+          ...(wait ? { wait } : {}),
+        });
+      } else {
+        // One NET status row is emitted by `endStateBatch`: intermediate transitions describe the
+        // session being left and would be delivered after that session was replaced.
+        this.stateBatchStatusPending = true;
+      }
     }
     this.emitStateChange();
   }
@@ -1337,6 +1356,10 @@ export class ManagedAgent {
    * @internal
    */
   beginStateBatch(): void {
+    if (this.stateBatchDepth === 0) {
+      this.stateBatchStartStatus = this.currentStatus;
+      this.stateBatchStatusPending = false;
+    }
     this.stateBatchDepth += 1;
   }
 
@@ -1344,7 +1367,17 @@ export class ManagedAgent {
   endStateBatch(): void {
     if (this.stateBatchDepth === 0) return;
     this.stateBatchDepth -= 1;
-    if (this.stateBatchDepth > 0 || !this.stateBatchPending) return;
+    if (this.stateBatchDepth > 0) return;
+    const start = this.stateBatchStartStatus;
+    const statusChanged = this.stateBatchStatusPending;
+    this.stateBatchStartStatus = null;
+    this.stateBatchStatusPending = false;
+    // A net status move is still a timeline fact (`error`/`aborted` are NOTABLE_STATUSES even when
+    // the switch's own row exists). One merged row, attributed to the reset that produced it.
+    if (statusChanged && start !== null && start !== this.currentStatus) {
+      this.emitEvent("agent:status", { from: start, to: this.currentStatus, event: "reset" });
+    }
+    if (!this.stateBatchPending) return;
     this.stateBatchPending = false;
     this.publishStateChange();
   }
@@ -2767,8 +2800,11 @@ export class ManagedAgent {
    * (the same identity wired into TanStack `chat` by {@link prepareForRun}) and
    * any pending tool controllers.
    */
-  abort(reason?: string): void {
-    this.compactions.abortForTeardown(reason ?? "aborted");
+  abort(reason?: string, options: { userCancel?: boolean } = {}): void {
+    // A user stop leaves the terminal verdict to `interrupt` below; a teardown restores the phase
+    // because no run remains to publish one.
+    if (options.userCancel) this.compactions.abortForUserCancel(reason ?? "user-cancelled");
+    else this.compactions.abortForTeardown(reason ?? "aborted");
     abortManagedAgentRun(this, reason);
     // A stopped run must not keep pumping: `pumpToolPhases` only checks `token.isCurrent` after
     // the stream, so without this an aborted/destroyed agent still ran plan sync, auto-approve and
@@ -2953,6 +2989,7 @@ export class ManagedAgent {
     this.backgroundWork = undefined;
     this.commandService = undefined;
     this.backgroundWakeSignature = null;
+    this.lastJobStatuses.clear();
     // No command-source fallback: the source is only ever built through the facade
     // (`getCommandService()` ensures it first), and the two fields are dropped together, so
     // "a source without a facade" does not exist.
@@ -3099,14 +3136,25 @@ export class ManagedAgent {
   }
 
   /**
-   * Whether the live registration under `name` is the tool this agent was seeded with.
+   * RENDERING predicate: may a built-in-only renderer handle this row?
    *
-   * Dispatch is by name, so a host's built-in-only renderer or classification must check this
-   * rather than compare the name: an extension may legitimately register (or shadow) `read_file`,
-   * and only the registry knows which implementation actually runs.
+   * Answers `true` when nothing is registered under the name (a historical row whose tool was
+   * unregistered), which is what keeps the local and remote rendering of a restored session
+   * agreeing. Policy/identity decisions must use {@link isIncumbentTool} instead.
    */
   isBuiltinTool(toolName: string): boolean {
     return this.toolFacet.isBuiltinTool(toolName);
+  }
+
+  /**
+   * EXACT identity: is the LIVE implementation under `name` the one this agent was seeded with?
+   *
+   * Read by the task pre-fork, plan-mode `run_command` and the extensions middleware's
+   * `modifiedArgs` refusal: an extension that shadows `task`/`run_command` must not be treated as
+   * the built-in, and a name with no live registration is not the built-in either.
+   */
+  isIncumbentTool(toolName: string): boolean {
+    return this.toolFacet.isIncumbentTool(toolName);
   }
 
   /**
@@ -3153,9 +3201,9 @@ export class ManagedAgent {
     return this.chatController;
   }
 
-  /** Drop steer/follow-up queues without clearing the transcript. */
-  clearQueuedMessages(): void {
-    this.chatController?.clearQueuedMessages();
+  /** Drop steer/follow-up queues without clearing the transcript. Returns what was dropped. */
+  clearQueuedMessages(): QueuedMessagesSnapshot {
+    return this.chatController?.clearQueuedMessages() ?? { steer: [], followUp: [] };
   }
 
   /** Take back the last queued message (see `AgentChatController.popQueuedMessage`). */

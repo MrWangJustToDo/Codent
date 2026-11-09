@@ -506,7 +506,15 @@ const readBody = async (manager, filename) => manager.readMemory(filename);
   // (that tautology was here before — it now checks the table the bridge actually reads).
   const sideQueryRule = DEFAULT_EVENT_LOG_RULES["side-query:error"];
   assert.ok(sideQueryRule && sideQueryRule !== "specialized", "side-query:error has a generic rule");
-  assert.equal(sideQueryRule.level, "warn", "a failed side query is a warning");
+  // The level resolves per instance: a structured failure that is ABOUT to retry in text mode is
+  // not a final failure (it reads as info); a terminal one is a warning.
+  assert.equal(typeof sideQueryRule.level, "function", "the level is resolved per instance");
+  assert.equal(
+    sideQueryRule.level({ payload: { fallback: "text" } }),
+    "info",
+    "a retrying side query is informational"
+  );
+  assert.equal(sideQueryRule.level({ payload: {} }), "warn", "a terminal side-query failure is a warning");
   assert.equal(sideQueryRule.category, "side-query", "…filed under the port's own category");
 
   console.log("✓ a rejected merge does not delete its sources");

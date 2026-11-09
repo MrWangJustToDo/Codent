@@ -122,9 +122,9 @@ export class DefaultExtensionUI implements ExtensionUI {
 
   /**
    * Write a render payload into a surface slot. `ownerId` is supplied by `ExtensionRunner.wrapUi`
-   * so a disabled extension's slots can be cleared later. Empty/whitespace raw strings,
-   * non-renderable payloads, and payloads that are not JSON-serializable are all normalized to
-   * `null` (remove the slot).
+   * so a disabled extension's slots can be cleared later. `null` and whitespace-only strings
+   * remove the slot; a non-renderable or non-serializable payload is a publisher bug and is
+   * reported (the previous slot is left untouched).
    */
   render(surface: string, key: string, payload: ExtensionRenderPayload | null, ownerId?: string): void {
     try {
@@ -147,7 +147,9 @@ export class DefaultExtensionUI implements ExtensionUI {
     } catch (error) {
       // Failure contained: a broken publish must not break the host UI or the agent loop. It is
       // REPORTED now, though — a malformed payload used to vanish without a trace.
-      this.reportFailure?.(ownerId ?? "unknown", error, "extension:ui:render");
+      // Name the slot: the phase alone cannot tell an operator which surface/key published the
+      // malformed payload.
+      this.reportFailure?.(ownerId ?? "unknown", error, `extension:ui:render:${surface}/${key}`);
     }
   }
 

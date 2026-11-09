@@ -281,8 +281,9 @@ export interface AgentEventBus {
 
   /**
    * Register an interceptor for an exact name or a `prefix:*` pattern. `rank` is the declaring
-   * extension's dispatch position; omit it for a non-extension interceptor (order 0, inserted
-   * after every ranked one).
+   * extension's dispatch position; omit it for a non-extension interceptor (order 0, which sorts
+   * by `order` first — an extension that declares a POSITIVE order runs after it, despite the
+   * maximum `seq` only breaking ties inside one order).
    */
   onIntercept<T extends InterceptableEvent>(
     pattern: string,

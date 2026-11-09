@@ -19,6 +19,11 @@
  * 6. `CompactionController.cancel()` restores the run phase. Dropping the lease without
  *    `restoreStatusFor` left `run: compacting` forever, which rejects every later `prepare`.
  * 7. `interrupt` clears `resumeStream` with the other two lease-phase fields.
+ * 8. A reset inside an unsettled session switch is refused.
+ * 9. A USER stop of a compaction emits ONE net status move (no restored phase in between).
+ * 10. A user stop while `run: compacting, outcome: error` restores the phase (no wedge).
+ * 11. A manual compaction's user cancel does not fabricate a run abort.
+ * 12. A state batch emits ONE merged `agent:status` (and nested/empty batches emit none).
  *
  * Run: pnpm --filter @codent/core run validate:agent-state-recovery
  */
@@ -306,6 +311,120 @@ const CHUNK = { type: "REASONING_MESSAGE_CONTENT", delta: "hmm" };
     lifecycle.isTransitioning = original;
   }
   assert.equal(agent.reset(), true, "outside a switch the reset runs");
+}
+
+// ---------------------------------------------------------------------------
+// 9. A USER stop of a compaction publishes ONE net status move
+// ---------------------------------------------------------------------------
+//
+// `abort()` used to call `abortForTeardown` for every caller, which restores the pre-compaction
+// phase before `interrupt` writes `aborted`. That produced `compacting → running → aborted`; a
+// consumer that treats "left compacting" as the compaction's outcome read the cancel as a
+// completion. The user path now drops the lease without restoring, so `interrupt` is the one frame.
+{
+  const agent = await makeAgent("compact-user-cancel");
+  const statuses = [];
+  agent
+    .getEventBus()
+    .on("agent:status", (event) => statuses.push([event.payload.from, event.payload.to]), { replay: false });
+
+  const lease = agent.compactions.begin("auto");
+  assert.ok(lease, "an auto lease is granted from idle");
+  statuses.length = 0;
+
+  agent.abort("user-cancelled", { userCancel: true });
+  assert.equal(agent.getStatus(), "aborted", "the user stop settles the turn as aborted");
+  assert.equal(agent.getAgentState().run, "finalizing", "the compaction phase is gone");
+  assert.deepEqual(statuses, [["compacting", "aborted"]], "exactly one net move — no restored phase in between");
+
+  // The producer's finally is what releases the lease in production.
+  agent.compactions.release(lease);
+  assert.equal(agent.compactions.isRunning(), false, "a cancelled lease no longer owns the agent");
+  assert.equal(agent.transitionStatus({ type: "prepare" }), "running", "the next turn is accepted");
+}
+
+// ---------------------------------------------------------------------------
+// 10. The terminal-outcome wedge: a user stop while `run: compacting, outcome: error`
+// ---------------------------------------------------------------------------
+//
+// `interrupt` deliberately keeps an existing `error`/`aborted` verdict and therefore never moves
+// `run` out of `compacting`. A user cancel that trusts `interrupt` to publish the verdict would
+// leave the lease gone and the phase stuck — every later `prepare`/`compaction-start` is rejected.
+// The cancel must restore the phase in exactly that case.
+{
+  const agent = await makeAgent("compact-user-cancel-wedge");
+  const lease = agent.compactions.begin("reactive");
+  assert.ok(lease);
+  agent.transitionStatus({ type: "fail", error: "summarizer failed" });
+  assert.equal(agent.getAgentState().run, "compacting", "the lease keeps the run phase");
+  assert.equal(agent.getAgentState().outcome, "error", "the failure is recorded behind the lease");
+
+  agent.abort("user-cancelled", { userCancel: true });
+  assert.notEqual(agent.getAgentState().run, "compacting", "the phase is restored, not abandoned");
+  assert.equal(agent.getStatus(), "error", "the existing verdict is not rewritten to aborted");
+  assert.equal(agent.transitionStatus({ type: "prepare" }), "running", "the session is usable again");
+}
+
+// ---------------------------------------------------------------------------
+// 11. A manual compaction's user cancel does not fabricate a run abort
+// ---------------------------------------------------------------------------
+{
+  const agent = await makeAgent("compact-manual-user-cancel");
+  let aborts = 0;
+  agent.getEventBus().on("agent:abort", () => (aborts += 1), { replay: false });
+  const lease = agent.compactions.begin("manual");
+  assert.ok(lease);
+
+  agent.abort("user-cancelled", { userCancel: true });
+  assert.equal(agent.getStatus(), "aborted", "a manual cancel owns the verdict itself");
+  assert.equal(agent.getAgentState().run, "finalizing");
+  assert.equal(aborts, 0, "no run existed, so no `agent:abort`");
+  agent.compactions.release(lease);
+}
+
+// ---------------------------------------------------------------------------
+// 12. A state batch emits ONE merged `agent:status`, not the intermediate moves
+// ---------------------------------------------------------------------------
+//
+// The switch suppresses per-step status frames so push consumers never observe a status the
+// committed snapshot does not contain. The NET move is still a timeline fact (`error`/`aborted`
+// are notable), so it is synthesized once at the batch boundary.
+{
+  const agent = await makeAgent("state-batch-status");
+  agent.transitionStatus({ type: "prepare" });
+  agent.transitionStatus({ type: "stream-chunk", stream: "thinking" });
+
+  const statuses = [];
+  const states = [];
+  agent
+    .getEventBus()
+    .on("agent:status", (event) => statuses.push([event.payload.from, event.payload.to]), { replay: false });
+  agent.getEventBus().on("agent:state", (event) => states.push(event.payload.status), { replay: false });
+
+  agent.beginStateBatch();
+  agent.transitionStatus({ type: "interrupt" }); // thinking → finalizing/aborted
+  agent.transitionStatus({ type: "reset" }); //     → idle
+  agent.endStateBatch();
+
+  assert.deepEqual(statuses, [["thinking", "idle"]], "one net status row");
+  assert.equal(states.at(-1), "idle", "one final L1 frame");
+  assert.equal(agent.getStatus(), "idle");
+
+  // Nested batches hold the row until the OUTER end, and a batch with no net move emits nothing.
+  statuses.length = 0;
+  agent.beginStateBatch();
+  agent.beginStateBatch();
+  agent.transitionStatus({ type: "prepare" });
+  agent.transitionStatus({ type: "reset" });
+  agent.endStateBatch();
+  assert.deepEqual(statuses, [], "an inner end does not publish");
+  agent.endStateBatch();
+  assert.deepEqual(statuses, [], "idle → idle has no net move");
+
+  const before = statuses.length;
+  agent.beginStateBatch();
+  agent.endStateBatch();
+  assert.equal(statuses.length, before, "an empty batch emits nothing");
 }
 
 for (const manager of managers) {

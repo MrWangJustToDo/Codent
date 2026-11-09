@@ -11,6 +11,7 @@ import { errorMessage } from "../../utils/errors.js";
 import { isRestoreReadFailure, markRestoreReadFailure } from "./session-restore.js";
 
 import type { SessionSwitchReason } from "../../runtime-types/agent-event-payloads.js";
+import type { QueuedMessagesSnapshot } from "../../runtime-types/session-payloads.js";
 import type { SessionRuntime } from "../../runtime-types/session-runtime.js";
 import type { SessionData } from "../persistence/types.js";
 
@@ -70,7 +71,10 @@ export class SessionLifecycleService {
    * Order is the contract: abort work first, settle command previews, then let the caller clear
    * buffers. A producer started after the buffer is cleared must be impossible.
    */
-  stop(reason: SessionLifecycleReason = "session-switch"): void {
+  stop(reason: SessionLifecycleReason = "session-switch"): QueuedMessagesSnapshot {
+    // BEFORE `stopActiveRun`: its abort path clears the queue synchronously, and a later read would
+    // only see what survived the abort — not what the user had queued.
+    const queued = this.rt.run.peekQueuedInput();
     this.rt.run.abortManualCompaction(reason);
     this.rt.run.stopActiveRun(reason);
     // A manual compaction has no pump, so `stopActiveRun` does not clear its queue; and a
@@ -81,6 +85,7 @@ export class SessionLifecycleService {
     this.rt.run.cascadeAbortToChildren(reason);
     this.rt.run.discardPreforkRuns();
     this.rt.sidecars.streamHub.endAllCommands();
+    return queued;
   }
 
   /**
@@ -174,7 +179,9 @@ export class SessionLifecycleService {
       // transcript. A synchronous throw is converted, not rethrown, so it cannot mask the original.
       this.pendingBackgroundReset = (() => {
         try {
-          return Promise.resolve(this.rt.sidecars.resetBackgroundWork(reason));
+          return Promise.resolve(
+            this.rt.sidecars.resetBackgroundWork(reason, { sameSession: options.sameSession === true })
+          );
         } catch (error) {
           return Promise.reject(error);
         }
@@ -281,9 +288,11 @@ export class SessionLifecycleService {
    * write it may have queued. It deliberately does not publish L1 state; the caller commits
    * the target and {@link runTransition} publishes one final frame.
    */
-  private async unloadCurrent(reason: SessionLifecycleReason): Promise<void> {
-    this.stop(reason);
+  private async unloadCurrent(reason: SessionLifecycleReason): Promise<QueuedMessagesSnapshot> {
+    // `stop` captures the queue synchronously, before its abort can clear it.
+    const queued = this.stop(reason);
     await this.rt.transcript.awaitPersistIdle();
+    return queued;
   }
 
   private async newSessionInner(reason: "session-new"): Promise<SessionData> {
@@ -291,6 +300,9 @@ export class SessionLifecycleService {
     if (!store) throw new Error("Session store not available");
 
     const current = this.rt.transcript.getSessionData();
+    // Same rule as `resume`: the unload half clears the queue, and a `/new` that never adopts its
+    // target leaves the user on the same conversation.
+    let queued: QueuedMessagesSnapshot | undefined;
     const next = store.create({
       modelStyle: current?.modelStyle ?? "openai",
       model: current?.model ?? "unknown",
@@ -302,7 +314,7 @@ export class SessionLifecycleService {
     try {
       // Unload the current conversation. The previous session stays on disk untouched:
       // starting a new conversation is not a clear.
-      await this.unloadCurrent(reason);
+      queued = await this.unloadCurrent(reason);
 
       // Adopt the new session before applying the reset. The reset then operates on the
       // target's empty state, and the state batch suppresses the intermediate frames that
@@ -340,6 +352,7 @@ export class SessionLifecycleService {
           } catch {
             // Best-effort recovery: the original failure is what the caller must see.
           }
+          if (queued) this.rt.transcript.getChatController()?.restoreQueuedMessages(queued);
         }
       }
       throw error;
@@ -425,21 +438,33 @@ export class SessionLifecycleService {
     const leaving = this.rt.transcript.getSessionData();
     const leavingId = leaving?.id;
     const leavingMessageCount = leaving?.uiMessages.length ?? 0;
+    // The unload half clears the queue. If the load never commits the user is still on this
+    // conversation, so its queued input must come back (a failed `/resume` is a no-op).
+    let queued: QueuedMessagesSnapshot | undefined;
 
     try {
       // Drain what was already queued, then unload: `stop()` can synchronously queue a
       // `pump-complete` write through `interruptCurrentRun`, and both writes must settle before the
       // restore replaces the active session.
       await this.rt.transcript.awaitPersistIdle();
-      await this.unloadCurrent("session-resume");
+      queued = await this.unloadCurrent("session-resume");
 
       // Restore-time logs belong to the target. A load that never commits re-points the sink at the
       // still-active leaving session in the catch below.
       this.rt.lease.beginRestore();
       this.rt.transcript.beginSessionRestore?.();
+      // The target's model/effort are applied to the HOST before adoption; without this the setters
+      // persist them into the leaving session's record (the data is still the departure).
+      // Optional calls: a duck-typed/embedded persistence double may only implement `restore`.
+      this.rt.transcript.sessionPersistence.pauseWrites?.();
       let session: SessionData;
       try {
         session = await this.rt.transcript.sessionPersistence.restore(sessionId);
+      } catch (error) {
+        // No adoption ⇒ the commit never released the pause; release it here before recovery.
+        // (On success `adoptRestoredSession` releases exactly this one nesting level.)
+        this.rt.transcript.sessionPersistence.resumeWrites?.();
+        throw error;
       } finally {
         this.rt.transcript.endSessionRestore?.();
       }
@@ -499,6 +524,10 @@ export class SessionLifecycleService {
       if (this.rt.transcript.getSessionData()?.id !== sessionId) {
         this.rt.lease.abortClaim();
         await this.recoverLeavingSession(leavingId, error);
+        // `recoverLeavingSession` re-reads the transcript from disk; the queue is in-memory only
+        // and is not part of that record, so restore it explicitly. Only on the non-commit path:
+        // a post-commit failure kept the target, and the departure's queue does not belong to it.
+        if (queued) this.rt.transcript.getChatController()?.restoreQueuedMessages(queued);
       }
       throw error;
     }

@@ -132,7 +132,9 @@ export function dispatchAgentTelemetry<T extends TelemetryEventType>(
     type,
     ts: Date.now(),
     agentId: options?.agentId ?? emitter.id,
-    parentId: options?.parentId,
+    // Conditional like every other optional identity field: `buildEventAt` treats an ABSENT key as
+    // "root/unknown", and the envelope contract asserts `"parentId" in event === false` for a root.
+    ...(options?.parentId !== undefined ? { parentId: options.parentId } : {}),
     ...(sessionId !== undefined ? { sessionId } : {}),
     ...(runId !== undefined ? { runId } : {}),
     payload: body,

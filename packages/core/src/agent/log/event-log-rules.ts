@@ -63,13 +63,17 @@ function suppressRepeatedHandlerFailure(event: AgentEvent): boolean {
 }
 
 export interface EventLogRule {
-  level: LogLevel;
+  /**
+   * Static level, or a per-instance resolver when the same event type can be a success or a
+   * failure (a side query that is about to retry in the other mode is not a final failure).
+   */
+  level: LogLevel | ((event: AgentEvent) => LogLevel);
   category: LogCategory;
   formatMessage: (event: AgentEvent) => string;
   /**
    * Conditional suppression for THIS event instance.
    *
-   * A table cell is static per event type; some facts are only worth a row in one variant. The
+   * The suppression cell is static per event type; some facts are only worth a row in one variant. The
    * canonical case is an approval the agent answered itself: in auto/plan-execution mode nobody was
    * asked, so the request/resolve pair is machinery (the `agent:tool-*` rows already carry the call)
    * and recording it made 22% of a real session's log. The predicate lives with the rule — NOT at
@@ -273,11 +277,15 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
     },
   },
   "side-query:error": {
-    level: "warn",
+    // A structured attempt that is about to retry in text mode is a fallback, not the query's
+    // outcome. It stays the same event (the structured attempt really failed) but must not read as
+    // a final failure when the retry then succeeds.
+    level: (event) => (p(event).fallback ? "info" : "warn"),
     category: "side-query",
     formatMessage: (event) => {
       const d = p(event);
-      return `Side query (${d.purpose ?? "?"}) failed in ${d.mode ?? "?"} mode: ${d.error ?? "unknown"}`;
+      const retry = d.fallback ? `; retrying in ${d.fallback} mode` : "";
+      return `Side query (${d.purpose ?? "?"}) failed in ${d.mode ?? "?"} mode${retry}: ${d.error ?? "unknown"}`;
     },
   },
   "turn:summary": {
@@ -465,9 +473,9 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
   },
   "agent:tool-error": {
     // A user abort arrives here as a failed tool call, so the message is worded as a cancel
-    // when the payload says so — the level stays `warn` because `EventLogRule.level` is
-    // static per event type, and a cancel is still worth seeing next to the real faults in
-    // the log. What matters is that the line does not read as a tool fault.
+    // when the payload says so — the level stays `warn` (the bridge also downgrades a
+    // cancelled `error`), and a cancel is still worth seeing next to the real faults in the
+    // log. What matters is that the line does not read as a tool fault.
     level: "warn",
     category: "tool",
     formatMessage: (event) =>
@@ -600,9 +608,9 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
     category: "system",
     // A cancelled subagent reuses this event, but the payload is then the partial
     // narration rather than a fault — worded as a cancel so the log does not read as
-    // a failure with a whole paragraph of prose as its error. The level stays `error`
-    // because `EventLogRule.level` is static per event type, matching how
-    // `agent:tool-error` handles the same two-way payload.
+    // a failure with a whole paragraph of prose as its error. The level stays `error`; the
+    // bridge downgrades a cancelled payload to `warn`, matching how `agent:tool-error`
+    // handles the same two-way payload.
     formatMessage: (event) =>
       p(event).cancelled === true
         ? `${SUBAGENT_STOP_WORDING[(p(event).stopReason as SubagentStopReason) ?? "unknown"]}: ${

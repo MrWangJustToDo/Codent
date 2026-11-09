@@ -53,4 +53,17 @@ export class PendingMessageQueue<T> {
     this.items = [];
     return cleared;
   }
+
+  /**
+   * Put a previously cleared snapshot back IN FRONT of anything queued since.
+   *
+   * A failed session resume stops the run (which clears the queue) and then restores the
+   * departure; the input that was queued before the switch belongs to that same conversation
+   * and must not be lost. Prepending keeps the user's original order if the recovery itself
+   * admitted a message.
+   */
+  restore(items: readonly T[]): void {
+    if (items.length === 0) return;
+    this.items = [...items, ...this.items];
+  }
 }

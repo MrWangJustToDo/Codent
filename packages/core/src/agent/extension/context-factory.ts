@@ -178,7 +178,9 @@ export function createExtensionContext(
       // registration can throw (a tools-record conflict, an invalid definition); with the push
       // after it, the activation's rollback iterates `registrations.tools` and never sees the
       // name, leaving a claim that advertises a tool nothing can execute.
-      registrations?.tools.push(def.name);
+      // The ledger names ARTIFACTS to release, not calls: the stack keeps one entry per owner/name,
+      // so a second registration of the same name would otherwise be unregistered twice.
+      if (registrations && !registrations.tools.includes(def.name)) registrations.tools.push(def.name);
       host.registerTool(api.id, def, host.rankOf(api.id));
     },
 
@@ -209,7 +211,9 @@ export function createExtensionContext(
       // (`onRegisterCommand`) can throw, and with the push after it the activation rollback would
       // iterate an empty ledger while the command stayed in the stacks — a "ghost" command that is
       // still broadcast after the extension is disabled and that nothing can unregister.
-      registrations?.commands.push(cmd.name);
+      // One claim per name (see `registerTool`): the stack is replace-by-owner, so a duplicate
+      // ledger entry would release the same name twice.
+      if (registrations && !registrations.commands.includes(cmd.name)) registrations.commands.push(cmd.name);
       host.registerCommand(api.id, cmd, host.rankOf(api.id));
     },
 

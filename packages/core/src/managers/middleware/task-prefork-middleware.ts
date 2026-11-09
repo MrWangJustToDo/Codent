@@ -134,7 +134,19 @@ export function createTaskPreforkMiddleware(deps: TaskPreforkMiddlewareDeps): Ch
    * always safe (the tool phase still runs `execute`), while pre-forking the wrong implementation
    * is not.
    */
-  const isLiveBuiltinTask = (): boolean => deps.getManagedAgent()?.isBuiltinTool(BUILTIN_TOOL_NAMES.task) === true;
+  const isLiveBuiltinTask = (): boolean => {
+    const managed = deps.getManagedAgent();
+    if (!managed) return false;
+    // `isIncumbentTool` is the exact predicate. The fallback keeps validator/embedded harnesses
+    // that stub only the older name working (they answer the rendering question, which is what
+    // they intended to stub). A `typeof` test, not `??`: a stub that returns `undefined` must not
+    // silently degrade to the rendering predicate and revive the shadowing bug.
+    const incumbent =
+      typeof managed.isIncumbentTool === "function"
+        ? managed.isIncumbentTool(BUILTIN_TOOL_NAMES.task)
+        : managed.isBuiltinTool(BUILTIN_TOOL_NAMES.task);
+    return incumbent === true;
+  };
 
   return defineMiddleware("tools", {
     name: "task-prefork",

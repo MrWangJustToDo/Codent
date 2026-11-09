@@ -130,9 +130,15 @@ export class AgentLog {
     error: 3,
   };
 
+  /** Set by the host explicitly; an env-level replay must not overwrite it. */
+  private explicitMinLevel = false;
+
   constructor(options?: { enabled?: boolean; minLevel?: LogLevel; scope?: LogScope }) {
     if (options?.enabled !== undefined) this.enabled = options.enabled;
-    if (options?.minLevel) this.minLevel = options.minLevel;
+    if (options?.minLevel) {
+      this.minLevel = options.minLevel;
+      this.explicitMinLevel = true;
+    }
     if (options?.scope) this.scope = options.scope;
   }
 
@@ -146,6 +152,17 @@ export class AgentLog {
 
   setMinLevel(level: LogLevel): void {
     this.minLevel = level;
+    this.explicitMinLevel = true;
+  }
+
+  /**
+   * Apply the process-level `AGENT_LOG_LEVEL` knob.
+   *
+   * Unlike {@link setMinLevel} this is advisory: a host that set a level explicitly keeps it, so a
+   * later sink bind (a subagent, a session switch) cannot silently undo the host's choice.
+   */
+  applyEnvMinLevel(level: LogLevel): void {
+    if (!this.explicitMinLevel) this.minLevel = level;
   }
 
   /**
@@ -429,7 +446,7 @@ export class AgentLog {
    */
   attachFileSink(options: AgentLogFileSinkOptions): () => void {
     const level = configuredLogLevel();
-    if (level) this.setMinLevel(level);
+    if (level) this.applyEnvMinLevel(level);
     // `attachSink` flushes the previous sink before re-pointing the seam (see its note): this is
     // the fallback path (embedded hosts call it directly), so the pending batch is landed there.
     const sink = createJsonlFileSink(options);

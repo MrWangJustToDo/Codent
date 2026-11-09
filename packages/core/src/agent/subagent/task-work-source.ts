@@ -97,7 +97,12 @@ export function createTaskWorkSource(managed: ManagedAgent): BackgroundWorkSourc
       // Seeing a different epoch here means a NEW session already owns the registry: resetting now
       // would wipe rows it opened (leaving a live task with no ledger row — its settle would then be
       // dropped whole, so no write-back, no notification, no wake). Skip instead of stealing it.
-      if (seenEpoch !== undefined && registry.currentEpoch !== seenEpoch) return;
+      if (seenEpoch !== undefined && registry.currentEpoch !== seenEpoch) {
+        // Adopt the epoch we just observed, or every later reset on this registry keeps hitting
+        // the same stale comparison and silently skips too.
+        seenEpoch = registry.currentEpoch;
+        return;
+      }
       registry.reset();
       seenEpoch = registry.currentEpoch;
     },

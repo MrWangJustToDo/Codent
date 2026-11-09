@@ -190,7 +190,14 @@ export function createLogExtension(options: LogExtensionOptions): LogExtension {
       // Apply the process-level level here: the sink is the first point at which a log is bound to
       // persisted output, and the seam is shared by every agent in the process.
       const level = configuredLogLevel();
-      if (level) log.setMinLevel(level);
+      if (level) {
+        log.applyEnvMinLevel(level);
+        // A host may load `.env` AFTER the root agent was constructed. The first bind already
+        // froze the previous level into every attached log; apply the current one to all of them,
+        // or the main session keeps logging at the default level for the whole process. `apply`
+        // (not `set`) keeps an explicit host level winning, as documented on the seam.
+        for (const existing of sinks.keys()) existing.applyEnvMinLevel(level);
+      }
       // Re-pointing an already-attached log must release the previous binding first.
       sinks.get(log)?.();
 

@@ -40,7 +40,8 @@ function writeLog(log: AgentLog, rule: EventLogRule, event: AgentEvent, message:
   // narration). The level drops to `warn` for the same reason `agent:tool-error` does: a cancel is
   // not a failure, and `AGENT_LOG_LEVEL=error` used to keep cancels while hiding tool cancels.
   const cancelled = payload.cancelled === true;
-  const level = rule.level === "error" && cancelled ? "warn" : rule.level;
+  const configured = typeof rule.level === "function" ? rule.level(event) : rule.level;
+  const level = configured === "error" && cancelled ? "warn" : configured;
   // Filter BEFORE summarizing: `summarizePayload` stringifies arbitrary tool input/output (up to
   // 50 KB each), and the seam dropped the result afterwards. Raising AGENT_LOG_LEVEL is exactly
   // when that work should not happen. Optional-call: a duck-typed sink used by validators/embedded
@@ -62,11 +63,8 @@ function writeLog(log: AgentLog, rule: EventLogRule, event: AgentEvent, message:
   // as the `error` message below, and an error object's `message` is not bounded by the schema.
   message = truncateText(message, MAX_LOG_MESSAGE_CHARS);
 
-  if (rule.level === "error") {
-    if (cancelled) {
-      log.eventEntry("warn", rule.category, event.type, message, data, undefined, run, event.sessionId);
-      return;
-    }
+  if (level === "error") {
+    // A cancelled payload already had its level downgraded to `warn` above.
     // The payload's own `error` is raw provider text (often the whole 4xx/5xx body); it becomes
     // `entry.error.message`. The seam (`AgentLog.log`) bounds every writer's error message, so this
     // is deliberately not truncated here — a second, narrower bound would let the specialized

@@ -237,6 +237,14 @@ export class CodentAgent {
   async createSession(options: AgentSessionCreateOptions): Promise<AgentSessionCreateResult> {
     this.assertLive("createSession");
     const result = await this.host.create(options);
+    // `dispose()` snapshots `ownedSessionIds` and starts tearing down. A create that was already
+    // awaiting must not land in that snapshot's blind spot: when the manager is INJECTED
+    // (`ownsManager === false`) nothing else will ever destroy it, so the session would outlive the
+    // handle that created it (log sink, extensions, tool registry).
+    if (this.disposed) {
+      await this.host.destroy(result.session.id).catch(() => undefined);
+      throw new Error("CodentAgent was disposed while a session was being created");
+    }
     this.ownedSessionIds.add(result.session.id);
     return result;
   }

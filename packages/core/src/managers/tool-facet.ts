@@ -45,6 +45,20 @@ export class ToolFacet {
     return service.resolve(toolName)?.toModelOutput ?? getToolMetadata(tools[toolName])?.toModelOutput;
   }
 
+  /**
+   * Exact identity check: is the LIVE implementation under this name the seeded built-in?
+   *
+   * This is the predicate policy decisions must use (task pre-fork, plan-mode `run_command`,
+   * `modifiedArgs` refusal after an approval was decided on the original input). Unlike
+   * {@link isBuiltinTool} it does NOT answer `true` for an unregistered name — a shadowing extension
+   * tool must read as "not the built-in" even while the built-in's historical row is still rendered.
+   */
+  isIncumbentTool(toolName: string): boolean {
+    const service = this.host.getToolService();
+    service.useTools(this.host.getTools());
+    return service.isIncumbent(toolName);
+  }
+
   isBuiltinTool(toolName: string): boolean {
     const service = this.host.getToolService();
     service.useTools(this.host.getTools());

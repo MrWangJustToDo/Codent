@@ -251,6 +251,8 @@ export class ExtensionRunner {
   private readonly messageTransformers = new MessageTransformerRegistry({
     reportTransformerFailure: (extensionId, err) => this.reportTransformerFailure(extensionId, err),
     getContext: (extensionId) => this.contexts.get(extensionId),
+    // Lazy: this initializer runs before the constructor body assigns `callbackTimeoutMs`.
+    timeoutMs: () => this.callbackTimeoutMs,
   });
   private eventBus: BusExtensionEventBus;
   /** Raw scoped bus (interception + telemetry) behind the extension-facing facade. */

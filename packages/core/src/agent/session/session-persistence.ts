@@ -99,6 +99,20 @@ export class SessionPersistence {
   }
 
   /**
+   * Suspend writes while a restore applies the TARGET's model/effort to the host.
+   *
+   * `restoreManagedSession` adopts the target last; the setters that run before that would
+   * otherwise persist the target's selection into the leaving session's file.
+   */
+  pauseWrites(): void {
+    this.host.session.pausePersist();
+  }
+
+  resumeWrites(): void {
+    this.host.session.resumePersist();
+  }
+
+  /**
    * Give up a restore stand-in after a failed load.
    *
    * Without this the refusal in {@link SessionService.setSessionDataPlaceholder} outlives the failed

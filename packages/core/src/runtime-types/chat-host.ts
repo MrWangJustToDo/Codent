@@ -60,7 +60,7 @@ export interface AgentChatHost {
   isSessionSwitching(): boolean;
   /** Set by `ManagedAgent.markDestroyed`; late async continuations must not start work. */
   isDestroyed(): boolean;
-  abort(reason?: string): void;
+  abort(reason?: string, options?: { userCancel?: boolean }): void;
   emitEvent: EmitAgentTelemetryFn;
   emitDiagnostic(
     area: SessionDiagnosticArea,

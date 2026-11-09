@@ -151,13 +151,16 @@ export class AgentEventBusScope {
     if (this.disposed) return createAgentEventBus(`disposed:${agentId}`);
     const cached = this.scopes.get(agentId);
     if (cached) {
-      if (this.parents.get(agentId) !== parentId) {
-        throw new Error(
-          `Agent event bus scope "${agentId}" was already created with a different parent; ` +
-            `the first call wins (got ${String(this.parents.get(agentId))}, requested ${String(parentId)}).`
-        );
-      }
-      return cached;
+      const existingParent = this.parents.get(agentId);
+      // Asking again without a parent is not a conflict: the existing (possibly parented) scope is
+      // still the right answer. A DIFFERENT parent is: re-parenting would hand back a new bus while
+      // the subscribers that took the old one silently stop seeing this agent's events, so the
+      // first call still wins and the mistake stays visible.
+      if (existingParent === parentId || parentId === undefined) return cached;
+      throw new Error(
+        `Agent event bus scope "${agentId}" was already created with parent "${String(existingParent)}" and ` +
+          `cannot be re-parented to "${parentId}". Create the scope with its parent on the first call.`
+      );
     }
     // Recursive parent creation must not re-validate the parent's own relation: callers only pass
     // one level, and the parent may already have been created under its own parent.

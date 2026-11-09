@@ -22,7 +22,7 @@ import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
 import type { SessionService } from "../managers/services/session-service.js";
 import type { UsageTracker } from "../managers/telemetry/usage-tracker.js";
 import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
-import type { ModelStyle, ReasoningEffort } from "../models/types.js";
+import type { ModelInfo, ModelStyle, ReasoningEffort } from "../models/types.js";
 import type { UIMessage, UIMessage as TanStackUIMessage } from "@tanstack/ai";
 
 export interface SessionPersistInput {
@@ -97,6 +97,11 @@ export interface SessionHost {
   setAutoModeEnabled: (enabled: boolean) => void;
   /** Read the agent's current reasoning-effort config (for persistence). */
   getReasoningEffort: () => ReasoningEffort | undefined;
+  /**
+   * Metadata of the model currently configured (capabilities / offered depths). Optional: a
+   * host without it cannot validate a restored effort, so the value is kept (permissive).
+   */
+  getModelInfo?: () => ModelInfo | null;
   /** Set reasoning-effort config (restore path). Optional — older hosts may omit. */
   setReasoningEffort?: (effort: ReasoningEffort | undefined) => void;
   session: SessionService;

@@ -314,14 +314,16 @@ export class AgentChatController {
     // ends background work separately (`resetBackgroundWork` → `abortDetached`).
     const registeredPrefork = peekTaskPreforkCoordinator(this.managed)?.foregroundSize ?? 0;
     if (!this.isPumpLive() && registeredPrefork === 0) return;
-    this.interruptCurrentRun(reason);
+    // A switch is a teardown, not a user cancel: it restores the compaction phase it replaced
+    // instead of relying on `interrupt` (which may keep an existing terminal verdict).
+    this.interruptCurrentRun(reason, { userCancel: false });
   }
 
   /**
    * Abort the in-flight pump, cancel incomplete tools, and finalize the aborted turn.
    * Invalidates the run token so the old pump exits without double-finalizing.
    */
-  private interruptCurrentRun(reason: string, options: { keepQueue?: boolean } = {}): void {
+  private interruptCurrentRun(reason: string, options: { keepQueue?: boolean; userCancel?: boolean } = {}): void {
     // A plain abort DROPS pending input (the footer hint says so); force-submit interrupts the run to send
     // something NOW, which must not discard what the user queued before it — that is the `keepQueue` case,
     // and the cleared snapshot would otherwise be thrown away.
@@ -333,7 +335,7 @@ export class AgentChatController {
     // agents, which `onUserCancel` does not touch, still reported. The exact inverse of the intent:
     // the log bridge never wrote its abort row and `agent:abort` observers (memory selection
     // discard) never ran on a real cancel.
-    this.managed.abort(reason);
+    this.managed.abort(reason, { userCancel: options.userCancel ?? true });
     this.managed.statusController.onUserCancel();
     // Single owner of token invalidation + depth reset. The stale pump's finally
     // skips decrement when its token is not current (it holds a captured token),
@@ -443,6 +445,20 @@ export class AgentChatController {
     };
     this.notifyQueueListeners();
     return snapshot;
+  }
+
+  /**
+   * Restore a queue snapshot taken before a failed session switch.
+   *
+   * The unload half clears the queue; a load that never commits leaves the user on the same
+   * conversation, so dropping its queued input would lose work for a switch that did not happen.
+   * Restored items go before anything admitted during the recovery.
+   */
+  restoreQueuedMessages(snapshot: QueuedMessagesSnapshot): void {
+    if (snapshot.steer.length === 0 && snapshot.followUp.length === 0) return;
+    this.steeringQueue.restore(snapshot.steer);
+    this.followUpQueue.restore(snapshot.followUp);
+    this.notifyQueueListeners();
   }
 
   /**
@@ -592,7 +608,16 @@ export class AgentChatController {
       return "queued";
     }
     // Only strips truncated/invalid leftover tools — never approval-responded / valid queues.
+    // Settle them BEFORE releasing queued user text, or the message lands ahead of the tool result
+    // it was written after.
     this.applyCancelledIncompleteTools();
+    // A turn can end with input still queued: a stream error skips the continuation drain, and the
+    // next `send` used to append its own message first. Deliver the older queue before this new
+    // message so the model sees the user's messages in the order they were written (and so nothing
+    // stays stranded behind a turn that already ended).
+    while (this.hasQueuedMessages()) {
+      if (!this.drainSteerIntoChannel() && !this.drainFollowUpIntoChannel()) break;
+    }
     this.channel.addUserMessage(content);
     this.persistMessages("user-message");
     if (options.awaitTurn === false) this.startRun();

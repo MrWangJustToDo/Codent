@@ -13,7 +13,7 @@
  *
  * A lease is the unit of ownership. `begin` claims it (publish status, emit start),
  * the producer does its work and checks `isCurrent(lease)` before applying anything, and exactly one
- * of `finish` / `release` / `cancel` / `abortForTeardown` ends it:
+ * of `finish` / `release` / `cancel` / `abortForUserCancel` / `abortForTeardown` ends it:
  *
  * - `finish` — terminal, emits `compaction:<kind>-complete|error` and restores the status.
  * - `release` — terminal but silent (a cancel is not a failure; an unexpected throw still restores).
@@ -255,6 +255,35 @@ export class CompactionController {
     // this is safe on both branches (it keeps the `aborted` verdict `interrupt` just wrote).
     this.restoreStatusFor("manual", previousStatus);
     return true;
+  }
+
+  /**
+   * Abort the running compaction for a USER stop, letting the run's interrupt publish `aborted`.
+   *
+   * `abortForTeardown` restores the status the compaction replaced because a session switch has
+   * no run left to do it. A user cancel does: `interrupt` is about to run and writes the terminal
+   * verdict. Restoring first published `compacting → <previous> → aborted`, and a consumer that
+   * classifies a compaction by "left the compacting phase" read the cancel as a completion.
+   *
+   * A manual `/compact` has no run to interrupt, so it uses {@link cancel} (which owns that
+   * verdict itself).
+   */
+  abortForUserCancel(reason = "user-cancelled"): void {
+    if (!this.active) return;
+    if (this.active.lease.kind === "manual") {
+      this.cancel(reason);
+      return;
+    }
+    // If the turn already reached a verdict while the lease still owns the run phase
+    // (`run: "compacting"`, `outcome: "error" | "aborted"`), `interrupt` keeps that verdict and
+    // never restores the phase — nobody would then publish `compaction-end`, and the agent stays
+    // wedged in `compacting` forever. This is the one case where a user stop must restore.
+    const outcome = this.deps.getAgentState?.()?.outcome;
+    if (outcome === "error" || outcome === "aborted") {
+      this.abortForTeardown(reason);
+      return;
+    }
+    this.abortActive(reason);
   }
 
   /**

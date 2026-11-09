@@ -79,6 +79,14 @@ export class SessionService {
   private restorePlaceholder: SessionData | null = null;
   /** In-flight {@link saveToStore} writes, including the async title write that bypasses the queue. */
   private readonly pendingSaves = new Set<Promise<boolean>>();
+  /**
+   * Sessions whose auto-title side query is already running.
+   *
+   * Two writes race on a brand-new session (the first user message, then the pump-complete
+   * snapshot); each used to start its own paid side query, and the later answer overwrote the
+   * earlier title.
+   */
+  private readonly titleInFlight = new Set<string>();
   setStore(store: SessionStore, config: { modelStyle: string; model: string }): void {
     this.store = store;
     this.config = config;
@@ -93,6 +101,9 @@ export class SessionService {
    * `SessionService` belongs to one agent, and an agent whose session was deleted is destroyed.
    */
   async close(): Promise<void> {
+    // A side query that never settles must not pin a session id forever; after close there is no
+    // continuation that could title it anyway.
+    this.titleInFlight.clear();
     // Snapshot the admitted tail before flipping the gate. `persistSession` refuses writes
     // submitted after this point, but writes already admitted must still run to completion.
     const admitted = this.persistQueue;
@@ -119,7 +130,10 @@ export class SessionService {
     // Mirror onto the active session record: previously only `store.create` wrote
     // the model, so a `/models` switch never reached disk and restoring always
     // fell back to the creation-time (default) model.
-    if (this.data) {
+    // During a restore this `data` is still the LEAVING session while `modelStyle/model` describe
+    // the target. Mirroring here rewrote the departure's record (and a title write racing the
+    // restore then persisted it). The adopted record already carries the right values.
+    if (this.data && this.persistPaused === 0) {
       this.data.modelStyle = modelStyle;
       this.data.model = model;
     }
@@ -170,6 +184,26 @@ export class SessionService {
 
   getSessionData(): SessionData | null {
     return this.data;
+  }
+
+  /**
+   * Nesting depth of a persistence pause.
+   *
+   * A restore applies the target's model/effort to the HOST before the target transcript is
+   * adopted. Those setters persist as a side effect, and at that moment `getSessionData()` still
+   * names the LEAVING session — so the write landed the target's model/effort in the departure's
+   * file. The placeholder covers bootstrap restores; this covers a runtime `/resume`, where the
+   * leaving session is a real (not stand-in) record.
+   */
+  private persistPaused = 0;
+
+  /** Refuse writes while a restore is applying the target's state to the host. Nesting-safe. */
+  pausePersist(): void {
+    this.persistPaused += 1;
+  }
+
+  resumePersist(): void {
+    this.persistPaused = Math.max(0, this.persistPaused - 1);
   }
 
   private ensureSession(): void {
@@ -316,7 +350,9 @@ export class SessionService {
     // Refuse at DISPATCH, not at execution: the writes that ride a restore are admitted here, and
     // the queue would run them after adoption (when they look harmless). A placeholder means the
     // target's transcript is not loaded yet, so nothing this session writes can be its truth.
-    if (this.restorePlaceholder) return false;
+    // A paused restore has the same problem with the OPPOSITE identity: the data is still the
+    // leaving session while the setters already describe the target.
+    if (this.restorePlaceholder || this.persistPaused > 0) return false;
     const resolveInput = typeof input === "function" ? input : () => input;
 
     // State-only writes keep their own turn: they carry no transcript, so folding them into a
@@ -505,11 +541,12 @@ export class SessionService {
       // behind it and a wasted side call (some providers reject the empty input outright, which
       // surfaced only as a `side-query` warn). Title only once a persist actually carries a
       // first user message.
-      if (firstUserText) {
+      if (firstUserText && !this.titleInFlight.has(data.id)) {
         // Capture the session identity: the title LLM call is async, and a /new or
         // /resume during it swaps `this.data`. Without this guard the old session's
         // title would be written into (and persisted to) the new session.
         const target = data;
+        this.titleInFlight.add(target.id);
         this.generateSessionTitle(firstUserText, {
           usage,
           resolveTextAdapter,
@@ -517,34 +554,36 @@ export class SessionService {
           sessionId: target.id,
           ...(emitSessionTitle ? { emitSessionTitle } : {}),
           ...(emitEvent ? { emitEvent } : {}),
-        }).then((title) => {
-          // The title belongs to the session that asked: a switch committed (or in flight) while
-          // the query ran means neither the name nor its broadcast may land on the target session.
-          // Hosts that do not capture an epoch keep the object-identity fallback.
-          if (input.epoch ? !input.epoch.isCurrent() : this.data !== target) return;
-          const trimmed = title.trim();
-          if (!trimmed) {
-            // A whitespace-only provider reply. Keep "New Session" — and repair legacy
-            // blank names so the UI never shows an empty label — until a later persist
-            // regenerates the title.
-            if (!target.name || !target.name.trim()) {
-              target.name = "New Session";
-              void this.saveToStore(emitEvent, target, "session-title");
+        })
+          .then((title) => {
+            // The title belongs to the session that asked: a switch committed (or in flight) while
+            // the query ran means neither the name nor its broadcast may land on the target session.
+            // Hosts that do not capture an epoch keep the object-identity fallback.
+            if (input.epoch ? !input.epoch.isCurrent() : this.data !== target) return;
+            const trimmed = title.trim();
+            if (!trimmed) {
+              // A whitespace-only provider reply. Keep "New Session" — and repair legacy
+              // blank names so the UI never shows an empty label — until a later persist
+              // regenerates the title.
+              if (!target.name || !target.name.trim()) {
+                target.name = "New Session";
+                void this.saveToStore(emitEvent, target, "session-title");
+              }
+              return;
             }
-            return;
-          }
-          target.name = trimmed;
-          // Broadcast the new display name so live UI / snapshots see the
-          // auto-generated title (the write above only touches SessionData).
-          onTitleResolved?.(trimmed);
-          // The generated name is the fact both readers look for. Only the FAILURE branch used to
-          // emit, so the most common naming path (the first message) had no row while `/title` had
-          // one — the same fact with two visibilities.
-          emitSessionTitle?.({ ok: true, name: trimmed }, target.id);
-          // Reuse the unified save path so a title-write failure also emits
-          // `session:save-error` (target "session-title").
-          void this.saveToStore(emitEvent, target, "session-title");
-        });
+            target.name = trimmed;
+            // Broadcast the new display name so live UI / snapshots see the
+            // auto-generated title (the write above only touches SessionData).
+            onTitleResolved?.(trimmed);
+            // The generated name is the fact both readers look for. Only the FAILURE branch used to
+            // emit, so the most common naming path (the first message) had no row while `/title` had
+            // one — the same fact with two visibilities.
+            emitSessionTitle?.({ ok: true, name: trimmed }, target.id);
+            // Reuse the unified save path so a title-write failure also emits
+            // `session:save-error` (target "session-title").
+            void this.saveToStore(emitEvent, target, "session-title");
+          })
+          .finally(() => this.titleInFlight.delete(target.id));
       }
     }
 
@@ -658,6 +697,10 @@ export class SessionService {
    * held the previous transcript, and the next save rewrote the target's log with it).
    */
   adoptRestoredSession(restored: RestoredSessionRead, input: SessionAdoptInput): void {
+    // The restore's pre-adoption write pause ends HERE: everything after this commit targets the
+    // adopted id and must persist normally (the model correction below, usage, the title).
+    // One decrement, not a reset: the pause is nesting-safe and another owner may hold a level.
+    this.resumePersist();
     const { session } = restored;
     const { usage, todoManager } = input;
 

@@ -2,7 +2,7 @@
  * Session persist / restore helpers for {@link ManagedAgent}.
  */
 
-import { isReasoningEffort } from "../../models/types.js";
+import { isReasoningEffort, supportedReasoningEfforts } from "../../models/types.js";
 import { errorMessage } from "../../utils/errors.js";
 import { normalizeSessionApprovals } from "../approval/tool-approval-table.js";
 import { readPlanFileAtRelativePath } from "../plan/plan-store.js";
@@ -254,6 +254,20 @@ export async function restoreManagedSession(
     // would be "unknown" (permissive → media sent to a text-only endpoint) and the context window
     // unset (compaction trigger loses its clamp).
     if (modelChanged) await host.refreshModelMetadata?.();
+    // A persisted effort belongs to the model it was chosen for. `setModel` drops an unsupported
+    // level on an explicit switch, but the restore writes the persisted value AFTER the model, so
+    // an unavailable model that fell back to another one kept a depth its replacement does not
+    // offer. Only POSITIVE evidence may clear: `supportedReasoningEfforts` falls back to the known
+    // set when metadata is silent, whereas the menu predicate (`offerable…`) returns `[]` for
+    // "unknown" and would delete a user's explicit depth on every resume. `silent` is a failed
+    // resume's recovery: it must not write corrections to the session that never left.
+    if (!options.silent) {
+      const info = host.getModelInfo?.() ?? null;
+      const effort = host.getReasoningEffort();
+      if (info && effort !== undefined && !supportedReasoningEfforts(info).includes(effort)) {
+        host.setReasoningEffort?.(undefined);
+      }
+    }
     // Make the fallback converge on disk once: the corrected `SessionData` was adopted above, but
     // without a write the next resume reads the old id again.
     if (modelChanged || modelRecordCorrected) host.persistSession?.();
@@ -267,6 +281,8 @@ export async function restoreManagedSession(
     // `session:restore` row there read as "the switch succeeded" in the timeline while the command
     // had returned an error. The failure itself is already reported by the caller.
     if (!options.silent) {
+      // Report the EFFECTIVE depth: a level the model no longer offers was cleared above.
+      const effectiveEffort = host.getReasoningEffort();
       host.emitEvent("session:restore", {
         sessionId,
         messageCount: uiMessages.length,
@@ -274,7 +290,7 @@ export async function restoreManagedSession(
         planPhase: mode.planPhase,
         autoMode: mode.auto,
         model: session.model,
-        ...(session.reasoningEffort ? { reasoningEffort: session.reasoningEffort } : {}),
+        ...(effectiveEffort ? { reasoningEffort: effectiveEffort } : {}),
         ...(modelFallback ? { modelFallback: true } : {}),
         ...(mediaMissing > 0 ? { mediaMissing } : {}),
       });

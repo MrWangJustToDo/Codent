@@ -101,6 +101,9 @@ export class ExtensionRegistrationStacks {
     const stack = this.commands.get(name);
     if (!stack) return { existed: false };
     const remaining = stack.filter((entry) => entry.ownerId !== ownerId);
+    // A retried release (the host callback threw the first time) has no entry left to remove, but
+    // the caller still has to re-announce the survivor: `existed:false` here made the retry silent
+    // and left a ghost command in the host's menu.
     if (remaining.length === 0) {
       this.commands.delete(name);
       return { existed: true };

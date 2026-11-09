@@ -8,6 +8,7 @@
  */
 
 import type { SessionSwitchReason } from "./agent-event-payloads.js";
+import type { QueuedMessagesSnapshot } from "./session-payloads.js";
 import type { ToolApprovalTable } from "../agent/approval/tool-approval-table.js";
 import type { ModeCoordinator } from "../agent/mode/mode-coordinator.js";
 import type { SessionStore } from "../agent/persistence/session-store.js";
@@ -29,8 +30,14 @@ export interface SessionRunPort {
   readonly run: RunCoordinator;
   readonly statusController: AgentStatusController;
   stopActiveRun(reason: string): void;
+  /**
+   * The queue as it is right now. Captured SYNCHRONOUSLY at the start of the switch's stop half:
+   * a still-live pump can drain the queue during a preceding await, and restoring an earlier
+   * snapshot would deliver the same message twice.
+   */
+  peekQueuedInput(): QueuedMessagesSnapshot;
   /** Drop input queued while busy — a teardown has no turn to deliver it to. */
-  clearQueuedInput(): void;
+  clearQueuedInput(): QueuedMessagesSnapshot;
   abortManualCompaction(reason: string): void;
   cascadeAbortToChildren(reason?: string): void;
   discardPreforkRuns(): void;
@@ -88,7 +95,14 @@ export interface SessionSidecarPort {
   clearTaskRuns(): void;
   /** Drop per-call `tool:before:*` outcomes from the conversation being left. */
   clearToolBeforeHooks?(): void;
-  resetBackgroundWork(reason: string): Promise<void> | void;
+  /**
+   * Drop the session's background work and its facade.
+   *
+   * `sameSession` is a reload of the session that is still active (bootstrap restore, `/resume`
+   * to the current id): the jobs are the SAME jobs, so state that dedupes their lifecycle rows
+   * (e.g. `lastJobStatuses`) must survive. A real switch replaces the conversation and must clear it.
+   */
+  resetBackgroundWork(reason: string, options?: { sameSession?: boolean }): Promise<void> | void;
   resumeBackgroundWork?(): void;
   warn?(message: string, data?: Record<string, unknown>): void;
 }

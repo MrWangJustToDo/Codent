@@ -187,7 +187,9 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     getPolicyFacts: () => managed.getPolicyFacts(),
     resolveToolPresentation: (name) => managed.getToolPresentation(name),
     isToolNeedsApproval: (toolName) => managed.isToolNeedsApproval(toolName),
-    isBuiltinTool: (toolName) => managed.isBuiltinTool(toolName),
+    // Identity, not the rendering predicate: these callers must see a shadowing extension as "not
+    // the built-in" (and an unregistered name as "not the built-in" too).
+    isBuiltinTool: (toolName) => managed.isIncumbentTool(toolName),
     getTodoManager: () => managed.getTodoManager(),
     getExtensionRunner: () => managed.getExtensionRunner(),
     getCommandService: () => managed.getCommandService(),

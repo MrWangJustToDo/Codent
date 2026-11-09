@@ -43,7 +43,8 @@ function runtime(host) {
       run: host.run ?? { resetRunState: () => {}, resetTurnLifecycle: () => {} },
       statusController: host.statusController ?? { resetToIdle: () => {} },
       stopActiveRun: host.stopActiveRun ?? (() => {}),
-      clearQueuedInput: host.clearQueuedInput ?? (() => {}),
+      peekQueuedInput: host.peekQueuedInput ?? (() => ({ steer: [], followUp: [] })),
+      clearQueuedInput: host.clearQueuedInput ?? (() => ({ steer: [], followUp: [] })),
       abortManualCompaction: host.abortManualCompaction ?? (() => {}),
       cascadeAbortToChildren: host.cascadeAbortToChildren ?? (() => {}),
       discardPreforkRuns: host.discardPreforkRuns ?? (() => {}),
@@ -576,6 +577,7 @@ assert.equal(
   const session = { id: "ses_same", uiMessages: [], model: "m", modelStyle: "openai" };
   let clearedUi = 0;
   let clearedNotices = 0;
+  const backgroundResets = [];
   const host = {
     getSessionData: () => session,
     lease: activeLease(session.id),
@@ -583,6 +585,9 @@ assert.equal(
       restore: async (sessionId) => ({ ...session, id: sessionId }),
       resetTracker: () => {},
       clearRestorePlaceholder: () => {},
+    },
+    resetBackgroundWork: (_reason, options) => {
+      backgroundResets.push(options?.sameSession === true);
     },
     clearExtensionUi: () => {
       clearedUi += 1;
@@ -596,8 +601,14 @@ assert.equal(
   assert.equal(restored.id, session.id);
   assert.equal(clearedUi, 0, "a same-session restore keeps the slots activate() just published");
   assert.equal(clearedNotices, 0, "…and its notices");
+  assert.deepEqual(
+    backgroundResets,
+    [true],
+    "a same-session reload keeps the job-status ledger (no duplicate `job:changed{running}`)"
+  );
 
   // A real switch still clears them.
+  backgroundResets.length = 0;
   const target = { id: "ses_other", uiMessages: [], model: "m", modelStyle: "openai" };
   const switchingHost = {
     ...host,
@@ -613,6 +624,59 @@ assert.equal(
   await switching.resume(target.id);
   assert.equal(clearedUi, 1, "a switch to a different session clears the old conversation's slots");
   assert.equal(clearedNotices, 1, "…and its notices");
+  assert.deepEqual(backgroundResets, [false], "a real switch clears the job-status ledger with the conversation");
+}
+
+// A failed resume restores the input the stop half ACTUALLY cleared — captured at the stop
+// boundary, not before the preceding await (a live pump can drain it in that window, and restoring
+// an earlier snapshot would deliver the same message twice).
+{
+  const leaving = {
+    id: "ses_queue_leave",
+    uiMessages: [{ id: "leave-message", role: "user", parts: [] }],
+    model: "m",
+    modelStyle: "openai",
+  };
+  const target = { id: "ses_queue_target", uiMessages: [], model: "m", modelStyle: "openai" };
+  const restoredQueues = [];
+  let peeked = 0;
+  let stopped = false;
+  let restoreAttempts = 0;
+  const host = {
+    getSessionData: () => leaving,
+    lease: activeLease(leaving.id),
+    getSessionStore: () => ({ exists: async () => true, clearCache: () => {} }),
+    getChatController: () => ({ restoreQueuedMessages: (snapshot) => restoredQueues.push(snapshot) }),
+    peekQueuedInput: () => {
+      peeked += 1;
+      assert.equal(stopped, false, "the queue snapshot is taken at the stop boundary");
+      return { steer: ["steer-a"], followUp: ["follow-a"] };
+    },
+    stopActiveRun: () => {
+      stopped = true;
+    },
+    clearQueuedInput: () => ({ steer: [], followUp: [] }),
+    sessionPersistence: {
+      pauseWrites: () => {},
+      resumeWrites: () => {},
+      restore: async () => {
+        restoreAttempts += 1;
+        throw new Error("corrupt target");
+      },
+      resetTracker: () => {},
+      clearRestorePlaceholder: () => {},
+    },
+    warn: () => {},
+  };
+  const lifecycle = new SessionLifecycleService(runtime(host));
+  await assert.rejects(() => lifecycle.resume(target.id), /corrupt target/);
+  assert.equal(peeked, 1, "the queue is read once");
+  assert.ok(restoreAttempts >= 1, "the target load was attempted");
+  assert.deepEqual(
+    restoredQueues,
+    [{ steer: ["steer-a"], followUp: ["follow-a"] }],
+    "a failed switch hands the cleared input back to the session that never left"
+  );
 }
 
 console.log("session-switch-safety validation passed");
