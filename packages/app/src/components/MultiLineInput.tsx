@@ -190,8 +190,11 @@ export const MultiLineInput = ({
   if (!value && caretVisible) {
     if (placeholder) {
       const rendered = chalk.inverse(placeholder[0] || " ") + chalk.gray(placeholder.slice(1));
+      // `truncate-end`: the placeholder is a one-row hint, so it shrinks to the
+      // available width instead of wrapping onto a second row (which used to grow
+      // the input box while the tip rotated).
       return (
-        <Text wrap="wrap" terminalCursorFocus terminalCursorPosition={0}>
+        <Text wrap="truncate-end" terminalCursorFocus terminalCursorPosition={0}>
           {rendered}
         </Text>
       );
@@ -204,7 +207,11 @@ export const MultiLineInput = ({
   }
 
   if (!value) {
-    return placeholder ? <Text color={COLORS.muted}>{placeholder}</Text> : null;
+    return placeholder ? (
+      <Text color={COLORS.muted} wrap="truncate-end">
+        {placeholder}
+      </Text>
+    ) : null;
   }
 
   const displayValue = buildPasteDisplayValue(value, pendingPastes, expandedPasteIndex);

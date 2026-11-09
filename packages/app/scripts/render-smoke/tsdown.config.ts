@@ -34,6 +34,8 @@ export default defineConfig({
     `${src}/components/MultiLineInput.tsx`,
     // The form-field sibling of the same anchor (masked fields, the config wizard's text steps).
     `${src}/components/TextInput.tsx`,
+    // Mounted to pin the empty input's hint policy: one row, and no hint while the agent runs.
+    `${src}/components/UserInput.tsx`,
     // Mounted directly to pin that the exit summary sits BELOW the footer behind its own
     // top border — the layout the user asked for, which nothing else renders.
     `${src}/components/ExitSummary.tsx`,

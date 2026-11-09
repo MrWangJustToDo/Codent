@@ -47,6 +47,7 @@ import { MultiLineInput } from "./dist/components/MultiLineInput.mjs";
 import { SessionPicker, MAX_VISIBLE_SESSIONS } from "./dist/components/SessionPicker.mjs";
 import { SubagentPanel } from "./dist/components/SubagentPanel.mjs";
 import { TextInput } from "./dist/components/TextInput.mjs";
+import { UserInput } from "./dist/components/UserInput.mjs";
 import { WorkspaceImagePreview } from "./dist/components/WorkspaceImagePreview.mjs";
 import { WorkspaceModeHeader } from "./dist/components/WorkspaceModeHeader.mjs";
 import { CoreEnvProvider } from "./dist/context/core-env-context.mjs";
@@ -2253,6 +2254,81 @@ console.error = realConsoleError;
   record("without a caret the frame leaves the terminal cursor unanchored", unanchored === null, {
     tail: unanchored,
   });
+
+  instance.unmount();
+}
+
+// ── the empty input's hint is ONE row ─────────────────────────────────────────
+//
+// `MultiLineInput`'s placeholder is the rotating hint on an empty input. It used to render with
+// `wrap="wrap"`, so a hint longer than the terminal folded onto a second row: the input box grew
+// and shrank as the deck rotated and every row below it jumped. The assertion is on the painted
+// frame — a hint wider than the screen must still occupy exactly one row.
+{
+  const HINT = "Ctrl+E workspace · Ctrl+T tasks · Ctrl+Y extensions · Ctrl+P reviews the plan";
+  const PlaceholderScreen = () =>
+    createElement("ink-box", { flexDirection: "column" }, [
+      createElement("ink-text", { key: "spinner" }, "frame"),
+      createElement(MultiLineInput, { key: "input", value: "", cursorPosition: 0, placeholder: HINT }),
+    ]);
+
+  const stdout = new FakeStdout();
+  stdout.columns = 40;
+  const instance = render(createElement(PlaceholderScreen), {
+    stdout,
+    stdin: fakeStdin(),
+    exitOnCtrlC: false,
+    patchConsole: false,
+    maxFps: 30,
+  });
+  await settle(250);
+
+  // Row 1 is the sibling above the input; anything beyond it means the hint wrapped.
+  const rows = frameLines(stdout);
+  record("a hint wider than the terminal stays on one input row", rows.length === 2, {
+    rows: rows.length,
+    painted: rows,
+    hintLength: HINT.length,
+  });
+
+  instance.unmount();
+}
+
+// ── no hint while the agent runs ─────────────────────────────────────────────
+//
+// The hint is a *prompt to start*, so it has no business on screen once the agent is working: the
+// empty input is then a queue/steer box, and the footer already says "Running…". The mounted
+// `UserInput` reads the same `useAgentStatus` store the footer does, so driving the store is
+// driving the real condition.
+{
+  const setStatus = useAgentStatus.getActions().setStatus;
+  setStatus("idle");
+  const stdout = new FakeStdout();
+  const instance = render(
+    createElement("ink-box", { flexDirection: "column" }, [
+      createElement("ink-text", { key: "spinner" }, "frame"),
+      createElement(UserInput, { key: "input" }),
+    ]),
+    { stdout, stdin: fakeStdin(), exitOnCtrlC: false, patchConsole: false, maxFps: 30 }
+  );
+  await settle(250);
+
+  const idle = frameLines(stdout);
+  record("an idle empty input shows the hint", idle.length === 2, { painted: idle });
+
+  setStatus("running");
+  await settle(250);
+  const busy = frameLines(stdout);
+  // Only the sibling row survives: a lone caret row is blank, and `frameLines` drops blanks.
+  record("a running agent hides the input hint", busy.length === 1 && !busy.includes(idle[1]), {
+    painted: busy,
+    hint: idle[1],
+  });
+
+  setStatus("idle");
+  await settle(250);
+  const resumed = frameLines(stdout);
+  record("the hint returns when the agent is idle again", resumed.length === 2, { painted: resumed });
 
   instance.unmount();
 }
