@@ -457,11 +457,7 @@ export class AgentUIChannel {
     // The resolver already falls back to the built-in table for tools the agent was seeded with.
     // A second `?? getBuiltinToolPresentation(name)` here would hand that descriptor to a shadowing
     // extension tool that deliberately declared none — the very case the agent-side resolver stops.
-    const withDisplay = attachMissingToolDisplays(
-      this.getMessages(),
-      (name) => this.resolveToolPresentation(name),
-      (name) => this.isBuiltinTool(name)
-    );
+    const withDisplay = attachMissingToolDisplays(this.getMessages(), (name) => this.resolveToolPresentation(name));
     if (withDisplay) this.processor.setMessages(withDisplay);
     // End of run: everything now materialized becomes historical for the next
     // one (matters when the next stream is fed via processChunk directly).
@@ -618,8 +614,7 @@ export class AgentUIChannel {
  */
 function attachMissingToolDisplays(
   messages: TanStackUIMessage[],
-  resolveToolPresentation: (name: string) => ToolPresentation | undefined = getBuiltinToolPresentation,
-  isBuiltinTool: (name: string) => boolean = () => true
+  resolveToolPresentation: (name: string) => ToolPresentation | undefined = getBuiltinToolPresentation
 ): TanStackUIMessage[] | null {
   return patchToolCallParts(messages, (part) => {
     if (!part.name || part.display) return undefined;
@@ -634,7 +629,7 @@ function attachMissingToolDisplays(
     // for both, so a restored/streaming row shows the same parameters as the approval gate saw.
     const input = parseToolInput(part);
 
-    const display = computeToolDisplay(part.name, part.output, input, resolveToolPresentation, isBuiltinTool);
+    const display = computeToolDisplay(part.name, part.output, input, resolveToolPresentation);
     return display ? { ...part, display } : undefined;
   });
 }

@@ -141,6 +141,7 @@ import { CompactionService } from "./services/compaction-service.js";
 import { ExtensionRegistryService } from "./services/extension-registry-service.js";
 import { MemoryService } from "./services/memory-service.js";
 import { SessionService } from "./services/session-service.js";
+import { releaseAgentResources } from "./teardown-resources.js";
 import { dispatchAgentTelemetry } from "./telemetry/emit-agent-telemetry.js";
 import { UsageTracker } from "./telemetry/usage-tracker.js";
 import { ToolFacet } from "./tool-facet.js";
@@ -2351,8 +2352,12 @@ export class ManagedAgent {
    * {@link AgentManager} / lifecycle instead (which also releases ownership and scopes).
    */
   async disposeBuiltResources(): Promise<void> {
+    // Same resources, same order as `LifecycleCoordinator.destroy`: the shared list is released
+    // BEFORE `markDestroyed`, so a build that fails after the todo/memory managers exist cannot leak
+    // their timers on a path nobody registers.
+    releaseAgentResources(this);
     try {
-      this.getMcpManager()?.forceKill();
+      this.markDestroyed();
     } catch {
       // Best-effort teardown.
     }
@@ -2363,25 +2368,6 @@ export class ManagedAgent {
     }
     try {
       await this.destroyBackgroundWork();
-    } catch {
-      // Best-effort teardown.
-    }
-    try {
-      this.getMemoryManager()?.dispose();
-    } catch {
-      // Best-effort teardown.
-    }
-    // Same resources the registered path releases. Missing here (a build that fails AFTER the todo
-    // manager exists) leaked its 3s auto-clear timer, which then published `session:todos` from an
-    // agent nobody owns. Every resource added to `LifecycleCoordinator.destroy` must be mirrored
-    // here, or it only leaks on the bootstrap-failure path.
-    try {
-      this.getTodoManager?.()?.dispose();
-    } catch {
-      // Best-effort teardown.
-    }
-    try {
-      this.markDestroyed();
     } catch {
       // Best-effort teardown.
     }

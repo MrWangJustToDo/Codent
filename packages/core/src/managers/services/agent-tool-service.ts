@@ -143,8 +143,15 @@ export class AgentToolService {
    */
   resolvePresentation(name: string): ToolPresentation | undefined {
     const declared = this.resolve(name)?.present;
-    if (declared) return declared;
-    return this.registry.isIncumbent(name) ? getBuiltinToolPresentation(name) : undefined;
+    // The built-in fallback is only for the SEEDED implementation: an extension shadowing a built-in
+    // name must not inherit its output schema (that is what `isIncumbent` answers).
+    const builtin = this.registry.isIncumbent(name) ? getBuiltinToolPresentation(name) : undefined;
+    if (!builtin) return declared;
+    if (!declared) return builtin;
+    // Field-wise merge: the tool's own declaration wins, the built-in table supplies what it does
+    // not declare (the header `summary`). This is what keeps `present` the single source instead of
+    // `compute-display` re-deriving the summary from the name.
+    return { ...builtin, ...declared };
   }
 
   catalog(): ToolPresentationInfo[] {

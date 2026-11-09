@@ -1,5 +1,7 @@
 import { isBuiltinToolName, type BuiltinToolName } from "../catalog/tool-names.js";
 
+import { inlineSummaryForOutput } from "./format/inline-summary.js";
+
 import type { ToolActivityCategory, ToolPresentation } from "./types.js";
 
 /**
@@ -86,10 +88,20 @@ export function builtinPresentationNames(): string[] {
   return Object.keys(BUILTIN_PRESENTATION);
 }
 
-/** Fallback descriptor for a built-in name (flags only; text/summary/input come from the ported formatters). */
+/**
+ * The complete descriptor for a built-in name.
+ *
+ * The row flags come from the table above and the header summary from the same module's formatter
+ * set, so a built-in's presentation has ONE owner. `summary` used to be applied by a second
+ * name-keyed switch inside `compute-display`, which meant a host resolving the descriptor could not
+ * render the header at all.
+ */
 export function getBuiltinToolPresentation(name: string): ToolPresentation | undefined {
   if (!isBuiltinToolName(name)) return undefined;
   const entry = BUILTIN_PRESENTATION[name];
   if (!entry) return undefined;
-  return { ...entry };
+  return {
+    ...entry,
+    summary: (output) => inlineSummaryForOutput(output, name) ?? undefined,
+  };
 }

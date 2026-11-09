@@ -243,10 +243,7 @@ function attachTaskDisplay(
       BUILTIN_TOOL_NAMES.task,
       output,
       input,
-      (name) => channel.resolveToolPresentation?.(name) ?? getBuiltinToolPresentation(name),
-      // Same incumbent rule as the regular attach path: a shadowing extension named `task` must not
-      // inherit the built-in inline summary.
-      (name) => channel.isBuiltinTool?.(name) ?? true
+      (name) => channel.resolveToolPresentation?.(name) ?? getBuiltinToolPresentation(name)
     ) ?? {};
   channel.attachToolDisplay(toolCallId, display);
   return display;

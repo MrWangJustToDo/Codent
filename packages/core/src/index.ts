@@ -415,7 +415,8 @@ export {
   getDurationMs,
   getInlineSummary,
 } from "./agent/tools/presentation/format/inline-summary.js";
-export { formatToolArgs, formatToolOutput } from "./agent/tools/presentation/format/output-format.js";
+export { formatToolOutput } from "./agent/tools/presentation/format/output-format.js";
+export { formatToolArgs } from "./agent/tools/presentation/format/input-format.js";
 export { formatToolInput } from "./agent/tools/presentation/format/input-format.js";
 export { BUILTIN_TOOL_NAMES, type BuiltinToolName } from "./agent/tools/catalog/tool-names.js";
 export { BEGIN_SUMMARY_TOOL_NAME } from "./agent/subagent/begin-summary-tool.js";

@@ -9,7 +9,6 @@ import { TOOL_CANCELLED_MESSAGE } from "../../../stream/incomplete-tool-calls.js
 import { BUILTIN_TOOL_NAMES } from "../../catalog/tool-names.js";
 import { getBuiltinToolPresentation } from "../builtin.js";
 
-import { ENTRY_VALUE_MAX_CHARS } from "./format.js";
 import { splitStreamingLines } from "./lines.js";
 
 import type { TaskOutput } from "../../../subagent/task-tool.js";
@@ -452,21 +451,4 @@ export function formatToolOutput(
 
   const str = typeof output === "string" ? output : JSON.stringify(output, null, 2);
   return truncateText(str, 200);
-}
-
-/** Format tool arguments for detailed display. */
-export function formatToolArgs(args: unknown): string {
-  if (args === undefined || args === null) return "No arguments";
-  if (typeof args === "string") return truncateText(args, ENTRY_VALUE_MAX_CHARS);
-
-  const obj = args as Record<string, unknown>;
-  const entries = Object.entries(obj);
-  if (entries.length === 0) return "No arguments";
-
-  return entries
-    .map(([key, value]) => {
-      const strValue = typeof value === "string" ? value : JSON.stringify(value);
-      return `  ${key}: ${truncateText(strValue, ENTRY_VALUE_MAX_CHARS)}`;
-    })
-    .join("\n");
 }

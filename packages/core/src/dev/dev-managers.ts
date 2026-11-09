@@ -78,11 +78,13 @@ export {
 export { createStatusMiddleware } from "../managers/middleware/status-middleware.js";
 export { createApprovalResumeMiddleware } from "../managers/middleware/approval-resume-middleware.js";
 export {
-  buildSystemPromptWithTurnContext,
   buildTurnContextSections,
   buildProjectInstructionsSection,
-  buildFrozenSystemPrompt,
 } from "../agent/turn-context/prompt-builder.js";
+export {
+  buildSystemPromptWithTurnContext,
+  buildFrozenSystemPrompt,
+} from "../agent/prompt/frozen-system-prompt.js";
 export { createPromptCacheMiddleware } from "../managers/middleware/prompt-cache-middleware.js";
 // Exported for `validate:middleware-order`, which drives the real pipeline assembly
 // instead of duplicating the factory list (see that script's section 1).

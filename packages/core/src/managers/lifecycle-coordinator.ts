@@ -13,6 +13,8 @@ import { clearTaskRuns } from "../agent/subagent/subagent-runs.js";
 import { SUBAGENT_ABORT_REASONS } from "../agent/subagent/subagent-stop-reason.js";
 import { errorMessage } from "../utils/errors.js";
 
+import { releaseAgentResources } from "./teardown-resources.js";
+
 import type { AgentRegistry } from "./agent-registry.js";
 import type { AgentLog } from "../agent/agent-log/agent-log.js";
 import type { SessionOwnership } from "../agent/session/session-ownership.js";
@@ -72,13 +74,9 @@ export class LifecycleCoordinator {
     // (transcript, runner, tool registry, log sink) until the next connect, because nothing ever
     // passed `undefined` to `setUIChannel`.
     attempt(() => managedAgent.setUIChannel(undefined));
-    // Force-kill MCP child processes synchronously to prevent orphans on exit.
-    attempt(() => managedAgent.getMcpManager()?.forceKill());
-    // A debounced memory-index refresh can outlive the agent and write after teardown.
-    attempt(() => managedAgent.getMemoryManager?.()?.dispose());
-    // A completed list schedules a 3s auto-clear that notifies listeners; after destroy that
-    // would publish `session:todos` from a removed agent.
-    attempt(() => managedAgent.getTodoManager?.()?.dispose());
+    // The process-level resources (MCP children, memory index debounce, todo auto-clear) — the same
+    // list the bootstrap-failure path releases. Best-effort inside.
+    releaseAgentResources(managedAgent);
 
     // Before the abort: the compaction `finally` and any queued pump unwind asynchronously and must
     // see "destroyed", not "stopped", or they resume a run on an agent that is being removed.

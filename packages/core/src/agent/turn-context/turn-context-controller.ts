@@ -15,6 +15,7 @@
 import { errorMessage } from "../../utils/errors.js";
 import { buildAutoModePrompt } from "../approval/auto-mode-prompt.js";
 import { buildModeInactivePrompt, buildPlanModePrompt } from "../plan/plan-prompts.js";
+import { buildFrozenSystemPrompt } from "../prompt/frozen-system-prompt.js";
 
 import { getCurrentDate, getGitInfo } from "./env-context.js";
 import {
@@ -24,7 +25,7 @@ import {
   readInstructionContextState,
   type InstructionContextState,
 } from "./instruction-context.js";
-import { buildFrozenSystemPrompt, buildTurnContextSections } from "./prompt-builder.js";
+import { buildTurnContextSections } from "./prompt-builder.js";
 import { formatSessionRetrievalSection, hasSessionHistory } from "./session-retrieval.js";
 
 import type { ExtensionRunner, ExtensionTurnContextSection } from "../extension";

@@ -119,6 +119,29 @@ function formatGenericInput(input: unknown): string {
   return entries.length > 2 ? `(${formatted}, ...)` : `(${formatted})`;
 }
 
+/**
+ * Detailed, one-line-per-field dump of a tool call's arguments.
+ *
+ * Deliberately different from {@link formatToolInput}: that one is a curated, compact, per-tool
+ * label. This is the generic fallback for a full-detail panel. It lives here because both answer
+ * "how do I render a tool's INPUT" — having it in `output-format.ts` made the module name lie.
+ */
+export function formatToolArgs(args: unknown): string {
+  if (args === undefined || args === null) return "No arguments";
+  if (typeof args === "string") return truncateText(args, ENTRY_VALUE_MAX_CHARS);
+
+  const obj = args as Record<string, unknown>;
+  const entries = Object.entries(obj);
+  if (entries.length === 0) return "No arguments";
+
+  return entries
+    .map(([key, value]) => {
+      const strValue = typeof value === "string" ? value : JSON.stringify(value);
+      return `  ${key}: ${truncateText(strValue, ENTRY_VALUE_MAX_CHARS)}`;
+    })
+    .join("\n");
+}
+
 function formatAskUserInput(input: Record<string, unknown>): string {
   const question = input.question as string | undefined;
   return question ?? "";

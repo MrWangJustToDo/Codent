@@ -2,7 +2,6 @@ import { isSyntheticCancelOutput, syntheticCancelMessage } from "../../../runtim
 import { isBareToolErrorResult } from "../../../runtime-types/tool-error.js";
 
 import { getBuiltinToolPresentation } from "./builtin.js";
-import { inlineSummaryForOutput } from "./format/inline-summary.js";
 
 import type { ToolDisplayPayload } from "./types.js";
 
@@ -34,9 +33,9 @@ function safe<T>(render: () => T): T | undefined {
  * EXTENSION tool that string *is* the row result. A built-in may also declare `text` (session
  * search/read, tree, memory, LSP) — there it is the full-display body only. `row-rules.ts` decides
  * the row from tool identity for built-ins, and from the presence of `present.text` for extension
- * tools (for an extension, that string is its whole result). `summary` prefers
- * `present.summary`, then the built-in inline summary; `label` is the tool's declarative input
- * label.
+ * tools (for an extension, that string is its whole result). `summary` comes from
+ * `present.summary` only — for a built-in, the resolver merges the built-in table's formatter, so
+ * there is no second name-keyed summary switch here. `label` is the tool's declarative input label.
  *
  * Deterministic by construction: every renderer is a pure function of the stored
  * output / parsed input (see {@link ToolPresentation}), so the payload can be persisted
@@ -46,16 +45,7 @@ export function computeToolDisplay(
   name: string,
   output: unknown,
   input?: unknown,
-  resolvePresentation: (name: string) => ReturnType<typeof getBuiltinToolPresentation> = getBuiltinToolPresentation,
-  /**
-   * Whether the live tool under `name` is still the seeded built-in.
-   *
-   * The name-keyed inline summary reads a BUILT-IN output schema. An extension tool that shadows a
-   * built-in name and declares only `present: { category }` used to hit that fallback, so its own
-   * `{ matches: [...] }` was summarized as the built-in's "N matches" and persisted as such. Default
-   * `true` preserves the no-registry path, where the caller only has the static table.
-   */
-  isBuiltinTool: (name: string) => boolean = () => true
+  resolvePresentation: (name: string) => ReturnType<typeof getBuiltinToolPresentation> = getBuiltinToolPresentation
 ): ToolDisplayPayload | undefined {
   if (!name) return undefined;
 
@@ -75,14 +65,7 @@ export function computeToolDisplay(
   // tool never returned). A tool that caught its own abort DOES have output, and its own `text`
   // renderer is what renders it — see {@link isSyntheticCancelOutput}.
   const text = safe(() => present?.text?.(output));
-  const summary =
-    safe(() => present?.summary?.(output)) ??
-    // The built-in inline summary is keyed by NAME and describes a built-in's output schema. With no
-    // descriptor at all (an undeclared extension tool, or one SHADOWING a built-in name) there is no
-    // schema to read, and producing the built-in's text would be a confident guess about foreign
-    // data — the same failure the presentation resolver was fixed to avoid.
-    (present && isBuiltinTool(name) ? safe(() => inlineSummaryForOutput(output, name)) : undefined) ??
-    undefined;
+  const summary = safe(() => present?.summary?.(output)) ?? undefined;
   const label = safe(() => present?.label?.(input)) ?? undefined;
 
   const display: ToolDisplayPayload = {};
