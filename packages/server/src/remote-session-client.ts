@@ -11,9 +11,10 @@
  *   stream for `HEARTBEAT_TIMEOUT_MS` triggers a reconnect.
  */
 
-import { presentationFromInfo, errorMessage } from "@codent/core";
+import { AGENT_SESSION_CHANNELS, presentationFromInfo, errorMessage } from "@codent/core";
 
 import { applyEvent, type ToolBufferMap } from "./remote-session-reducer.js";
+import { emptySnapshot, mergeSummarySeeds, mergeToolSeeds, reviveMessageTimestamps } from "./remote-session-seed.js";
 
 import type {
   AgentSession,
@@ -38,51 +39,6 @@ export interface RemoteSessionClientOptions {
   fetchImpl?: typeof fetch;
 }
 
-function emptySnapshot(agentId: string): AgentSessionSnapshot {
-  const emptyTokens = {
-    inputTokens: 0,
-    outputTokens: 0,
-    totalTokens: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
-    reasoningTokens: 0,
-  };
-  return {
-    agentId,
-    name: "",
-    status: "idle",
-    state: { lifecycle: "ready", run: "idle", wait: "none", outcome: "none", stream: "none" },
-    error: "",
-    pendingApprovalCount: 0,
-    mode: "normal",
-    lastStreamDurationMs: 0,
-    lastFinishReason: null,
-    messages: [],
-    queues: { steer: [], followUp: [] },
-    // UsageChangeSnapshot shape — the shell must stay valid before first resync.
-    usage: {
-      total: { ...emptyTokens },
-      window: { ...emptyTokens },
-      percent: 0,
-      contextFillTokens: 0,
-      billedInputTokens: 0,
-      tokenLimit: 0,
-      cost: 0,
-    },
-    todos: [],
-    todosTitle: null,
-    plan: { phase: "off" },
-    autoMode: false,
-    mcp: { servers: [] },
-    extensions: { extensions: [], commands: [] },
-    toolDescriptors: [],
-    interactions: { pending: [], approvals: [], askUser: [] },
-    iteration: { current: 0, max: 0 },
-    jobs: { jobs: [] },
-    subagents: [],
-  } as unknown as AgentSessionSnapshot;
-}
-
 const RECONNECT_BASE_MS = 500;
 const RECONNECT_MAX_MS = 30_000;
 /** No SSE traffic (incl. heartbeats) for this long → treat the stream as dead. */
@@ -100,23 +56,6 @@ async function readJson<T>(response: Response): Promise<T> {
     throw new Error(`HTTP ${response.status}: ${text || response.statusText}`);
   }
   return (await response.json()) as T;
-}
-
-/**
- * JSON transport turns the Date-typed UIMessage `createdAt` into an ISO
- * string; TanStack's wire conversion calls `createdAt.toISOString()` and
- * would crash on the string form. Revive before caching.
- */
-function reviveMessageTimestamps(messages: AgentSessionSnapshot["messages"]): void {
-  for (const message of messages) {
-    const raw = (message as { createdAt?: unknown }).createdAt;
-    if (typeof raw === "string") {
-      const revived = new Date(raw);
-      if (!Number.isNaN(revived.getTime())) {
-        (message as { createdAt?: Date }).createdAt = revived;
-      }
-    }
-  }
 }
 
 /** Wire form of a `messages` payload (server encoding: messages-delta.ts). */
@@ -244,6 +183,8 @@ export class RemoteSessionClient implements AgentSession {
   private lastSyncAt = 0;
   /** Shared in-flight resync so concurrent callers fetch the transcript once. */
   private resyncInFlight: Promise<void> | null = null;
+  /** Whether the remount seed caches (`summaryCache` / `toolBufferCache`) were ever hydrated. */
+  private cachesSeeded = false;
   private readonly summaryCache = new Map<string, AgentStreamSnapshot>();
   /** Summary stream subscribers currently expecting cache refreshes (reconnect replay). */
   private readonly summarySubscribers = new Set<AgentSessionSubscriber>();
@@ -318,7 +259,9 @@ export class RemoteSessionClient implements AgentSession {
   }
 
   getSnapshot(): AgentSessionSnapshot {
-    return this.snapshot;
+    // Same contract as the local session: a projection, so a host that mutates the returned array
+    // cannot corrupt the cache (and the next messages patch) it was handed.
+    return { ...this.snapshot, messages: [...this.snapshot.messages] };
   }
 
   private setToolDescriptors(descriptors: AgentSessionSnapshot["toolDescriptors"]): void {
@@ -376,13 +319,22 @@ export class RemoteSessionClient implements AgentSession {
       // switch is the exception: the server cleared its summary/tool remount
       // seeds, so our caches must be rebuilt from the new session's snapshot.
       const result = (await readJson<AgentSessionCommandResult>(response)) as AgentSessionCommandResultFor<C>;
+      // `session.resume|clone|fork` answer with `uiMessages` whose `createdAt` was serialized as an
+      // ISO string. Local returns real `Date`s; revive here so the contract is transport-independent.
+      if (result.ok && result.data && typeof result.data === "object") {
+        const uiMessages = (result.data as { uiMessages?: unknown }).uiMessages;
+        if (Array.isArray(uiMessages)) reviveMessageTimestamps(uiMessages as AgentSessionSnapshot["messages"]);
+      }
       if (
-        command.type === "session.new" ||
-        command.type === "session.resume" ||
-        command.type === "session.clone" ||
-        command.type === "session.fork"
+        result.ok &&
+        (command.type === "session.new" ||
+          command.type === "session.resume" ||
+          command.type === "session.clone" ||
+          command.type === "session.fork")
       ) {
-        await this.resync().catch(() => undefined);
+        // A switch REPLACES the conversation: drop summary/tool entries that belonged to the
+        // previous one (see `doResync`). A REFUSED switch changed nothing, so its caches must stay.
+        await this.resync({ replaceCaches: true }).catch(() => undefined);
       }
       return result;
     } catch (error) {
@@ -402,17 +354,24 @@ export class RemoteSessionClient implements AgentSession {
    * and lazy connect. Concurrent callers share one fetch — `host.connect()`
    * fires an eager refresh while the first subscribe may resync immediately
    * after; without dedupe that re-downloads the transcript twice.
+   *
+   * `replaceCaches` is for a conversation switch: entries that belonged to the previous session are
+   * dropped even when a live frame landed during the fetch (the seeds are then merged by seq/len).
    */
-  private resync(): Promise<void> {
-    if (this.resyncInFlight) return this.resyncInFlight;
-    const run = this.doResync().finally(() => {
+  private resync(options: { replaceCaches?: boolean } = {}): Promise<void> {
+    if (this.resyncInFlight) {
+      if (!options.replaceCaches) return this.resyncInFlight;
+      // A switch must not piggyback on a plain refresh: run again after it settles.
+      return this.resyncInFlight.then(() => this.resync({ replaceCaches: true }));
+    }
+    const run = this.doResync(options.replaceCaches === true).finally(() => {
       this.resyncInFlight = null;
     });
     this.resyncInFlight = run;
     return run;
   }
 
-  private async doResync(): Promise<void> {
+  private async doResync(replaceCaches: boolean): Promise<void> {
     const versionAtRequest = this.snapshotVersion;
     const snapRes = await this.fetchImpl(joinUrl(this.baseUrl, `/api/agent/${this.id}/snapshot`));
     if (snapRes.status === 404) {
@@ -430,22 +389,33 @@ export class RemoteSessionClient implements AgentSession {
     }
     this.lastSyncAt = Date.now();
 
+    // The seed caches are NOT covered by `snapshotVersion` above: a summary/tool frame can land
+    // between the version check and these fetches. Replacing unconditionally dropped it (the server
+    // never resends it), so merge instead when that happened.
+    const summaryVersion = this.snapshotVersion;
     try {
       const sumRes = await this.fetchImpl(joinUrl(this.baseUrl, `/api/agent/${this.id}/summary-streams`));
       const data = await readJson<{ snapshots: AgentStreamSnapshot[] }>(sumRes);
-      this.summaryCache.clear();
-      for (const snapshot of data.snapshots ?? []) this.summaryCache.set(snapshot.key, snapshot);
+      mergeSummarySeeds(
+        this.summaryCache,
+        data.snapshots ?? [],
+        replaceCaches || this.snapshotVersion === summaryVersion
+      );
     } catch {
-      // Optional route — ignore failures.
+      // Optional route — ignore failures. On a session switch the old conversation's entries must
+      // still go: leaving them lets `replaySummaryCache` re-emit the previous session's text.
+      if (replaceCaches) this.summaryCache.clear();
     }
+    const toolVersion = this.snapshotVersion;
     try {
       const bufRes = await this.fetchImpl(joinUrl(this.baseUrl, `/api/agent/${this.id}/tool-buffers`));
       const data = await readJson<{ buffers: Record<string, { stdout: string; stderr: string }> }>(bufRes);
-      this.toolBufferCache.clear();
-      for (const [key, value] of Object.entries(data.buffers ?? {})) this.toolBufferCache.set(key, value);
+      mergeToolSeeds(this.toolBufferCache, data.buffers ?? {}, replaceCaches || this.snapshotVersion === toolVersion);
     } catch {
-      // Optional route — ignore failures.
+      // Optional route — ignore failures. Same rule as the summary cache on a switch.
+      if (replaceCaches) this.toolBufferCache.clear();
     }
+    this.cachesSeeded = true;
     this.replaySummaryCache();
   }
 
@@ -566,14 +536,19 @@ export class RemoteSessionClient implements AgentSession {
     }
   }
 
-  /** Channel set the shared stream must carry for the current subscribers; null = everything. */
-  private desiredChannels(): string[] | null {
-    const union = new Set<string>();
-    for (const entry of this.sseSubscribers) {
-      if (!entry.channels) return null;
-      for (const channel of entry.channels) union.add(channel);
-    }
-    return union.size > 0 ? [...union] : null;
+  /**
+   * Channel set the shared stream must carry.
+   *
+   * ALWAYS the protocol's full set, and the per-subscriber filter stays client-side
+   * ({@link deliverToEntry}). The stream used to request only the union of subscriber channels,
+   * which made `getSnapshot()`'s freshness depend on whether some component happened to subscribe —
+   * a host reading `snapshot.subagents` / `model` without a matching subscriber saw the last
+   * resync's value. It also had a coverage bug (`desiredChannels() === null` claimed to cover
+   * everything, while the server's default set omits `extension-ui`), and every late subscriber
+   * forced a reconnect + full resync.
+   */
+  private desiredChannels(): string[] {
+    return [...AGENT_SESSION_CHANNELS];
   }
 
   private coversChannels(required: string[] | null, open: string[] | null): boolean {
@@ -641,13 +616,17 @@ export class RemoteSessionClient implements AgentSession {
       const connection = new AbortController();
       this.sseConnection = connection;
       try {
-        // The snapshot is often already fresh: host.create returns it inline and host.connect()
-        // fires an eager refresh (deduped via resync()). Skip the redundant first resync; reconnects
-        // always resync to heal frames missed while the stream was down.
-        if (!firstConnect || this.isSnapshotStale()) await this.resync();
-        firstConnect = false;
         const channels = (this.sseChannels = this.desiredChannels());
-        const query = channels?.length ? `?channels=${channels.join(",")}` : "";
+        // Seed/refresh CONCURRENTLY with the stream. Awaiting it before opening the connection lost
+        // every non-retained frame (tool chunks, summary appends, extension notices) emitted in that
+        // window. The version guards in `doResync` make a frame racing the snapshot harmless.
+        if (!firstConnect || this.isSnapshotStale() || !this.cachesSeeded) {
+          void this.resync().catch((error) => {
+            if (!this.terminated) console.error("[RemoteSessionClient] resync failed", error);
+          });
+        }
+        firstConnect = false;
+        const query = channels.length ? `?channels=${channels.join(",")}` : "";
         const url = joinUrl(this.baseUrl, `/api/agent/${this.id}/events${query}`);
         const response = await this.fetchImpl(url, {
           headers: { Accept: "text/event-stream" },

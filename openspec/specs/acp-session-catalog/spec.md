@@ -45,7 +45,7 @@ SHALL 仅返回全序中严格晚于该边界行的会话（全序 = `updatedAt`
 
 ### Requirement: 会话删除
 
-agent SHALL 通过 `session/delete` 删除会话。删除 SHALL 经 core 的会话存储完成（宿主提供，agent MUST NOT 自行拼接存储路径）。**成功条件 SHALL 为「该会话本进程内 live（已先行关闭）、磁盘文件已删，或该 id 从未存在」**——ACP 要求删除一个已不存在的会话应当成功，因此一个既不 live、磁盘上也没有文件的 id SHALL 被视为幂等成功，MUST NOT 返回 not-found。删除 live 会话 SHALL 先行停止在飞运行并注销。
+agent SHALL 通过 `session/delete` 删除会话。删除 SHALL 经 core 的会话存储完成（宿主提供，agent MUST NOT 自行拼接存储路径）。**成功条件 SHALL 为「该会话本进程内 live（已先行关闭）、磁盘文件已删，或该 id 从未存在」**——ACP 要求删除一个已不存在的会话应当成功，因此一个既不 live、磁盘上也没有文件的 id SHALL 被视为幂等成功，MUST NOT 返回 not-found。删除 live 会话 SHALL 先行停止在飞运行并注销。`DeleteSessionRequest` 不携带 `cwd`，因此 agent SHALL 记住 sessionId 所属的 workspace root（来自 `session/new` / `load` / `resume` / `fork` / `list`）：live 会话 SHALL 经它自己的 runtime host 删除；cold 会话 SHALL 经该 root 的 host 删除，MUST NOT 一律使用进程默认 root（否则会销毁 agent 却留下文件）。
 
 #### Scenario: 删除已持久化会话
 
@@ -79,7 +79,7 @@ agent SHALL 通过 `session/delete` 删除会话。删除 SHALL 经 core 的会�
 
 ### Requirement: 会话分支
 
-agent SHALL 通过 `session/fork` 以既有会话为上下文创建一个新会话，源会话 SHALL 保持不变且仍可 resume。分支 SHALL 复用 core 的会话克隆语义（复制消息与模型设置），MUST NOT 截断历史（ACP 的 fork 请求不携带分支点）。源会话 MAY 不在本进程内 live：agent SHALL 先按 `session/resume` 的语义恢复它（不回放）再 clone。fork 完成后 SHALL 把同一 bridge 重绑到新磁盘 id：更新句柄、`bridges` 键、`runtime.bind(newId)`（client-env）并重置 `replayed`；clone dispatch 期间 SHALL 抑制投影，MUST NOT 以源 id 发出新会话的更新。
+agent SHALL 通过 `session/fork` 以既有会话为上下文创建一个新会话，源会话 SHALL 保持不变且仍可 resume。分支 SHALL 复用 core 的会话克隆语义（复制消息与模型设置），MUST NOT 截断历史（ACP 的 fork 请求不携带分支点）。源会话 MAY 不在本进程内 live：agent SHALL 先按 `session/resume` 的语义恢复它（不回放）再 clone。fork 完成后 SHALL 把 clone 的 bridge 重绑到新磁盘 id：更新句柄、`bridges` 键、`runtime.bind(newId)`（client-env）并重置 `replayed`；clone dispatch 期间 SHALL 抑制投影，MUST NOT 以源 id 发出新会话的更新。由于 core 的 `session.clone` 会把源会话的 live agent 切到新会话，fork SHALL 立即用同一 root 为源会话恢复一个**独立** bridge/agent（不带 transcript 回放，沿用源会话的 MCP 列表），使源 thread 在 fork 后仍可直接 `prompt`；源 bridge 的更新 SHALL 以源 id 发出，clone 的更新 SHALL 以新 id 发出。
 
 #### Scenario: 分支产生新会话
 
@@ -91,13 +91,14 @@ agent SHALL 通过 `session/fork` 以既有会话为上下文创建一个新会�
 
 - **WHEN** 一次 fork 完成
 - **THEN** 源会话仍可通过 `session/resume` 继续，其持久化数据未被改写
+- **AND** 源 `sessionId` SHALL 仍可立即接受 `session/prompt`（agent 已为它恢复独立 bridge）
 
 #### Scenario: 分支后的事件归属
 
 - **WHEN** fork 完成且 client 代表新会话继续 prompt
-- **THEN** `session/update` SHALL 以新句柄送达
-- **AND** 源 `sessionId` MUST NOT 再收到该会话的运行事件
-- **AND** clone 期间 MUST NOT 有更新以源 id 发出
+- **THEN** 该会话的 `session/update` SHALL 以新句柄送达
+- **AND** 源 `sessionId` MUST NOT 收到 clone 的运行事件（源自己的恢复/运行事件仍以源 id 发出）
+- **AND** clone 期间 MUST NOT 有 clone 的更新以源 id 发出
 
 #### Scenario: 运行中拒绝
 
@@ -113,8 +114,9 @@ agent SHALL 通过 `session/fork` 以既有会话为上下文创建一个新会�
 #### Scenario: client-env 下 fork 重绑环境
 
 - **WHEN** `--client-env` 开启时 fork 成功
-- **THEN** 后续该会话的 `fs/*` / `terminal/*` 请求 SHALL 携带新句柄对应的 sessionId
-- **AND** MUST NOT 继续携带源会话的 sessionId
+- **THEN** clone 的后续 `fs/*` / `terminal/*` 请求 SHALL 携带新句柄对应的 sessionId
+- **AND** 恢复后的源会话 SHALL 保留自己的 client-env 绑定（其后续请求携带源 sessionId）
+- **AND** MUST NOT 让 clone 继续携带源会话的 sessionId
 
 ### Requirement: 会话配置选项下发
 

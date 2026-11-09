@@ -1,5 +1,5 @@
-import { BUILTIN_TOOL_NAMES } from "@codent/core";
-import { useEffect, useRef } from "react";
+import { BUILTIN_TOOL_NAMES, buildAskUserOutput } from "@codent/core";
+import { useEffect, useRef, useState } from "react";
 
 import { dispatchCommand } from "../commands";
 import { exitWithSummary } from "../utils/exit-with-summary.js";
@@ -16,7 +16,7 @@ import { useUserInput } from "./use-user-input.js";
 import type { AgentAdapter } from "../adapter/types.js";
 import type { CommandContext } from "../commands";
 import type { DenyingToolInfo } from "./keybindings/context.js";
-import type { UseAgentChatReturn } from "./use-agent-chat.js";
+import type { SessionDispatchOutcome, UseAgentChatReturn } from "./use-agent-chat.js";
 import type { UseAgentKeybindingsOptions } from "./use-agent-keybindings.js";
 import type { UIMessage } from "@tanstack/ai";
 
@@ -77,6 +77,10 @@ export function useAgentInputControls({
   const denyingRef = useRef<DenyingToolInfo | null>(null);
   const askUserStartTimeRef = useRef<number>(0);
   const prevPendingQuestionRef = useRef<string | undefined>(undefined);
+  // Forces the "present the pending question" effect to run again after a rejected answer, so the
+  // question is not left invisible with the select list closed.
+  const [askUserRevision, setAskUserRevision] = useState(0);
+  const askUserRetryRef = useRef(0);
 
   const inputActions = useUserInput.getActions();
   const autocompleteActions = useAutocomplete.getActions();
@@ -129,35 +133,46 @@ export function useAgentInputControls({
     setClientToolWaiting(waiting);
   }, [askUserToolCallId, setClientToolWaiting]);
 
-  const submitAskUserAnswer = (answer: string, meta?: { selected?: string[]; draft?: string }) => {
+  const submitAskUserAnswer = async (answer: string, meta?: { selected?: string[]; draft?: string }) => {
     if (!pendingAskUser) return;
-    // setClientToolWaiting(false);
     const durationMs = askUserStartTimeRef.current ? Date.now() - askUserStartTimeRef.current : 0;
-    addToolOutput({
+    // One assembly rule shared with ACP (`buildAskUserOutput`): selected labels + typed draft are
+    // both answers, and the multi-select flag describes the QUESTION, not the tick count.
+    const output = buildAskUserOutput({
+      question: pendingAskUser.question,
+      answer,
+      hasOptions: !!pendingAskUser.options?.length,
+      multiSelect: !!pendingAskUser.multiSelect,
+      ...(meta?.selected && meta.selected.length > 0 ? { selected: meta.selected } : {}),
+      ...(meta?.draft ? { draft: meta.draft } : {}),
+      durationMs,
+    });
+    const outcome = await addToolOutput({
       tool: BUILTIN_TOOL_NAMES.askUser,
       toolCallId: pendingAskUser.toolCallId,
-      output: {
-        question: pendingAskUser.question,
-        answer,
-        hasOptions: !!pendingAskUser.options?.length,
-        // Structured multi-select info: lets the UI echo and the model-facing
-        // result clearly represent a multi-choice answer instead of an ambiguous
-        // comma-joined string (option text may itself contain commas).
-        multiSelect: !!pendingAskUser.multiSelect,
-        selected: meta?.selected && meta.selected.length > 0 ? meta.selected : undefined,
-        draft: meta?.draft || undefined,
-        durationMs,
-        cachedOutputPath: null,
-      },
+      output,
     });
-    askUserStartTimeRef.current = 0;
+    if (outcome.ok) {
+      askUserStartTimeRef.current = 0;
+    } else {
+      // A transport failure keeps the question pending; re-open it so the answer can be retried.
+      // A rejection because the turn ended leaves nothing to re-open (the effect sees no question).
+      setAskUserRevision((n) => n + 1);
+    }
   };
 
   useEffect(() => {
     const key = pendingAskUser?.toolCallId;
-    if (key && key !== prevPendingQuestionRef.current) {
+    // Consume the retry revision so an unrelated re-render (a new interaction snapshot object for
+    // the SAME question) does not reset the elapsed timer.
+    const retry = askUserRevision !== askUserRetryRef.current;
+    const isNewQuestion = key !== prevPendingQuestionRef.current;
+    if (key && (isNewQuestion || retry)) {
+      askUserRetryRef.current = askUserRevision;
       prevPendingQuestionRef.current = key;
-      askUserStartTimeRef.current = Date.now();
+      // A retry of the SAME question keeps its original start time (the reported duration is the
+      // user's total time on the question, not just the time after the failed delivery).
+      if (isNewQuestion) askUserStartTimeRef.current = Date.now();
       const hasOptions = pendingAskUser.options && pendingAskUser.options.length > 0;
       if (hasOptions) {
         const opts = pendingAskUser.options!.map((option) => ({ label: option, value: option }));
@@ -172,7 +187,7 @@ export function useAgentInputControls({
       prevPendingQuestionRef.current = undefined;
       selectActions.close();
     }
-  }, [inputActions, modeActions, pendingAskUser, selectActions]);
+  }, [askUserRevision, inputActions, modeActions, pendingAskUser, selectActions]);
 
   useEffect(() => {
     if (!isReady || !initialPrompt || hasInitRef.current) return;
@@ -182,12 +197,30 @@ export function useAgentInputControls({
     // "once" hold per launch — a new process re-initializes it from the CLI argument, and neither
     // a runtime rebuild nor `session.new` (both keep the empty value) re-sends it.
     useConfig.getActions().updateConfig({ initialPrompt: "" });
-    sendMessage(initialPrompt);
-  }, [isReady, initialPrompt, sendMessage]);
+    void sendMessage(initialPrompt).then((outcome) => {
+      // A refused dispatch (session switching, destroyed) must not swallow the launch prompt.
+      if (outcome.ok) return;
+      inputActions.setValue(initialPrompt);
+      inputActions.setInputError(outcome.error ?? "The initial prompt was not accepted.");
+    });
+  }, [inputActions, isReady, initialPrompt, sendMessage]);
 
   useEffect(() => {
     setLoading(initLoading || isLoading);
   }, [isLoading, initLoading, setLoading]);
+
+  /**
+   * Put a refused submission back where it came from. `submit()` cleared the input before the
+   * dispatch, and core's `ok:false` exists precisely so a host does not silently drop the text.
+   * Attachments cannot be reconstructed into the input store; the text (the part the user typed)
+   * is restored so nothing is lost without a trace.
+   */
+  const restoreRefusedSubmit = (outcome: SessionDispatchOutcome, prompt: string): boolean => {
+    if (outcome.ok) return false;
+    if (prompt) inputActions.setValue(prompt);
+    inputActions.setInputError(outcome.error ?? "The message was not accepted. Try again.");
+    return true;
+  };
 
   const commandCtx: CommandContext = {
     inputActions,
@@ -257,7 +290,12 @@ export function useAgentInputControls({
     }
 
     if (!prompt && !attachments.length) return;
-    if (!isReady) return;
+    if (!isReady) {
+      // The input was already cleared by `submit()`; a not-yet-ready session must not eat it.
+      if (prompt) inputActions.setValue(prompt);
+      inputActions.setInputError("The agent is not ready yet.");
+      return;
+    }
 
     const content = attachments.length > 0 ? { text: prompt, files: attachments } : prompt;
 
@@ -265,22 +303,22 @@ export function useAgentInputControls({
       // NOTE: steer is not the default Enter keybinding anymore.
       // Enter (running) → followUp; Option+Enter → forceSubmit.
       // steer is kept for programmatic use (same-turn injection).
-      steer(content);
+      restoreRefusedSubmit(await steer(content), prompt);
       return;
     }
     if (behavior === "followUp") {
-      followUp(content);
+      restoreRefusedSubmit(await followUp(content), prompt);
       return;
     }
     if (behavior === "forceSubmit") {
-      forceSubmit(content);
+      restoreRefusedSubmit(await forceSubmit(content), prompt);
       return;
     }
     if (isLoading) {
-      followUp(content);
+      restoreRefusedSubmit(await followUp(content), prompt);
       return;
     }
-    await sendMessage(content);
+    restoreRefusedSubmit(await sendMessage(content), prompt);
   };
 
   return {

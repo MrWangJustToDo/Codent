@@ -15,10 +15,12 @@ import type { ExtensionInfo } from "@codent/core";
 
 const ExtensionPanelList = ({
   infos,
+  error,
   onToggle,
   onClose,
 }: {
   infos: ExtensionInfo[];
+  error: string;
   onToggle: (id: string) => void;
   onClose: () => void;
 }) => {
@@ -56,6 +58,11 @@ const ExtensionPanelList = ({
         <Text color={COLORS.muted} dimColor>
           No extensions loaded.
         </Text>
+        {error ? (
+          <Text color={COLORS.danger} wrap="truncate">
+            {truncateText(error, 100, { marker: "…" })}
+          </Text>
+        ) : null}
         <Text color={COLORS.muted} dimColor>
           {pressEscToReturnHint()}
         </Text>
@@ -113,6 +120,11 @@ const ExtensionPanelList = ({
         );
       })}
       <Box marginTop={1}>
+        {error ? (
+          <Text color={COLORS.danger} wrap="truncate">
+            {truncateText(error, 100, { marker: "…" })}
+          </Text>
+        ) : null}
         <Text color={COLORS.muted} dimColor>
           {pressEscToReturnHint()}
         </Text>
@@ -128,6 +140,7 @@ export const ExtensionPanel = () => {
   const { close, refresh } = useExtensionPanel.getActions();
   const session = toRaw(useAgent((s) => s.session));
   const [tick, setTick] = useState(0);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     setTick((n) => n + 1);
@@ -158,13 +171,17 @@ export const ExtensionPanel = () => {
     if (!session) return;
     const info = session.getSnapshot().extensions.extensions.find((i) => i.id === id);
     if (!info) return;
-    await session.dispatch({ type: "extension.toggle", id, enabled: !info.enabled });
+    setError("");
+    const result = await session.dispatch({ type: "extension.toggle", id, enabled: !info.enabled });
+    // A teardown failure still disables the instance; reporting the error is what explains why a
+    // tool disappeared even though the toggle "worked".
+    if (!result.ok) setError(result.error ?? "Extension toggle failed.");
     refresh();
   };
 
   return (
     <PanelOverlay open={view !== "closed"}>
-      <ExtensionPanelList infos={infos} onToggle={handleToggle} onClose={close} />
+      <ExtensionPanelList infos={infos} error={error} onToggle={handleToggle} onClose={close} />
     </PanelOverlay>
   );
 };

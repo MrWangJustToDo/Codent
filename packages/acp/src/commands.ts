@@ -89,7 +89,12 @@ export async function dispatchSlashCommand(
     const extensionNames = new Set(snapshot.extensions.commands.map((c) => c.name));
     if (extensionNames.has(parsed.name)) {
       const result = await session.dispatch({ type: "extension.invokeCommand", name: parsed.name, args: parsed.args });
-      return { handled: true, message: result.ok ? result.data?.message : undefined };
+      // A failed command (unknown/revoked at dispatch, extension threw) must be shown: reporting
+      // `handled: true` with no message turned it into a silent no-op that resolved `end_turn`.
+      return {
+        handled: true,
+        message: result.ok ? result.data?.message : result.error || "Extension command failed.",
+      };
     }
     return { handled: false };
   }

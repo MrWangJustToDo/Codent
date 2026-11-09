@@ -108,7 +108,10 @@ export const useTask = ({ taskId }: { taskId: string }) => {
       },
       { channels: ["messages", "usage", "state", "lifecycle", "iteration"] }
     );
-  }, [subagent, subagent?.id, subagent?.taskPhase]);
+    // Depend on the PRIMITIVES, not the row object: a parent `state` frame rebuilds every summary
+    // row (local snapshots project fresh objects), and depending on the object tore down and
+    // re-attached the child subscription on every parent tick.
+  }, [subagent?.id, subagent?.taskPhase]);
 
   return { ...info, agent: subagent, phase: taskId ? info.phase : ("tools" as const) };
 };

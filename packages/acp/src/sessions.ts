@@ -127,6 +127,20 @@ export interface SessionCatalogDeps {
   /** `undefined` when the host cannot delete. */
   deleteSession?: (sessionId: string) => Promise<boolean>;
   /**
+   * Delete a cold persisted session in a workspace root other than the process default.
+   * `DeleteSessionRequest` carries only an id, so the root comes from {@link rootForSession}.
+   */
+  deleteSessionAt?: (rootPath: string, sessionId: string) => Promise<boolean>;
+  /** Which workspace root a session id belongs to (remembered on create/resume/list). */
+  rootForSession?: (sessionId: string) => string | undefined;
+  /** Record the root a `session/list` page was served from, so a later delete finds it. */
+  noteListed?: (rootPath: string, sessions: ReadonlyArray<{ id: string }>) => void;
+  /**
+   * Delete a session that is still live in this process, through its own runtime host.
+   * Returns whether it handled the id (the contract's "a live session counts as removed").
+   */
+  deleteLive?: (sessionId: string) => Promise<boolean>;
+  /**
    * The live bridge behind an id, when there is one.
    *
    * `session/delete` addresses DISK ids. A stable ACP handle may equal a *former* disk id after a
@@ -171,6 +185,8 @@ export function createSessionCatalog(deps: SessionCatalogDeps) {
         listed = [];
       }
       const page = paginateSessions(listed, requested, { cursor: params.cursor });
+      // Record the WHOLE listed set (not just this page): a later delete may address any id.
+      deps.noteListed?.(requested, listed);
       return {
         sessions: page.sessions,
         ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
@@ -178,21 +194,30 @@ export function createSessionCatalog(deps: SessionCatalogDeps) {
     },
 
     async remove(params: DeleteSessionRequest): Promise<Record<string, never>> {
-      if (!deps.deleteSession) {
+      if (!deps.deleteSession && !deps.deleteSessionAt) {
         throw new Error("This host cannot delete persisted sessions (no deleteSession capability)");
       }
       // `DeleteSessionRequest` carries only `sessionId`.
       const sessionId = params.sessionId;
       const live = deps.lookupLive?.(sessionId);
       if (live && live.diskId === sessionId) {
-        // The requested id IS the live conversation: stop it before removing its log.
+        // The requested id IS the live conversation: delete it through its OWN runtime host (which
+        // knows the workspace and, under --client-env, the client's fs), then release the bridge.
+        const handled = (await deps.deleteLive?.(sessionId)) ?? false;
+        if (handled) return {};
+        // No live-delete hook: stop it, then remove the file through the root below.
         await deps.closeLive(sessionId);
-        await deps.deleteSession(sessionId);
-        return {};
       }
       // A stable handle may equal a FORMER disk id (after `/new`/`/clone`/`/resume`). It is not a
       // disk id now: delete that persisted conversation if it exists, but never close the live one.
-      await deps.deleteSession(sessionId);
+      const root = deps.rootForSession?.(sessionId) ?? deps.rootPath;
+      // `deleteSessionAt` is the only deleter on a host that supplies it without `deleteSession`
+      // (a legal capability combination), so use it for the default root too in that case.
+      if (deps.deleteSessionAt && (!deps.deleteSession || root !== deps.rootPath)) {
+        await deps.deleteSessionAt(root, sessionId);
+        return {};
+      }
+      await deps.deleteSession?.(sessionId);
       return {};
     },
   };

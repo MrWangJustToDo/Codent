@@ -7,6 +7,8 @@ import {
   getStreamingStoreOutput,
   ingestStreamingChunk,
   registerStreamingThrottle,
+  resetStreamingIngest,
+  seedStreamingBuffers,
 } from "../dist/utils/streaming-ingest.mjs";
 
 test("ingestStreamingChunk with throttleMs=0 flushes every chunk", () => {
@@ -42,4 +44,21 @@ test("clearStreamingIngest drops pending buffer", async () => {
 
   await delay(120);
   assert.equal(getStreamingStoreOutput("call-clear"), undefined);
+});
+
+test("seedStreamingBuffers seeds a remount and never truncates newer live output", () => {
+  // A chunk that arrived before the remount seed is already in the buffer and is the newer text.
+  ingestStreamingChunk("call-seed-live", "stdout", "full-live-output");
+  seedStreamingBuffers({
+    "call-seed-live": { stdout: "partial", stderr: "" },
+    "call-seed-new": { stdout: "seed-out", stderr: "seed-err" },
+  });
+
+  assert.equal(getStreamingStoreOutput("call-seed-live")?.stdout, "full-live-output");
+  assert.equal(getStreamingStoreOutput("call-seed-new")?.stdout, "seed-out");
+  assert.equal(getStreamingStoreOutput("call-seed-new")?.stderr, "seed-err");
+
+  resetStreamingIngest();
+  assert.equal(getStreamingStoreOutput("call-seed-live"), undefined);
+  assert.equal(getStreamingStoreOutput("call-seed-new"), undefined);
 });

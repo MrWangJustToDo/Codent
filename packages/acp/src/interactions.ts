@@ -274,11 +274,34 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
     }
   };
 
+  /**
+   * Keep the session's `awaiting_user` status in sync with the questions this bridge is actually
+   * showing.
+   *
+   * Core does not infer a client-tool wait: without this the session reported `running` while the
+   * user was looking at an `ask_user` form, which feeds `isRunActive`/queueing and the status a
+   * host or observer sees. The TUI dispatches the same command from its pending-question effect.
+   */
+  const syncClientToolWaiting = (bridge: InteractionBridge): void => {
+    void bridge.session
+      .dispatch({ type: "setClientToolWaiting", active: bridge.pendingAskUser.size > 0 })
+      .catch(() => undefined);
+  };
+
+  /** Drop one pending question and its controller (all settle paths go through here). */
+  const removePendingAsk = (bridge: InteractionBridge, toolCallId: string): void => {
+    const entry = bridge.pendingAskUser.get(toolCallId);
+    if (entry) bridge.pending.delete(entry.controller);
+    bridge.pendingAskUser.delete(toolCallId);
+    syncClientToolWaiting(bridge);
+  };
+
   const requestElicitation = async (bridge: InteractionBridge, ask: AskUserRequest): Promise<void> => {
     const controller = new AbortController();
     const startedAt = Date.now();
     bridge.pending.add(controller);
     bridge.pendingAskUser.set(ask.toolCallId, { controller, ask, mode: "form" });
+    syncClientToolWaiting(bridge);
     let settled = false;
     let timedOut = false;
     let rejectTimeout: ((error: Error) => void) | undefined;
@@ -329,8 +352,7 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
         void (async () => {
           await settle(cancelledOutput());
           notify(bridge, "The question timed out and was cancelled.", "warning");
-          bridge.pendingAskUser.delete(ask.toolCallId);
-          bridge.pending.delete(controller);
+          removePendingAsk(bridge, ask.toolCallId);
         })();
       }, timeoutMs);
       textTimer.unref?.();
@@ -352,8 +374,7 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
               durationMs: Date.now() - startedAt,
             })
           );
-          bridge.pendingAskUser.delete(ask.toolCallId);
-          bridge.pending.delete(controller);
+          removePendingAsk(bridge, ask.toolCallId);
         };
       }
       return;
@@ -390,8 +411,7 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
       }
     } finally {
       clearTimeout(timer);
-      bridge.pendingAskUser.delete(ask.toolCallId);
-      bridge.pending.delete(controller);
+      removePendingAsk(bridge, ask.toolCallId);
     }
   };
 
@@ -416,8 +436,10 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
     }
     const questions = [...bridge.pendingAskUser.entries()];
     for (const [toolCallId, { controller, ask }] of questions) {
-      bridge.pendingAskUser.delete(toolCallId);
       controller.abort();
+      // Remove the controller from `bridge.pending` too (the text-mode path used to leave it set
+      // for the session lifetime) and re-sync `awaiting_user`.
+      removePendingAsk(bridge, toolCallId);
       await bridge.session
         .dispatch({
           type: "addToolResult",
@@ -466,8 +488,8 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
     );
     for (const [toolCallId, entry] of bridge.pendingAskUser) {
       if (liveAskUser.has(toolCallId)) continue;
-      bridge.pendingAskUser.delete(toolCallId);
       entry.controller.abort();
+      removePendingAsk(bridge, toolCallId);
     }
 
     for (const entry of ordered) {

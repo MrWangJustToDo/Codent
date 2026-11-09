@@ -73,7 +73,7 @@ function sanitizeConfigForClient(config: ModelsConfig, connection: ModelConnecti
 }
 
 /** Union of selectable model ids from the config's direct entries (+ the env model). */
-function collectAllowedModels(config: ModelsConfig | null, connection: ModelConnection): Set<string> {
+export function collectAllowedModels(config: ModelsConfig | null, connection: ModelConnection): Set<string> {
   const set = new Set<string>();
   if (config?.models) {
     for (const e of config.models) {
@@ -94,7 +94,7 @@ function collectAllowedModels(config: ModelsConfig | null, connection: ModelConn
  * models.json existed and the only allowed model came from the server's `MODEL`
  * env var — which sent readers looking for a file that was not there.
  */
-function modelNotAllowedMessage(reqModel: string, allowed: Set<string>): string {
+export function modelNotAllowedMessage(reqModel: string, allowed: Set<string>): string {
   const names = [...allowed].sort().join(", ");
   return (
     `Model "${reqModel}" is not available on this server. ` +

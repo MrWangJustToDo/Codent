@@ -1022,7 +1022,7 @@ for (const [label, finishReason, iteration, expected] of [
 
 // --- fork rebinds the client-env session id -------------------------------
 {
-  let boundId;
+  const envBindings = [];
   const host = makeHost(() =>
     makeSession({
       id: "fork-env",
@@ -1040,22 +1040,37 @@ for (const [label, finishReason, iteration, expected] of [
     defaults: { model: "fake-model" },
     rootPath: "/ws",
     createSessionHost: async (context) => {
-      boundId = context.sessionId;
+      // One runtime per live session: `session/new` builds one, and the fork's source re-attach
+      // builds a second (the source stays usable). Keep every binding, not just the latest.
+      envBindings.push(context.sessionId);
       return { host, dispose: async () => undefined };
     },
   });
   const { value } = await runClient(app, async (cx) => {
     const s = await cx.request(methods.agent.session.new, { cwd: "/ws", mcpServers: [] });
-    const before = boundId?.();
+    const before = envBindings[0]?.();
     const forked = await cx.request(methods.agent.session.fork, {
       sessionId: s.sessionId,
       cwd: "/ws",
       mcpServers: [],
     });
-    return { before, after: boundId?.(), forked };
+    return {
+      before,
+      after: envBindings.map((binding) => binding?.()),
+      forked,
+      count: envBindings.length,
+      sourceId: s.sessionId,
+    };
   });
   check("client-env binding starts at the new session's disk id", value.before?.startsWith("ses_"));
-  check("fork rebinds the client-env session id to the new disk id", value.after === value.forked.sessionId);
+  check(
+    "fork rebinds the clone's client-env session id to the new disk id",
+    value.after.includes(value.forked.sessionId)
+  );
+  check(
+    "the fork's restored source keeps its own client-env binding",
+    value.count >= 2 && value.after.includes(value.sourceId)
+  );
 }
 
 // --- legacy set_model re-advertises configOptions -------------------------

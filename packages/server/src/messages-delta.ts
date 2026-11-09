@@ -92,7 +92,9 @@ export function createMessagesDeltaWriter(write: (payload: MessagesDeltaPayload)
     // Indices are resolved against the latest baseline order so a coalesced
     // patch never carries stale positions after mid-array shifts.
     const upserted = [...pendingUpserts.values()].map((upsert) => ({
-      index: baselineIds.indexOf(messageIdOf(upsert.message, upsert.index)),
+      // An id-less message whose synthetic `#index:N` key shifted can miss the baseline. Clamp to a
+      // valid insertion point instead of emitting `-1` (the client clamps it to 0, which prepends).
+      index: Math.max(0, baselineIds.indexOf(messageIdOf(upsert.message, upsert.index))),
       message: upsert.message,
     }));
     const removed = [...pendingRemoved];

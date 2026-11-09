@@ -85,6 +85,8 @@ export interface LocalAcpBootstrap {
   createSessionHost?: (context: AcpClientEnvFactoryContext) => Promise<AcpSessionRuntime>;
   /** Enumerate persisted sessions for a `session/list` root other than the process default. */
   listPersistedSessionsAt?: (rootPath: string) => Promise<SessionMeta[]>;
+  /** Delete a persisted session in a root other than the process default. */
+  deleteSessionAt?: (rootPath: string, sessionId: string) => Promise<boolean>;
 }
 
 /** Register CoreEnv + model provider and return a local host + defaults. */
@@ -379,24 +381,32 @@ export async function bootstrapLocalAcp(
     };
   };
 
-  // `session/list` for a root other than the default. A list request has no session, so there is
-  // no per-session runtime to borrow: build a short-lived one over that root and release it.
+  // A `session/list` / `session/delete` request carries no session runtime of its own; for a root
+  // other than the process default, build a short-lived one over that root and release it.
+  const withRootHost = async <T>(root: string, run: (host: AgentSessionHost) => Promise<T>): Promise<T> => {
+    if (root === rootPath) return run(agent.host);
+    const rootEnv = createNodeEnv({ rootPath: root, mode: sandboxEnvMode });
+    const rootAgent = await CodentAgent.create({
+      env: rootEnv,
+      ...(provider ? { provider } : {}),
+      ...(models ? { models } : {}),
+      ownsEnv: true,
+    });
+    try {
+      return await run(rootAgent.host);
+    } finally {
+      await rootAgent.dispose();
+    }
+  };
+
   const listPersistedSessionsAt = agent.host.listPersistedSessions
-    ? async (root: string): Promise<SessionMeta[]> => {
-        if (root === rootPath) return (await agent.host.listPersistedSessions?.()) ?? [];
-        const rootEnv = createNodeEnv({ rootPath: root, mode: sandboxEnvMode });
-        const rootAgent = await CodentAgent.create({
-          env: rootEnv,
-          ...(provider ? { provider } : {}),
-          ...(models ? { models } : {}),
-          ownsEnv: true,
-        });
-        try {
-          return (await rootAgent.host.listPersistedSessions?.()) ?? [];
-        } finally {
-          await rootAgent.dispose();
-        }
-      }
+    ? async (root: string): Promise<SessionMeta[]> =>
+        withRootHost(root, (host) => host.listPersistedSessions?.() ?? Promise.resolve([]))
+    : undefined;
+
+  const deleteSessionAt = agent.host.deleteSession
+    ? async (root: string, sessionId: string): Promise<boolean> =>
+        withRootHost(root, async (host) => (await host.deleteSession?.(sessionId)) ?? false)
     : undefined;
 
   // Websearch config for every session: `.env` (per-field winner) over the workspace file.
@@ -410,6 +420,7 @@ export async function bootstrapLocalAcp(
     ...(modelsDefaultEntryIndex !== undefined ? { modelsDefaultEntryIndex } : {}),
     createSessionHost,
     ...(listPersistedSessionsAt ? { listPersistedSessionsAt } : {}),
+    ...(deleteSessionAt ? { deleteSessionAt } : {}),
     defaults: {
       model,
       ...(style ? { modelStyle: style } : {}),
@@ -462,5 +473,6 @@ export async function bootstrapAcpAgent(
     ...(options.version ? { version: options.version } : {}),
     ...(boot.createSessionHost ? { createSessionHost: boot.createSessionHost } : {}),
     ...(boot.listPersistedSessionsAt ? { listPersistedSessionsAt: boot.listPersistedSessionsAt } : {}),
+    ...(boot.deleteSessionAt ? { deleteSessionAt: boot.deleteSessionAt } : {}),
   };
 }

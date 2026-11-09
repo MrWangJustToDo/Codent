@@ -17,7 +17,7 @@ import { formatStatusBarModeLabel } from "../utils/agent-mode-label.js";
  * directly; remote caches only update via the `mode` channel).
  */
 export const FooterStatusBar = () => {
-  const model = useConfig((s) => s.config.serverModel || s.config.model);
+  const configModel = useConfig((s) => s.config.serverModel || s.config.model);
   const { version } = useAgentUsage();
   const session = toRaw(useAgent((s) => s.session));
   const [tick, setTick] = useState(0);
@@ -34,6 +34,11 @@ export const FooterStatusBar = () => {
 
   // tick forces re-read when plan phase / auto mode / todos change
   void tick;
+
+  // The session snapshot is the authority: core may adopt a resumed session's model even when the
+  // app config still names the previous one (that model is not in models.json, or the state frame
+  // arrives before the re-link). The config value is only the pre-init fallback.
+  const model = session?.getSnapshot().model ?? configModel;
 
   const modeLabel = formatStatusBarModeLabel(session?.getSnapshot());
   const isDefault = modeLabel === "Normal";

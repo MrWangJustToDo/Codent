@@ -16,6 +16,15 @@ import type { AgentSessionHost, CoreEnv, LoadedModelsState, ModelProvider } from
  */
 export class LocalAgentAdapter implements AgentAdapter {
   private agent: CodentAgent | null = null;
+  /**
+   * Monotonic token for `initialize` / `destroy` ordering.
+   *
+   * A second init can start while the first is still awaiting `CodentAgent.create` — and an
+   * unmount can call `destroy()` in that same window, when `this.agent` is still `null`. Without
+   * a generation check the late completion assigned `this.agent` anyway: the superseded runtime
+   * (and, with `--remote-session`, its server-side agent) was never disposed.
+   */
+  private initGeneration = 0;
   private _exit: (report?: readonly string[]) => void;
   private _readClipboardImage: (() => Promise<ClipboardImageResult | null>) | null;
   private _openInEditor: ((target: EditorTarget) => Promise<void>) | null;
@@ -72,12 +81,17 @@ export class LocalAgentAdapter implements AgentAdapter {
     // A second `initialize` can start while the first is still building (the config effect re-runs
     // on `systemPrompt` / `maxIterations` / …). Overwriting `this.agent` leaked the previous runtime,
     // and with `--remote-session` its agent stayed on the server with nothing left to DELETE.
+    const generation = ++this.initGeneration;
     const previous = this.agent;
     this.agent = null;
     if (previous) await previous.dispose();
+    if (generation !== this.initGeneration) throw new Error("Initialization superseded by a newer one");
     // Session-plane wiring is host-process owned: a local manager, or a remote HTTP
     // host when --remote-session is configured (agent loop runs server-side). Both
     // are held by one CodentAgent so the provider/env planes resolve per runtime.
+    // Capture locally and assign only after the generation check: `this.agent = await …` would let
+    // a slower init overwrite a faster one's runtime before discovering it is stale.
+    let agent: CodentAgent;
     if (config.remoteSession) {
       if (!this._createRemoteSessionHost) {
         throw new Error(
@@ -86,7 +100,7 @@ export class LocalAgentAdapter implements AgentAdapter {
         );
       }
       const host = this._createRemoteSessionHost({ baseUrl: config.remoteSession });
-      this.agent = await CodentAgent.create({ env: this._env, host });
+      agent = await CodentAgent.create({ env: this._env, host });
     } else {
       // The model CATALOG comes from the SAME `loadModels` run the app's config load did (`initConfig` runs
       // before this) — carried onto the runtime so the TUI, `/models` and any ACP host on this process all
@@ -94,18 +108,35 @@ export class LocalAgentAdapter implements AgentAdapter {
       // the persisted DEFAULT, already applied to `config.model`/style/baseURL/apiKey above; the running
       // session's own model lives on the session.
       const loaded = useConfig.getReadonlyState().modelsConfig as LoadedModelsState | null;
-      this.agent = await CodentAgent.create({
+      agent = await CodentAgent.create({
         env: this._env,
         ...(this._provider ? { provider: this._provider } : {}),
         ...(loaded ? { models: { entries: loaded.entries } } : {}),
         ...(this._ownsEnv ? { ownsEnv: true } : {}),
       });
     }
-    const result = await createAgentSessionFromConfig({ config, name: "local-chat", runtime: this.agent });
+    // An unmount (`destroy`) or a newer init may have landed while we were building. Release the
+    // runtime we just created instead of assigning it: nothing else holds a reference to it.
+    if (generation !== this.initGeneration) {
+      await agent.dispose().catch(() => undefined);
+      throw new Error("Initialization superseded by a newer one");
+    }
+    this.agent = agent;
+    const result = await createAgentSessionFromConfig({ config, name: "local-chat", runtime: agent });
+    if (generation !== this.initGeneration) {
+      // `createAgentSessionFromConfig` may have created the session on this runtime; disposing the
+      // runtime is what destroys it (and releases a remote-session agent on the server).
+      if (this.agent === agent) this.agent = null;
+      await agent.dispose().catch(() => undefined);
+      throw new Error("Initialization superseded by a newer one");
+    }
     return result;
   }
 
   async destroy(): Promise<void> {
+    // Bump first: an in-flight `initialize` checks this after every await and disposes its own
+    // runtime instead of assigning it to a torn-down adapter.
+    this.initGeneration += 1;
     // Tear down the runtime's live agent(s) and release its provider/env.
     // `dispose` iterates the host so nothing leaks on exit.
     if (this.agent) {

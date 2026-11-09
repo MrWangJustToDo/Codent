@@ -19,7 +19,7 @@ import { loadServerModelsConfig } from "../load-models-config.js";
 import { createMessagesDeltaWriter } from "../messages-delta.js";
 import { getServerEnv, getServerManager } from "../server-runtime.js";
 
-import { readServerModelEnv } from "./provider.js";
+import { collectAllowedModels, modelNotAllowedMessage, readServerModelEnv } from "./provider.js";
 
 import type {
   AgentSession,
@@ -174,6 +174,16 @@ const createBodySchema = z.object({
     .optional(),
 });
 
+/**
+ * Loose envelope for `POST /:id/command`.
+ *
+ * The command itself is validated by core's typed dispatch (`AgentSessionCommand` is a
+ * discriminated union), but the BODY has to be an object with a string `type` first: `null`, an
+ * array or a JSON scalar reached `command.type` and threw a TypeError → 500 instead of a 400.
+ * `passthrough` keeps every command-specific field.
+ */
+const commandBodySchema = z.object({ type: z.string().min(1) }).passthrough();
+
 async function loadCore() {
   return import("@codent/core");
 }
@@ -191,29 +201,63 @@ async function loadCore() {
  * the exact inverse of what `model.set` documented.
  */
 async function resolveServerModelConnection(model: string, style?: "openai" | "anthropic") {
-  const { resolveModelConfig } = await loadCore();
+  const { resolveModelConfig, resolveModelConnection } = await loadCore();
   const config = await loadServerModelsConfig();
   const entry = (config?.models ?? []).find(
     (e): e is Extract<ModelsConfigEntry, { type: "direct" }> => e.type === "direct" && !!e.models?.includes(model)
   );
-  return entry
-    ? await resolveModelConfig({ model, style: entry.style, baseURL: entry.baseURL, apiKey: entry.apiKey })
-    : await resolveModelConfig({ ...readServerModelEnv(), model, ...(style ? { style } : {}) });
+  if (entry) {
+    return await resolveModelConfig({ model, style: entry.style, baseURL: entry.baseURL, apiKey: entry.apiKey });
+  }
+  // The model is not in any models.json entry. Falling back to the server's `.env` connection is the
+  // documented default, but it must not become a way to run an ARBITRARY id on the server's key:
+  // the proxy plane refuses ids outside the allowlist, and this plane runs the same credential.
+  const envConnection = readServerModelEnv();
+  const allowed = collectAllowedModels(config, envConnection);
+  // Only enforce the allowlist when there is something to protect: a configured credential, a
+  // configured endpoint/model, or a models.json entry. With NO server-side connection at all there is
+  // nothing to spend and the client is simply naming the model it will supply itself (a bare create
+  // still succeeds, as the HTTP parity harness relies on). A keyless `BASE_URL` (Ollama/vLLM/gateway)
+  // still counts as a configured server endpoint.
+  const defaultEnvBaseURL = resolveModelConnection({
+    style: envConnection.style ?? "openai",
+    model: envConnection.model ?? "",
+  }).baseURL;
+  const explicitEnvBaseURL =
+    Boolean(envConnection.baseURL) &&
+    (envConnection.baseURL ?? "").replace(/\/+$/, "") !== (defaultEnvBaseURL ?? "").replace(/\/+$/, "");
+  const hasServerCredential =
+    Boolean(envConnection.apiKey?.trim()) ||
+    Boolean(envConnection.model?.trim()) ||
+    explicitEnvBaseURL ||
+    (config?.models?.length ?? 0) > 0;
+  if (hasServerCredential && !allowed.has(model)) return { error: modelNotAllowedMessage(model, allowed) };
+  return await resolveModelConfig({ ...envConnection, model, ...(style ? { style } : {}) });
 }
 
-async function resolveServerModelSetCommand(command: AgentSessionCommand): Promise<AgentSessionCommand> {
-  if (command.type !== "model.set" || !command.model?.trim()) return command;
-  if (command.modelBaseURL || command.modelApiKey) return command;
+async function resolveServerModelSetCommand(
+  command: AgentSessionCommand
+): Promise<{ command: AgentSessionCommand } | { error: string }> {
+  // The body schema only guarantees an object with a string `type`; a malformed `model` (number,
+  // object) must reach the typed dispatch as a normal failure instead of throwing in `.trim()`.
+  if (command.type !== "model.set" || typeof command.model !== "string" || !command.model.trim()) {
+    return { command };
+  }
+  if (command.modelBaseURL || command.modelApiKey) return { command };
 
   const style = command.modelStyle === "openai" || command.modelStyle === "anthropic" ? command.modelStyle : undefined;
-  const { connection, modelInfo } = await resolveServerModelConnection(command.model, style);
-  if (!connection.baseURL) return command;
+  const resolution = await resolveServerModelConnection(command.model, style);
+  if ("error" in resolution) return { error: resolution.error };
+  const { connection, modelInfo } = resolution;
+  if (!connection.baseURL) return { command };
   return {
-    ...command,
-    modelStyle: connection.style,
-    modelBaseURL: connection.baseURL,
-    ...(connection.apiKey ? { modelApiKey: connection.apiKey } : {}),
-    modelInfo: command.modelInfo ?? modelInfo ?? null,
+    command: {
+      ...command,
+      modelStyle: connection.style,
+      modelBaseURL: connection.baseURL,
+      ...(connection.apiKey ? { modelApiKey: connection.apiKey } : {}),
+      modelInfo: command.modelInfo ?? modelInfo ?? null,
+    },
   };
 }
 
@@ -250,6 +294,7 @@ function listCommandSnapshots(rootId: string) {
 export const agentSessionRoutes = new Hono()
   // Catalog list — mirrors Local `AgentSessionHost.list()`.
   .get("/", async (c) => {
+    pruneDeadSessions();
     const manager = getServerManager();
     const entries = manager.getAgents().map((managed) => ({
       agentId: managed.id,
@@ -262,6 +307,22 @@ export const agentSessionRoutes = new Hono()
     }));
     return c.json({ agents: entries });
   })
+  // Persisted-session catalog (disk), distinct from the live-agent catalog above. The remote host's
+  // optional `listPersistedSessions` / `deleteSession` capabilities map to these; without them an
+  // ACP client over a remote-session host silently lost `session/list` / `session/delete`.
+  .get("/sessions", async (c) => {
+    const { createLocalAgentSessionHost } = await loadCore();
+    const host = createLocalAgentSessionHost({ manager: getServerManager() });
+    const sessions = (await host.listPersistedSessions?.()) ?? [];
+    return c.json({ sessions });
+  })
+  .delete("/sessions/:sessionId", async (c) => {
+    const { createLocalAgentSessionHost } = await loadCore();
+    const host = createLocalAgentSessionHost({ manager: getServerManager() });
+    const removed = (await host.deleteSession?.(c.req.param("sessionId"))) ?? false;
+    if (!removed) return c.json({ error: true, message: "Session not found" }, 404);
+    return c.json({ ok: true });
+  })
   // Selectable model list for `--remote-session` clients (`/models` command).
   // Mirrors the sanitized `/api/provider/info` contract: styles + model ids
   // only — upstream baseURL/apiKey never leave the server, because `model.set`
@@ -269,26 +330,49 @@ export const agentSessionRoutes = new Hono()
   .get("/models", async (c) => {
     const config = await loadServerModelsConfig();
     const envConnection = readServerModelEnv();
-    const entries = (config?.models ?? [])
-      .filter((e): e is Extract<ModelsConfigEntry, { type: "direct" }> => e.type === "direct")
-      .map((e) => ({ style: e.style, models: e.models ?? [] }));
+    const sourceEntries = config?.models ?? [];
+    const entries: Array<{ style: "openai" | "anthropic"; models: string[] }> = [];
+    // Remember which ORIGINAL entry each filtered row came from: `config.active.entryIndex` indexes
+    // `config.models`, and returning a filtered list while echoing that index made the client point
+    // at the wrong row (or past the end) whenever a non-direct entry preceded the active one.
+    const sourceIndexByEntry: number[] = [];
+    for (let index = 0; index < sourceEntries.length; index += 1) {
+      const entry = sourceEntries[index];
+      if (entry.type !== "direct") continue;
+      entries.push({ style: entry.style, models: entry.models ?? [] });
+      sourceIndexByEntry.push(index);
+    }
     // The server's own default — its `.env` model, the connection `POST /api/agent`
     // resolves when a client names none — must always be offered. It used to be offered
     // only when models.json was absent, so a models.json listing other ids advertised a
     // list in which a session could not select the model it would actually run.
     const envModel = envConnection.model?.trim();
     if (envModel && !entries.some((e) => e.models.includes(envModel))) {
-      // Appended rather than prepended: `active.entryIndex` is recorded against the
-      // ids models.json declares, and inserting ahead of them would shift every one.
       entries.push({ style: envConnection.style, models: [envModel] });
+      sourceIndexByEntry.push(-1);
     }
-    const active =
-      config?.active ??
-      // No recorded selection: the server's own model is what a session started now
-      // would use, so that is what the client should show as current.
-      (envModel
-        ? { entryIndex: entries.findIndex((e) => e.models.includes(envModel)), model: envModel }
-        : { entryIndex: 0 });
+    const active = (() => {
+      const recordedIndex = config?.active?.entryIndex;
+      const mappedIndex = recordedIndex === undefined ? -1 : sourceIndexByEntry.indexOf(recordedIndex);
+      const entryIndex =
+        mappedIndex >= 0
+          ? mappedIndex
+          : // No usable recorded selection: the server's own model is what a session started now
+            // would use, so that is what the client should show as current.
+            envModel
+            ? Math.max(
+                0,
+                entries.findIndex((e) => e.models.includes(envModel))
+              )
+            : 0;
+      const activeModels = entries[entryIndex]?.models ?? [];
+      const requested = config?.active?.model ?? envModel;
+      // Same rule as `loadModels`' file branch: a selection the entry does not offer is reported as
+      // the entry's served model, so the client's "current" marker names what it will actually send.
+      const healed =
+        requested && activeModels.length > 0 && !activeModels.includes(requested) ? activeModels[0] : requested;
+      return healed ? { entryIndex, model: healed } : { entryIndex };
+    })();
     return c.json({ entries, active });
   })
   .post("/", async (c) => {
@@ -299,6 +383,7 @@ export const agentSessionRoutes = new Hono()
       MAX_AGENT_ITERATIONS,
       resolveModelConfig,
       resolveModelConnection,
+      websearchToolConfigFromEnv,
     } = await loadCore();
     // The bound is core's single `MAX_AGENT_ITERATIONS`. This check exists for the MESSAGE (it
     // names the bound); every other schema violation — here, in `AgentConfigSchema`, or in the
@@ -327,7 +412,7 @@ export const agentSessionRoutes = new Hono()
     const clientBaseURLKey = clientBaseURL?.replace(/\/+$/, "");
     const clientSuppliedConnection =
       Boolean(body.apiKey?.trim()) || (clientBaseURLKey !== undefined && clientBaseURLKey !== defaultBaseURL);
-    const { connection, modelInfo } = !explicitModel
+    const resolvedConnection = !explicitModel
       ? await resolveModelConfig(readServerModelEnv())
       : clientSuppliedConnection
         ? await resolveModelConfig({
@@ -337,6 +422,10 @@ export const agentSessionRoutes = new Hono()
             apiKey: body.apiKey,
           })
         : await resolveServerModelConnection(explicitModel, clientStyle);
+    if ("error" in resolvedConnection) {
+      return c.json({ error: true, code: "model_not_allowed", message: resolvedConnection.error }, 400);
+    }
+    const { connection, modelInfo } = resolvedConnection;
     if (!connection.model?.trim()) {
       return c.json(
         {
@@ -349,6 +438,19 @@ export const agentSessionRoutes = new Hono()
     }
     const manager = getServerManager();
     const host = createLocalAgentSessionHost({ manager });
+    // Websearch credentials: the REQUEST wins per field, the server's own environment fills the
+    // gaps. `--remote-session` runs the agent loop here, so a server started with BRAVE_API_KEY must
+    // be able to serve `websearch` even when the client never sends a `toolConfig`.
+    const envToolConfig = websearchToolConfigFromEnv(process.env);
+    const requestToolConfig = body.toolConfig as AgentSessionCreateOptions["toolConfig"];
+    // Request wins per field, env fills gaps — but an explicitly EMPTY request value is not a value
+    // (the app sends `""` for an unset key), so it must not clobber a configured server key.
+    const websearch: Record<string, string> = { ...(envToolConfig?.websearch ?? {}) };
+    for (const [field, value] of Object.entries(requestToolConfig?.websearch ?? {})) {
+      if (typeof value === "string" && value !== "") websearch[field] = value;
+    }
+    const toolConfig =
+      envToolConfig || requestToolConfig ? { ...envToolConfig, ...requestToolConfig, websearch } : undefined;
     // Annotated deliberately: `host.create()` returns the real `AgentSession`, and leaving that
     // inferred would make this route object's type unnameable without `@tanstack/ai`
     // (see SessionWithErasedSnapshot).
@@ -375,7 +477,7 @@ export const agentSessionRoutes = new Hono()
       modelInfo: (body.modelInfo as ModelInfo | undefined) ?? modelInfo,
       continueSession: body.continueSession,
       resumeSessionId: body.resumeSessionId,
-      ...(body.toolConfig ? { toolConfig: body.toolConfig } : {}),
+      ...(toolConfig ? { toolConfig } : {}),
       ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
       ...(body.maxTokens !== undefined ? { maxTokens: body.maxTokens } : {}),
       ...(body.reasoningEffort
@@ -425,7 +527,9 @@ export const agentSessionRoutes = new Hono()
     // there is no second server-side tool buffer to keep in sync.
     const buffers: Record<string, { stdout: string; stderr: string }> = {};
     for (const snapshot of listCommandSnapshots(id)) {
-      if (!snapshot.toolCallId) continue;
+      // Only in-flight commands: an ended preview is retained by the hub for the transcript, and
+      // seeding it would resurrect a finished call on remount (same rule as the local projection).
+      if (snapshot.status !== "active" || !snapshot.toolCallId) continue;
       const channel = snapshot.channel === "stderr" ? "stderr" : "stdout";
       const text = snapshot.lines.map((line) => `${line}\n`).join("") + snapshot.pendingLine;
       const entry = buffers[snapshot.toolCallId] ?? { stdout: "", stderr: "" };
@@ -439,8 +543,16 @@ export const agentSessionRoutes = new Hono()
     const session = await getSession(id);
     diag(`POST /:id/command id=${id} inSessions=${sessions.has(id)} inManager=${session ? "yes" : "no"}`);
     if (!session) return c.json({ error: true, message: "Session not found" }, 404);
-    const command = await c.req.json();
-    const result = await session.dispatch(await resolveServerModelSetCommand(command));
+    const parsed = commandBodySchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) {
+      return c.json({ error: true, message: "Invalid command body: expected an object with a string `type`." }, 400);
+    }
+    const command = parsed.data as AgentSessionCommand;
+    const resolved = await resolveServerModelSetCommand(command);
+    if ("error" in resolved) {
+      return c.json({ ok: false, code: "failed", error: resolved.error });
+    }
+    const result = await session.dispatch(resolved.command);
     return c.json(result);
   })
   .get("/:id/events", async (c) => {
@@ -544,7 +656,14 @@ export const agentSessionRoutes = new Hono()
     sessions.delete(id);
     clearIdleStop(id);
     const manager = getServerManager();
-    if (manager.getAgent(id)) {
+    const live = manager.getAgent(id);
+    // A child is not a top-level session: destroying one through the handle plane is how a remote
+    // `AgentSession.close()` (or a stray host.destroy) would kill a running subagent. Roots cascade
+    // to their children on their own DELETE.
+    if (live?.parentId) {
+      return c.json({ error: true, message: "Refusing to destroy a child agent — close its parent session." }, 409);
+    }
+    if (live) {
       manager.destroyAgent(id);
       // `destroyAgent` is synchronous: teardown (and releasing the disk-session claim) runs
       // asynchronously. Answering before it settles made an immediate re-create/resume of the

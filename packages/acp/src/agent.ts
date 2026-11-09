@@ -21,7 +21,7 @@
  */
 
 import { agent as createAgentApp, methods, PROTOCOL_VERSION, RequestError } from "@agentclientprotocol/sdk";
-import { buildDefaultSystemPrompt, defaultPath, findBuiltinCommand, isActiveStatus } from "@codent/core";
+import { buildDefaultSystemPrompt, defaultPath, errorMessage, findBuiltinCommand, isActiveStatus } from "@codent/core";
 import { createHash } from "node:crypto";
 
 import { createChildProjector, type ChildProjectorHandle } from "./child-projector.js";
@@ -135,6 +135,14 @@ interface SessionBridge {
   promptCaps: PromptCaps;
   /** Canonical snapshot of the MCP server list this session was created with. */
   mcpKey: string;
+  /**
+   * The raw ACP `McpServer[]` this session was created/resumed with (not the mapped core form).
+   *
+   * Kept so a fork can restore the SOURCE conversation as a second live session with the same
+   * servers: the source's agent was switched to the clone, and a plain resume with `undefined` would
+   * fall back to the workspace file and silently change its tool set.
+   */
+  mcpServers?: McpServer[];
   /** `closeBridge` is idempotent: `conn.closed` and `session/close` can race. */
   closed: boolean;
   /**
@@ -217,6 +225,14 @@ export interface AcpAgentOptions {
   createSessionHost?: (context: AcpClientEnvFactoryContext) => Promise<AcpSessionRuntime>;
   /** Enumerate persisted sessions for a `session/list` `cwd` other than the process default. */
   listPersistedSessionsAt?: (rootPath: string) => Promise<SessionMeta[]>;
+  /**
+   * Delete a persisted session in a workspace root other than the process default.
+   *
+   * `DeleteSessionRequest` carries no `cwd`, so the root is remembered from create/resume/list.
+   * A live session is deleted through its OWN runtime host (see the catalog's `deleteLive`); this
+   * is the cold-session half.
+   */
+  deleteSessionAt?: (rootPath: string, sessionId: string) => Promise<boolean>;
   /** How long a permission/elicitation request waits for the client before being settled. */
   interactionTimeoutMs?: number;
 }
@@ -285,6 +301,15 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   const rootPath = resolveRoot(options.rootPath);
   const version = options.version ?? "0.0.1";
   const bridges = new Map<string, SessionBridge>();
+  /**
+   * Disk session id → workspace root it belongs to.
+   *
+   * `session/delete` has no `cwd` (`DeleteSessionRequest` is just an id), so the root has to be
+   * remembered from the operation that first saw the session. Without this, deleting a session that
+   * belongs to a foreign root went through the process-root store: the live agent was destroyed but
+   * the file stayed, and ACP reported success.
+   */
+  const sessionRoots = new Map<string, string>();
   /**
    * Child session ids announced to a client. A child never becomes a top-level session: `load`,
    * `resume`, `fork` and `prompt` must refuse it, and `delete` must not hand it to
@@ -441,6 +466,8 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       skipChildReplay?: boolean;
       /** `session/new`: queue every update until the response frame has gone out. */
       deferEmits?: boolean;
+      /** Raw ACP MCP server list, retained for a fork's source re-attach. */
+      mcpServers?: McpServer[];
     }
   ): SessionBridge => {
     const bridge: SessionBridge = {
@@ -478,6 +505,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       lastAdvertisedConfigEffort: undefined,
       replayed: false,
       mcpKey: opts.mcpKey ?? "",
+      ...(opts.mcpServers ? { mcpServers: opts.mcpServers } : {}),
       closed: false,
       projector: undefined as unknown as AcpProjector,
     };
@@ -636,6 +664,9 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     bridge.diskSessionId = next;
     bridge.runtime.bind(next);
     bridge.replayed = false;
+    // `session/delete` has no cwd, so the new conversation's root must be recorded here too (the
+    // id is disclosed to the client via `_meta.diskSessionId` and may be used for a later delete).
+    sessionRoots.set(next, bridge.rootPath);
     emit(bridge.acpId, {
       sessionUpdate: "session_info_update",
       _meta: { diskSessionId: next },
@@ -717,7 +748,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
         // "capabilities are truthful" rule forbids.
         sessionCapabilities: {
           ...(options.host.listPersistedSessions || options.listPersistedSessionsAt ? { list: {} } : {}),
-          ...(options.host.deleteSession ? { delete: {} } : {}),
+          ...(options.host.deleteSession || options.deleteSessionAt ? { delete: {} } : {}),
           resume: {},
           close: {},
           // UNSTABLE in the SDK. Declared because we cover the WHOLE request, which the base spec
@@ -806,9 +837,11 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     // The runtime owns this session's env (client-backed under `--client-env`), so it is built here
     // rather than borrowed from the process-wide host.
     const runtime = await createRuntime(sessionRoot);
-    const systemPrompt = await sessionSystemPrompt(sessionRoot, runtime);
     let session: AgentSession;
     try {
+      // Built inside the try: a prompt-build failure would otherwise discard the per-session
+      // runtime (`--client-env` env / a foreign root's agent) with nothing left to release it.
+      const systemPrompt = await sessionSystemPrompt(sessionRoot, runtime);
       ({ session } = await runtime.host.create(createOptions(mapped.servers, systemPrompt)));
     } catch (error) {
       // The runtime owns a per-session env; if the session never came to exist, nothing else will
@@ -818,10 +851,12 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     }
     const acpId = diskSessionId(session);
     runtime.bind(acpId);
+    sessionRoots.set(acpId, sessionRoot);
     const bridge = attach(session, initCaps, acpId, runtime, {
       rootPath: sessionRoot,
       diskSessionId: acpId,
       mcpKey: mcpKeyOf(mapped.servers),
+      ...(ctx.params.mcpServers ? { mcpServers: ctx.params.mcpServers } : {}),
       // The response frame must carry the id before ANY update keyed by it arrives. `start()` queues
       // the retained values and the seed, and the tick below flushes them after the response.
       deferEmits: true,
@@ -846,7 +881,13 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     clientCaps: ClientCapabilities | undefined,
     mcpServers: McpServer[] | undefined,
     additionalDirectories: string[] | undefined,
-    cwd: string | undefined
+    cwd: string | undefined,
+    /**
+     * The id the CLIENT addresses this session by. Defaults to `sessionId` (`load`/`resume` pass the
+     * id they were given). A fork's restored source passes its stable handle, which can differ from
+     * the disk id after `/new`; the bridge must emit under that handle from the FIRST seed frame on.
+     */
+    acpId?: string
   ): Promise<SessionBridge> => {
     // A child is not a top-level session: load/resume/fork must not adopt it as one.
     if (await isChildSessionId(sessionId)) {
@@ -903,6 +944,10 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
         live.projector.resetSubagents();
         live.projector.resyncSubagents();
       });
+      // A live session can be addressed by its stable handle or its disk id; both must carry the
+      // root that a later `session/delete` needs (the request itself has no cwd).
+      sessionRoots.set(sessionId, live.rootPath);
+      sessionRoots.set(live.diskSessionId, live.rootPath);
       return live;
     }
     // `cwd` is the session's workspace root (ACP requires it on load/resume). The client told us
@@ -910,10 +955,12 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     const sessionRoot = resolveCwd(cwd, rootPath);
     assertSessionRoot(sessionRoot);
     const runtime = await createRuntime(sessionRoot);
-    const systemPrompt = await sessionSystemPrompt(sessionRoot, runtime);
     runtime.bind(sessionId);
     let session: AgentSession;
     try {
+      // Built inside the try for the same reason as `session/new`: a prompt-build failure must not
+      // orphan the per-session runtime.
+      const systemPrompt = await sessionSystemPrompt(sessionRoot, runtime);
       ({ session } = await runtime.host.create({
         ...createOptions(mapped.servers, systemPrompt),
         resumeSessionId: sessionId,
@@ -926,15 +973,21 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     }
     // The requested disk id is authoritative here (it is what the client will keep using);
     // `diskSessionId` is the same value after the restore, so assert rather than diverge.
-    return attach(session, clientCaps, sessionId, runtime, {
+    const handleId = acpId ?? sessionId;
+    const restored = attach(session, clientCaps, handleId, runtime, {
       rootPath: sessionRoot,
       diskSessionId: diskSessionId(session),
       mcpKey: mcpKeyOf(mapped.servers),
+      ...(mcpServers ? { mcpServers } : {}),
       replay,
       // Both `load` and `resume` are reconnects: an already-announced child must not replay its
       // history. A child created after this attach is new and does replay.
       skipChildReplay: true,
     });
+    sessionRoots.set(sessionId, sessionRoot);
+    sessionRoots.set(handleId, sessionRoot);
+    sessionRoots.set(restored.diskSessionId, sessionRoot);
+    return restored;
   };
 
   app.onRequest(methods.agent.session.load, async (ctx) => {
@@ -988,6 +1041,21 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       : {}),
     ...(options.listPersistedSessionsAt ? { listPersistedSessionsAt: options.listPersistedSessionsAt } : {}),
     ...(options.host.deleteSession ? { deleteSession: options.host.deleteSession.bind(options.host) } : {}),
+    ...(options.deleteSessionAt ? { deleteSessionAt: options.deleteSessionAt } : {}),
+    noteListed: (root, sessions) => {
+      for (const session of sessions) sessionRoots.set(session.id, root);
+    },
+    rootForSession: (id) => sessionRoots.get(id),
+    // A live session is deleted through ITS runtime (which knows the workspace, and under
+    // `--client-env` the client's own fs) — then the bridge is released. Deleting through the
+    // process-root host destroyed the agent but left the file in the session's root.
+    deleteLive: async (sessionId) => {
+      const live = findBridge(sessionId);
+      if (!live?.runtime.host.deleteSession) return false;
+      await live.runtime.host.deleteSession(sessionId);
+      await closeBridge(live);
+      return true;
+    },
     lookupLive: (id) => {
       const bridge = lookupBridge(id);
       return bridge ? { handle: bridge.acpId, diskId: bridge.diskSessionId } : undefined;
@@ -1080,6 +1148,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     bridge.diskSessionId = newId;
     bridge.runtime.bind(newId);
     bridge.replayed = false;
+    sessionRoots.set(newId, bridge.rootPath);
     // A fork is a new conversation: approvals/answers from the source do not carry over.
     bridge.seenApprovals.clear();
     bridge.seenAskUser.clear();
@@ -1091,6 +1160,39 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     if (newId !== sourceId) bridges.delete(sourceId);
     if (sourceDiskId !== newId && sourceDiskId !== sourceId && sourceDiskId !== sourceHandle) {
       bridges.delete(sourceDiskId);
+    }
+
+    // The SOURCE thread must stay usable. `session.clone` leaves it intact ON DISK but switches the
+    // only live agent to the clone, so the client's original thread answered `Unknown session` on
+    // its next prompt (ACP's fork contract says the source is unaffected). Restore it as its own
+    // bridge: a second agent over the same root, with no transcript replay (the client has it).
+    const sourceMcpServers = bridge.mcpServers;
+    const restoredSource = await resumeSession(
+      sourceDiskId,
+      false,
+      initCaps,
+      sourceMcpServers,
+      undefined,
+      bridge.rootPath,
+      sourceHandle
+    ).catch((error: unknown) => {
+      process.stderr.write(
+        `[codent-acp] fork: could not re-attach source session ${sourceDiskId}: ${errorMessage(error)}\n`
+      );
+      return undefined;
+    });
+    if (restoredSource) {
+      // The client may still address the source by its stable handle, the id it sent, or the disk
+      // id; all of them must resolve to the restored bridge. `acpId` was already passed as the
+      // handle above, so every seed/frame from the attach used the client's id.
+      bridges.set(sourceId, restoredSource);
+      if (sourceHandle !== sourceId) bridges.set(sourceHandle, restoredSource);
+      if (sourceDiskId !== sourceId && sourceDiskId !== sourceHandle) {
+        bridges.set(sourceDiskId, restoredSource);
+      }
+      sessionRoots.set(sourceDiskId, bridge.rootPath);
+      sessionRoots.set(sourceId, bridge.rootPath);
+      sessionRoots.set(sourceHandle, bridge.rootPath);
     }
     // The child projectors captured the SOURCE parent id, and their announcements were sent under
     // it. The cloned conversation is a new parent: stop them and re-announce under `newId` after

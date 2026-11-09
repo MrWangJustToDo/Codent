@@ -203,6 +203,25 @@ class LocalAgentSessionImpl implements AgentSession {
     return this.managed.getStreamHub()?.listSnapshots() ?? [];
   }
 
+  /**
+   * Command-output buffers for remount: a projection of the same stream hub the `tool` channel
+   * emits from, so there is no second buffer to keep in sync (the HTTP host exposes the same view).
+   */
+  getToolBuffers(): Record<string, { stdout: string; stderr: string }> {
+    const buffers: Record<string, { stdout: string; stderr: string }> = {};
+    for (const snapshot of this.listAgentStreamSnapshots()) {
+      // Only in-flight commands: the hub retains a bounded number of ENDED previews, and seeding one
+      // would resurrect a finished call's buffer (no later release frame exists for it on remount).
+      if (snapshot.source !== "command" || snapshot.status !== "active" || !snapshot.toolCallId) continue;
+      const channel = snapshot.channel === "stderr" ? "stderr" : "stdout";
+      const text = snapshot.lines.map((line) => `${line}\n`).join("") + snapshot.pendingLine;
+      const entry = buffers[snapshot.toolCallId] ?? { stdout: "", stderr: "" };
+      entry[channel] = text;
+      buffers[snapshot.toolCallId] = entry;
+    }
+    return buffers;
+  }
+
   getToolPresentation(name: string) {
     return this.managed.getToolPresentation(name);
   }

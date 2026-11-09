@@ -371,7 +371,7 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
     !(await loadModelsConfigFromFile(undefined, coreEnv));
 
   if (!needsConfigEditor) {
-    await initConfig(appConfig);
+    await initConfig(appConfig, coreEnv);
     await useWorkspaceInfo.getActions().init(coreEnv);
   }
 
@@ -500,7 +500,7 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
 
     useEffect(() => {
       if (!needsConfigEditor || !ready) return;
-      void initConfig(appConfig);
+      void initConfig(appConfig, coreEnv);
     }, [ready]);
 
     if (!ready) {

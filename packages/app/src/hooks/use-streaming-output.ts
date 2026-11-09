@@ -8,7 +8,12 @@
 import { useEffect } from "react";
 
 import { resolveAgentSession } from "../utils/session-resolve.js";
-import { applyStreamEventAction, classifyStreamEvent, registerStreamingThrottle } from "../utils/streaming-ingest.js";
+import {
+  applyStreamEventAction,
+  classifyStreamEvent,
+  registerStreamingThrottle,
+  seedStreamingBuffers,
+} from "../utils/streaming-ingest.js";
 
 import { useAgent } from "./use-agent.js";
 import { useStreamingStore } from "./use-streaming-store.js";
@@ -70,6 +75,12 @@ function acquireStreamingBridge(agentId: string): boolean {
     },
     { channels: ["tool", "lifecycle", "messages"] }
   );
+
+  // Subscribe FIRST, then seed: a chunk that lands while the snapshot fetch was in flight is already
+  // in the buffer, and the seeding keeps the longer (newer) stream. Without this, a remount showed
+  // an empty output pane until the next chunk.
+  const seed = session.getToolBuffers?.();
+  if (seed && Object.keys(seed).length > 0) seedStreamingBuffers(seed);
 
   bridges.set(agentId, {
     refCount: 1,

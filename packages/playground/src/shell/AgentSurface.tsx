@@ -104,7 +104,10 @@ export const AgentSurface = memo(() => {
       setBoot({ phase: "booting", message: "Initializing agent…" });
       // Remote mode ignores local model/style/baseURL/apiKey (server is the single source of truth),
       // so only pass them in direct mode — otherwise the UI config would show the wrong model.
-      await initConfig(remoteMode ? { model: "", style, baseURL: "", apiKey: "" } : { model, style, baseURL, apiKey });
+      await initConfig(
+        remoteMode ? { model: "", style, baseURL: "", apiKey: "" } : { model, style, baseURL, apiKey },
+        env
+      );
       if (currentInitId !== initIdRef.current) return;
 
       await initHighlighter();

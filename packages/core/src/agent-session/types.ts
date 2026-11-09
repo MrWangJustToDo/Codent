@@ -440,6 +440,14 @@ export interface AgentSession {
   getAgentStreamSnapshot(key: string): AgentStreamSnapshot | null;
   /** All live summary streams (client cache seeding / remount over HTTP). */
   listAgentStreamSnapshots?(): AgentStreamSnapshot[];
+  /**
+   * Live command-output buffers for remount, keyed by `toolCallId`.
+   *
+   * A remounted UI (an editor handoff, an SSE reconnect) has no `tool` history: the channel is
+   * push-only. Seed the streaming view from this instead of rendering an empty pane until the next
+   * chunk. Optional because a host that cannot project its stream hub omits it.
+   */
+  getToolBuffers?(): Record<string, { stdout: string; stderr: string }>;
   /** Session-scoped tool presentation (local agent catalog or a remote snapshot's descriptors). */
   getToolPresentation?(name: string): ToolPresentation | undefined;
   /**

@@ -27,7 +27,6 @@ import { toRaw } from "reactivity-store";
 import { useConfig } from "../hooks/use-config.js";
 
 export type ModelSelectionResult = { ok: true } | { ok: false; error: string };
-
 /**
  * Deep-clone the loaded models config so entries/models are plain mutable data
  * (the store wraps them in readonly proxies, which provider registration rejects).
@@ -101,7 +100,11 @@ export async function applyModelSelection(
  * connection is server-owned and the agent server only re-resolves it on an
  * explicit `model.set`.
  */
-export async function relinkSessionModel(session: AgentSession, model: string): Promise<boolean> {
+export async function relinkSessionModel(
+  session: AgentSession,
+  model: string,
+  options: { force?: boolean } = {}
+): Promise<boolean> {
   const state = getLoadedModelsState();
   const entryIndex = state ? findModelEntry(state, model) : -1;
   const entry = state && entryIndex >= 0 ? state.entries[entryIndex] : undefined;
@@ -109,7 +112,9 @@ export async function relinkSessionModel(session: AgentSession, model: string): 
 
   const liveConfig = useConfig.getReadonlyState().config;
   const alreadyLinked = model === (liveConfig.serverModel || liveConfig.model);
-  if (entry.type !== "session" && alreadyLinked) return false;
+  // `force` is set when the CATALOG changed (a models.json edit): the model id may already match
+  // while the connection it resolves to did not exist before, so the early return must not apply.
+  if (entry.type !== "session" && alreadyLinked && options.force !== true) return false;
 
   const result = await applyModelSelection(session, state, entryIndex, model);
   return result.ok;

@@ -5,6 +5,7 @@ import {
   loadModels,
   mergeModelsConfigToolConfig,
   registerModelProviderForEntry,
+  type CoreEnv,
   type LoadedModelEntry,
   type LoadedModelsState,
   type ModelStyle,
@@ -48,12 +49,12 @@ export const useConfig = createState(
   }),
   {
     withActions: (state) => ({
-      init: async (config: Partial<AppConfig>) => {
+      init: async (config: Partial<AppConfig>, env?: CoreEnv) => {
         state.config.model = config.model || "";
         state.config.style = config.style || DEFAULT_STYLE;
         state.config.baseURL = config.baseURL || DEFAULT_LOCAL_OPENAI_BASE_URL;
         state.config.systemPrompt =
-          config.systemPrompt || (config.remoteSession ? "" : await buildDefaultSystemPrompt());
+          config.systemPrompt || (config.remoteSession ? "" : await buildDefaultSystemPrompt(undefined, env));
         state.config.initialPrompt = config.initialPrompt || "";
         state.config.maxIterations = config.maxIterations ?? DEFAULT_AGENT_MAX_ITERATIONS;
         state.config.maxConcurrentTasks = config.maxConcurrentTasks;
@@ -85,7 +86,7 @@ export const useConfig = createState(
         // their server-owned list (the flags do not apply there).
         const skipModelsConfig = config.modelExplicit === true && source.kind === "file";
         try {
-          const loaded = skipModelsConfig ? null : await loadModels(source);
+          const loaded = skipModelsConfig ? null : await loadModels(env ? { ...source, env } : source);
           if (loaded) {
             if (!config.remoteSession) {
               // `global` carries `toolConfig` only (see `ModelsConfigGlobal`). Apply it UNDER the
@@ -202,6 +203,6 @@ export const useConfig = createState(
   }
 );
 
-export const initConfig = async (config: Partial<AppConfig>): Promise<void> => {
-  await useConfig.getActions().init(config);
+export const initConfig = async (config: Partial<AppConfig>, env?: CoreEnv): Promise<void> => {
+  await useConfig.getActions().init(config, env);
 };

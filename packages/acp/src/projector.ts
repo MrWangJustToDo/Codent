@@ -173,6 +173,8 @@ interface ToolState {
   resultText?: string;
   resultImages?: ContentBlock[];
   resultContent?: unknown;
+  /** Terminal status came from a user cancellation — content updates must carry `_meta.cancelled`. */
+  cancelled?: boolean;
 }
 
 export class AcpProjector {
@@ -195,6 +197,16 @@ export class AcpProjector {
    *  Cursors stay per SOURCE message; only the emitted id is the turn's. */
   private turnId: string | undefined;
   private readonly turnIds = new Map<string, string>();
+  /**
+   * Per-source-message override for a REGENERATED reply.
+   *
+   * ACP chunks append, so a shorter replacement cannot be written over what the client already has.
+   * The regenerated text is re-sent under a stable new id, and every later delta for THAT message
+   * must use the same id — otherwise the suffix was appended to the old turn id and the client
+   * showed the tail twice.
+   */
+  private readonly regeneratedIds = new Map<string, string>();
+  private regeneratedSeq = 0;
   private unsubscribe: (() => void) | null = null;
   /**
    * The compaction currently on the wire, if any. Its id is the protocol's upsert key, so every
@@ -482,6 +494,10 @@ export class AcpProjector {
    */
   private syncTurnIds(messages: UIMessage[]): void {
     for (const message of messages) {
+      // Synthetic per-turn context is persisted as a `user` message but is not the user. Treating it
+      // as a turn boundary split one model turn into several ACP messages whenever a context/reminder
+      // block was injected between two assistant steps.
+      if (isContextUIMessage(message)) continue;
       if (message.role === "user") {
         this.turnId = undefined;
         continue;
@@ -493,7 +509,7 @@ export class AcpProjector {
   }
 
   private acpIdOf(message: UIMessage): string {
-    return this.turnIds.get(message.id) ?? message.id;
+    return this.regeneratedIds.get(message.id) ?? this.turnIds.get(message.id) ?? message.id;
   }
 
   private emitMessages(messages: UIMessage[]): void {
@@ -577,13 +593,17 @@ export class AcpProjector {
     const text = textOf(message);
     const cursor = this.cursors.get(message.id) ?? { text: 0, thought: 0 };
     if (text.length < cursor.text) {
-      // Regenerated message: ACP chunks append, so a new messageId is required.
-      cursor.text = 0;
+      // Regenerated reply: ACP chunks append, so the shorter text cannot replace what the client
+      // holds. Re-send it under a stable per-message id and route this message's later deltas to
+      // that id (`acpIdOf`), so the suffix is not appended to the old turn id.
       cursor.text = text.length;
       if (text) {
+        this.regeneratedSeq += 1;
+        const regeneratedId = `${this.acpIdOf(message)}-r${this.regeneratedSeq}`;
+        this.regeneratedIds.set(message.id, regeneratedId);
         this.publish({
           sessionUpdate: "agent_message_chunk",
-          messageId: `${message.id}-${Date.now()}`,
+          messageId: regeneratedId,
           content: textBlock(text),
         });
       }
@@ -660,6 +680,7 @@ export class AcpProjector {
       const terminal = state.status === "completed" || state.status === "failed";
       if (!terminal && next !== state.status) {
         state.status = next;
+        state.cancelled = next === "failed" && isCancelledToolCall(part as { output?: unknown });
         const nowTerminal = next === "completed" || next === "failed";
         // `part.output` is the tool's own return value — where a `read_file` image actually lives, and
         // the door this transition used to walk past (it read `part.content`, which holds a string).
@@ -683,6 +704,11 @@ export class AcpProjector {
           title: toolTitleOf(state.name, state.input),
           kind: toolKindFor(state.name, this.toolLookup()),
           status: next,
+          // The terminal non-success status stays `failed` (v1 has no `cancelled`), but the reason
+          // travels in `_meta` — without it a cancelled row is indistinguishable from a fault.
+          ...(next === "failed" && isCancelledToolCall(part as { output?: unknown })
+            ? { _meta: { cancelled: true } }
+            : {}),
           ...(content ? { content } : {}),
           // `rawOutput` only when there is no content to show, and never for a `task` row (its formatted
           // text is the result, even when that text is empty).
@@ -700,6 +726,7 @@ export class AcpProjector {
     // live tick then downgraded it to `pending` — a terminal row the client had already frozen, so the
     // approval row could not be answered at all (reported as a stuck session with a "hidden" tool call).
     const status: ToolCallStatus = this.toolStatusOf(part);
+    const cancelled = isCancelledToolCall(part as { output?: unknown });
     // One helper for both shapes (see `@codent/core`'s `parseToolInput`): the parsed field exists
     // from the moment the engine has it, `arguments` from the first tick.
     const input = parseToolInput(part);
@@ -725,6 +752,7 @@ export class AcpProjector {
       // that already carries its output IS the result, so it is the exception.
       resultEmitted: taskText !== undefined,
       previewSent: (info.content ?? []).some((content) => content.type === "diff"),
+      ...(cancelled ? { cancelled: true } : {}),
     });
     const taskContent = taskText ? [{ type: "content" as const, content: textBlock(taskText) }] : [];
     const content = [...(info.content ?? []), ...taskContent];
@@ -733,6 +761,7 @@ export class AcpProjector {
       toolCallId: part.id,
       name: part.name,
       status,
+      ...(cancelled ? { _meta: { cancelled: true } } : {}),
       ...info,
       ...(content.length > 0 ? { content } : {}),
     });
@@ -782,6 +811,7 @@ export class AcpProjector {
       title: toolTitleOf(current.name, current.input),
       kind: toolKindFor(current.name, this.toolLookup()),
       status: current.status,
+      ...(current.cancelled ? { _meta: { cancelled: true } } : {}),
       content,
     });
   }
@@ -794,6 +824,7 @@ export class AcpProjector {
     const input = parseToolInput(part);
     const display = (part as { display?: { summary?: string; text?: string } }).display;
     const info = toolCallInfo(part.name, input, this.options.rootPath, display?.text, this.toolLookup());
+    const cancelled = isCancelledToolCall(part as { output?: unknown });
     this.tools.set(part.id, {
       status: this.toolStatusOf(part),
       name: part.name,
@@ -802,16 +833,21 @@ export class AcpProjector {
       lastStreamFlush: 0,
       resultEmitted: false,
       previewSent: (info.content ?? []).some((content) => content.type === "diff"),
+      ...(cancelled ? { cancelled: true } : {}),
     });
   }
 
   private resultStatusOf(part: ToolResultPartLike): ToolCallStatus {
-    const output = part.output as { success?: boolean } | undefined;
+    const output = part.output as { success?: boolean; ok?: boolean } | undefined;
     // A cancelled call that returned its own partial output (`run_command` with `cancelled: true`)
     // or a `task` whose subagent stopped (`aborted: true`) did not complete. Without this the
     // result writer upgraded both to `completed`.
     if (isCancelledToolCall(part as { output?: unknown })) return "failed";
-    return part.state === "error" || part.outcome || part.error || output?.success === false ? "failed" : "completed";
+    // `ok:false` is core's own failure marker for structured results (`create_plan`, `update_plan`);
+    // the UI state treats it as an error too, so a rejected plan must not render green here.
+    return part.state === "error" || part.outcome || part.error || output?.success === false || output?.ok === false
+      ? "failed"
+      : "completed";
   }
 
   /** Prime a tool result from a snapshot without emitting it. */
@@ -819,6 +855,7 @@ export class AcpProjector {
     const state = this.tools.get(part.toolCallId);
     if (!state) return;
     state.status = this.resultStatusOf(part);
+    state.cancelled = state.cancelled === true || isCancelledToolCall(part as { output?: unknown });
     state.resultEmitted = true;
     state.streamBuffer = "";
   }
@@ -831,8 +868,12 @@ export class AcpProjector {
     // with no `success: false`, so classifying the result alone would upgrade the row to
     // `completed` and tell the client the denied tool actually ran.
     const status: ToolCallStatus = state?.status === "failed" && resultStatus === "completed" ? "failed" : resultStatus;
+    const cancelledResult = isCancelledToolCall(part as { output?: unknown });
     if (state) {
       state.status = status;
+      // A cancel marker may exist only on the result part (the call part was still running when the
+      // row was terminal); keep it so later content-only updates still carry `_meta.cancelled`.
+      state.cancelled = state.cancelled === true || cancelledResult;
       state.resultEmitted = true;
       state.streamBuffer = "";
     }
@@ -931,6 +972,7 @@ export class AcpProjector {
       title: toolTitleOf(state.name, state.input),
       kind: toolKindFor(state.name, this.toolLookup()),
       status: state.status,
+      ...(state.cancelled ? { _meta: { cancelled: true } } : {}),
       content: diffs,
     });
   }
@@ -959,6 +1001,7 @@ export class AcpProjector {
       title: toolTitleOf(state.name, state.input),
       kind: toolKindFor(state.name, this.toolLookup()),
       status: state.status === "pending" ? "in_progress" : state.status,
+      ...(state.cancelled ? { _meta: { cancelled: true } } : {}),
       content: [{ type: "content", content: textBlock(state.streamBuffer) }],
     });
   }
@@ -1264,6 +1307,7 @@ export class AcpProjector {
           title: toolTitleOf(toolState.name, toolState.input),
           kind: toolKindFor(toolState.name, this.toolLookup()),
           status: toolState.status === "pending" ? "in_progress" : toolState.status,
+          ...(toolState.cancelled ? { _meta: { cancelled: true } } : {}),
           // ACP tool `content` REPLACES what the client holds; there is no append form, so each
           // update re-sends the whole accumulated text.
           content: [{ type: "content", content: textBlock(task.buffer) }],

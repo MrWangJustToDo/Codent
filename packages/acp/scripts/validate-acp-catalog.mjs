@@ -1186,27 +1186,31 @@ await forkClient.connectWith(forkApp, async (cx) => {
     forked.configOptions?.some((o) => o.category === "mode")
   );
 
-  // The bridge was re-keyed: the NEW id is live, the OLD one is not.
+  // The clone keeps the re-keyed bridge; the SOURCE was restored as its own live session, so both
+  // ids stay usable (ACP's fork contract: the original is unaffected).
   const newIsLive = await cx
     .request(methods.agent.session.prompt, { sessionId: "ses_forked", prompt: [{ type: "text", text: "go" }] })
     .then(() => true)
     .catch(() => false);
   check("the forked id addresses the live session", newIsLive);
-  let oldRejected = false;
+  let sourceStillLive = true;
   try {
     await cx.request(methods.agent.session.prompt, { sessionId: "ses_source", prompt: [{ type: "text", text: "go" }] });
   } catch {
-    oldRejected = true;
+    sourceStillLive = false;
   }
-  check("the source id no longer addresses a live session (single bridge, re-keyed)", oldRejected);
+  check("the source id keeps addressing its restored session", sourceStillLive);
   await new Promise((r) => setTimeout(r, 20));
   check(
-    "post-fork updates carry the new id only",
-    forkUpdates.every((p) => p.sessionId === "ses_forked")
+    "post-fork updates are tagged with the session they belong to",
+    forkUpdates.every((p) => p.sessionId === "ses_forked" || p.sessionId === "ses_source")
+  );
+  check(
+    "the clone's own updates carry the new id",
+    forkUpdates.some((p) => p.sessionId === "ses_forked")
   );
 
-  // The source is only un-bridged in THIS process — its persisted data is untouched, so a client
-  // can still resume it (that is the whole point of a fork rather than a destructive move).
+  // The source is a separate live agent now; the persisted data is untouched as well.
   await cx.request(methods.agent.session.resume, { sessionId: "ses_source", cwd: "/ws", mcpServers: [] });
   const sourceResumable = await cx
     .request(methods.agent.session.prompt, { sessionId: "ses_source", prompt: [{ type: "text", text: "hi" }] })

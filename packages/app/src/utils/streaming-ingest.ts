@@ -122,6 +122,30 @@ export function ingestStreamingChunk(toolCallId: string, type: "stdout" | "stder
 }
 
 /**
+ * Seed the buffers from a session's live command-output snapshot (remount).
+ *
+ * The `tool` channel is push-only, so a UI that mounted after the run started (an editor handoff,
+ * an SSE reconnect) has no history to replay. The session exposes the same stream-hub projection the
+ * channel emits from. A live chunk may already have landed here while the snapshot was in flight;
+ * the longer stream wins, which keeps the seed from truncating newer output (both are monotonic
+ * appends).
+ */
+export function seedStreamingBuffers(seed: Record<string, { stdout: string; stderr: string }>): void {
+  for (const [toolCallId, value] of Object.entries(seed)) {
+    const existing = buffers.get(toolCallId);
+    const merged = {
+      stdout: existing && existing.stdout.length > value.stdout.length ? existing.stdout : value.stdout,
+      stderr: existing && existing.stderr.length > value.stderr.length ? existing.stderr : value.stderr,
+    };
+    buffers.set(toolCallId, merged);
+    useStreamingStore.getActions().update(toolCallId, {
+      stdout: tailOf(merged.stdout),
+      stderr: tailOf(merged.stderr),
+    });
+  }
+}
+
+/**
  * Drop everything held for a finished tool call: its streaming buffer, the throttled
  * store entry, and any consumer throttle registration.
  *
@@ -139,6 +163,22 @@ export function releaseFinishedTool(toolCallId: string): void {
 /** Clear buffer + store for a tool call (e.g. subagent retry). */
 export function clearStreamingIngest(toolCallId: string): void {
   releaseFinishedTool(toolCallId);
+}
+
+/**
+ * Drop every buffer for a conversation switch.
+ *
+ * A session switch kills running background commands without a normal tool-end/result frame, so the
+ * per-call release never fires and their tails would outlive the conversation.
+ */
+export function resetStreamingIngest(): void {
+  for (const toolCallId of [...buffers.keys()]) releaseFinishedTool(toolCallId);
+  for (const toolCallId of [...endedAtToolEnd]) {
+    const timer = endFallbackTimers.get(toolCallId);
+    if (timer) clearTimeout(timer);
+    endFallbackTimers.delete(toolCallId);
+    endedAtToolEnd.delete(toolCallId);
+  }
 }
 
 // ============================================================================

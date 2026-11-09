@@ -8,7 +8,13 @@
 
 import { RemoteSessionClient } from "./remote-session-client.js";
 
-import type { AgentSessionHost, AgentSessionListEntry, AgentSessionSnapshot } from "@codent/core";
+import type {
+  AgentSessionHost,
+  AgentSessionListEntry,
+  AgentSessionSnapshot,
+  DiskSessionId,
+  SessionMeta,
+} from "@codent/core";
 
 function joinUrl(base: string, path: string): string {
   return `${base.replace(/\/$/, "")}${path}`;
@@ -58,6 +64,14 @@ export function createRemoteAgentSessionHost(options: RemoteAgentSessionHostOpti
         // to prevent; direct the caller to the supported planes instead.
         throw new Error(
           "In-process extensions are not supported by a remote session host; use extensionDirs on the server or a local runtime."
+        );
+      }
+      if (createOptions.mcpElicit) {
+        // A hook is executable code too. The server advertises no `elicitation` capability without
+        // one, so silently dropping it here would make every MCP server that asks a question fail
+        // with a protocol error while the caller believed the hook had crossed the wire.
+        throw new Error(
+          "mcpElicit is not supported by a remote session host; create the session in-process to supply the hook."
         );
       }
       const response = await fetch(joinUrl(options.baseUrl, "/api/agent"), {
@@ -156,6 +170,28 @@ export function createRemoteAgentSessionHost(options: RemoteAgentSessionHostOpti
     async destroy(agentId) {
       await fetch(joinUrl(options.baseUrl, `/api/agent/${agentId}`), { method: "DELETE" });
       clients.delete(agentId);
+    },
+
+    // Disk catalog over HTTP: the same optional Host capabilities the local host exposes. A host
+    // bound to a remote agent server otherwise could not serve a session picker/delete at all.
+    async listPersistedSessions(): Promise<SessionMeta[]> {
+      const response = await fetch(joinUrl(options.baseUrl, "/api/agent/sessions"));
+      const data = await readJson<{ sessions: SessionMeta[] }>(response);
+      return data.sessions;
+    },
+
+    async deleteSession(sessionId: DiskSessionId): Promise<boolean> {
+      const response = await fetch(joinUrl(options.baseUrl, `/api/agent/sessions/${encodeURIComponent(sessionId)}`), {
+        method: "DELETE",
+      });
+      // `false` is the Host contract for "already gone / no data removed"; a transport failure is
+      // still an error, so only 404 is translated.
+      if (response.status === 404) return false;
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(`HTTP ${response.status}: ${text || response.statusText}`);
+      }
+      return true;
     },
   };
 }

@@ -138,14 +138,12 @@ export async function createAgentSessionFromConfig({
     useConfig.getActions().updateConfig({ serverModel: snap.model });
   }
 
-  // Session binding is the caller's job (`bindAgentSession`), NOT done here.
+  // Session/Host binding is the caller's job (`bindAgentSession`), NOT done here.
   // Binding inside this async function races with use-agent-chat's effect rebuild:
   // `updateConfig` above flips the effect deps (config.model/baseURL/...), and the
-  // old init's session could overwrite the store unconditionally (no currentInitId
-  // guard here). The caller binds after its initId guard, so a stale init's session
-  // never enters the store.
-  useAgent.getActions().setHost(runtime.host);
-
+  // old init's session/host could overwrite the store unconditionally (no
+  // currentInitId guard here). The caller binds after its initId guard, so a stale
+  // init's runtime never enters the store.
   return { host: runtime.host, session, ...(initial.length ? { initialMessages: initial } : {}) };
 }
 

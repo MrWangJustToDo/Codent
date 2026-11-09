@@ -62,7 +62,7 @@ agent SHALL 在 `initialize` 响应中如实声明其 v1 能力，且 MUST NOT �
 
 ### Requirement: 会话生命周期映射到 AgentSession
 
-agent SHALL 将 ACP 会话方法映射到 `AgentSessionHost`/`AgentSession`：`session/new` → `Host.create`，`session/load` → 恢复并回放，`session/resume` → 恢复不回放，`session/close` → 关闭并释放，`session/prompt` → `dispatch({type:"send"})`，`session/cancel` → `dispatch({type:"stop"})`，`session/set_mode` → `dispatch({type:"mode.set"})`，`session/list` → `Host.listPersistedSessions`，`session/delete` → `Host.deleteSession`，`session/fork` → 源会话的 `dispatch({type:"session.clone"})` 并把该会话的映射重键到返回的新会话 id。`sessionId` ↔ 一个 live `AgentSession` 的映射 SHALL 由 agent 持有，且其键 SHALL 是磁盘会话 id（见 `acp-session-catalog` 的「会话标识一律使用磁盘会话 id」）。
+agent SHALL 将 ACP 会话方法映射到 `AgentSessionHost`/`AgentSession`：`session/new` → `Host.create`，`session/load` → 恢复并回放，`session/resume` → 恢复不回放，`session/close` → 关闭并释放，`session/prompt` → `dispatch({type:"send"})`，`session/cancel` → `dispatch({type:"stop"})`，`session/set_mode` → `dispatch({type:"mode.set"})`，`session/list` → `Host.listPersistedSessions`，`session/delete` → `Host.deleteSession`（live 会话经其自身 runtime host，cold 会话经记住的 workspace root），`session/fork` → 源会话的 `dispatch({type:"session.clone"})`、把 clone 的映射重键到返回的新会话 id，并为源会话恢复一个独立 bridge（使源 thread 在 fork 后仍可直接 prompt）。`sessionId` ↔ 一个 live `AgentSession` 的映射 SHALL 由 agent 持有，且其键 SHALL 是磁盘会话 id（见 `acp-session-catalog` 的「会话标识一律使用磁盘会话 id」）。
 
 #### Scenario: load 回放历史
 

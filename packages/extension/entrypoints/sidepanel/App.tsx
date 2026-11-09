@@ -64,12 +64,15 @@ const AgentBootstrap = () => {
       registerModelProvider(provider);
       if (currentInitId !== initIdRef.current) return;
 
-      await initConfig({
-        model,
-        style,
-        baseURL,
-        apiKey,
-      });
+      await initConfig(
+        {
+          model,
+          style,
+          baseURL,
+          apiKey,
+        },
+        env
+      );
       if (currentInitId !== initIdRef.current) return;
 
       await initHighlighter();

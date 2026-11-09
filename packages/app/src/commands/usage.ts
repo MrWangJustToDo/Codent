@@ -124,10 +124,12 @@ registerBuiltinCommand("usage", {
     const cost = usage.cost;
     const tokenLimit = usage.tokenLimit;
     const { serverModel, model } = useConfig.getReadonlyState().config;
-    const displayModel = serverModel || model;
+    // Session snapshot first: core adopts a resumed session's model, which may not exist in the
+    // app's models.json (so the re-link never updated config). Config is the pre-init fallback.
+    const displayModel = snap.model ?? serverModel ?? model;
     const lines: string[] = [];
 
-    lines.push(`  Session:      ${snap.name} (${snap.agentId})`);
+    lines.push(`  Session:      ${snap.name} (${snap.activeSessionId ?? snap.agentId})`);
     if (displayModel) {
       lines.push(`  Model:        ${displayModel}`);
     }

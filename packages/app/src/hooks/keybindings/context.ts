@@ -46,7 +46,7 @@ export interface KeybindingContext {
    * (selected option labels + free-form draft) so the UI and the model-facing
    * result can clearly represent a multi-choice answer.
    */
-  submitAskUserAnswer: (answer: string, meta?: { selected?: string[]; draft?: string }) => void;
+  submitAskUserAnswer: (answer: string, meta?: { selected?: string[]; draft?: string }) => Promise<void>;
   addToolApprovalResponse: UseAgentChatReturn["addToolApprovalResponse"];
   /** Resolved active session accessor (root or child). */
   getSession: () => AgentSession | null;

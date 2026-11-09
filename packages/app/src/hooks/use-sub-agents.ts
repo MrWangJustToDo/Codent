@@ -28,6 +28,14 @@ export const useSubAgents = ({ taskId }: { taskId: string }) => {
 
     return parentSession.subscribe(
       (event) => {
+        // The retained `subagents` projection is authoritative: it carries the whole row list,
+        // including changes that emit no lifecycle event (a task row's usage/queue admission is
+        // explicitly excluded from the lifecycle stream). `state` stays as a safety net for a
+        // publisher that predates the channel.
+        if (event.channel === "subagents") {
+          setSubagent(findSubagentByTask(taskId));
+          return;
+        }
         if (event.channel === "lifecycle") {
           if (
             event.payload.type === "subagent:created" ||
@@ -48,7 +56,7 @@ export const useSubAgents = ({ taskId }: { taskId: string }) => {
           setSubagent(findSubagentByTask(taskId));
         }
       },
-      { channels: ["lifecycle", "state"] }
+      { channels: ["subagents", "lifecycle", "state"] }
     );
   }, [taskId, parentSession]);
 

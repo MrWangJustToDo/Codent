@@ -23,8 +23,10 @@ import { handleToolLifecycleEvent } from "../utils/tool-timing-store.js";
 import { useAgentStatus } from "./use-agent-status.js";
 import { useAgent } from "./use-agent.js";
 import { useCallbackRef } from "./use-callback-ref.js";
+import { useConfig } from "./use-config.js";
 import { useInit } from "./use-init.js";
 import { useThinkingLine } from "./use-thinking-line.js";
+import { useUserInput } from "./use-user-input.js";
 import { getWorkSpaceInfo } from "./use-workspace-info.js";
 
 import type { AppConfig } from "../adapter/types.js";
@@ -46,9 +48,21 @@ export interface SendMessageContent {
   files?: Attachment[];
 }
 
+/**
+ * Result of a session command that was accepted or refused.
+ *
+ * A refused `send` / `steer` / `followUp` / `forceSubmit` (session switching, agent destroyed,
+ * queue full) must reach the caller: core returns `ok:false` specifically so the host can keep the
+ * user's input instead of clearing it.
+ */
+export interface SessionDispatchOutcome {
+  ok: boolean;
+  error?: string;
+}
+
 export interface UseAgentChatReturn {
   messages: UIMessage[];
-  sendMessage: (content: string | SendMessageContent) => Promise<void>;
+  sendMessage: (content: string | SendMessageContent) => Promise<SessionDispatchOutcome>;
   /**
    * Queue a mid-run correction (after current tool batch). Idle → sendMessage.
    *
@@ -56,11 +70,11 @@ export interface UseAgentChatReturn {
    * Option+Enter → forceSubmit. `steer` is for programmatic use where you
    * want the message delivered within the same turn (before the next LLM call).
    */
-  steer: (content: string | SendMessageContent) => void;
+  steer: (content: string | SendMessageContent) => Promise<SessionDispatchOutcome>;
   /** Queue a message for when the agent would stop. Idle → sendMessage. */
-  followUp: (content: string | SendMessageContent) => void;
+  followUp: (content: string | SendMessageContent) => Promise<SessionDispatchOutcome>;
   /** Force-submit: abort current run, inject message, start new pump. */
-  forceSubmit: (content: string | SendMessageContent) => void;
+  forceSubmit: (content: string | SendMessageContent) => Promise<SessionDispatchOutcome>;
   /**
    * Take the last queued message back, or `null` when nothing is queued. The queue is otherwise a
    * one-way door: wait for delivery, or drop the whole queue with `Esc`.
@@ -80,7 +94,7 @@ export interface UseAgentChatReturn {
     reason?: string;
     toolCallId?: string;
     toolName?: string;
-  }) => void;
+  }) => Promise<SessionDispatchOutcome>;
   allPendingApproval: Array<{
     id: string;
     toolName: string;
@@ -99,7 +113,11 @@ export interface UseAgentChatReturn {
    * important" is a precedence question, and core already answered it with conversation order.
    */
   pendingInteraction: PendingInteractionEntry | undefined;
-  addToolOutput: (options: { tool: string; toolCallId: string; output: Record<string, unknown> }) => void;
+  addToolOutput: (options: {
+    tool: string;
+    toolCallId: string;
+    output: Record<string, unknown>;
+  }) => Promise<SessionDispatchOutcome>;
   /** Pause/resume status while a client tool waits for user input (`ask_user`). */
   setClientToolWaiting: (active: boolean) => void;
   /**
@@ -198,8 +216,13 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
 
   // Last model seen on the session/state channels that has been relinked — dedupes
   // the state-channel watcher against the session-switch effect and repeated
-  // state events for the same model.
+  // state events for the same model. The CATALOG identity is tracked too: a model
+  // missing from models.json fails the first link, and a later edit must be retried
+  // instead of being suppressed forever by the model string alone.
   const relinkedModelRef = useRef<string | null>(null);
+  const relinkedModelsConfigRef = useRef<unknown>(null);
+  /** Model whose link is currently in flight; prevents a burst of state frames from starting several. */
+  const relinkInFlightRef = useRef<string | null>(null);
 
   useEffect(() => {
     const currentInitId = ++initIdRef.current;
@@ -327,9 +350,22 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
           // relinkSessionModel is idempotent (skips non-session entries already
           // linked in the live config), so an echoed /models switch is a no-op.
           const model = event.payload.model;
-          if (model && model !== relinkedModelRef.current) {
+          const modelsConfig = useConfig.getReadonlyState().modelsConfig;
+          const catalogChanged = modelsConfig !== relinkedModelsConfigRef.current;
+          if (model && relinkInFlightRef.current !== model && (model !== relinkedModelRef.current || catalogChanged)) {
             relinkedModelRef.current = model;
-            void relinkSessionModel(session, model);
+            relinkInFlightRef.current = model;
+            void relinkSessionModel(session, model, { force: catalogChanged })
+              .catch(() => false)
+              .then(() => {
+                // Record the catalog AFTER the link. `applyModelSelection` calls `selectModel`, which
+                // replaces `modelsConfig`; recording the pre-link identity made every later state frame
+                // look like a catalog change (remote hosts would POST `model.set` forever).
+                relinkedModelsConfigRef.current = useConfig.getReadonlyState().modelsConfig;
+              })
+              .finally(() => {
+                if (relinkInFlightRef.current === model) relinkInFlightRef.current = null;
+              });
           }
           return;
         }
@@ -432,25 +468,28 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
   }, [session]);
 
   const sendMessage = useCallback(
-    async (content: string | SendMessageContent) => {
-      if (!session) return;
-      await session.dispatch({ type: "send", content: toChatContent(content) });
+    async (content: string | SendMessageContent): Promise<SessionDispatchOutcome> => {
+      if (!session) return { ok: false, error: "Agent not initialized" };
+      const result = await session.dispatch({ type: "send", content: toChatContent(content) });
+      return result.ok ? { ok: true } : { ok: false, error: result.error };
     },
     [session]
   );
 
   const steer = useCallback(
-    (content: string | SendMessageContent) => {
-      if (!session) return;
-      void session.dispatch({ type: "steer", content: toChatContent(content) });
+    async (content: string | SendMessageContent): Promise<SessionDispatchOutcome> => {
+      if (!session) return { ok: false, error: "Agent not initialized" };
+      const result = await session.dispatch({ type: "steer", content: toChatContent(content) });
+      return result.ok ? { ok: true } : { ok: false, error: result.error };
     },
     [session]
   );
 
   const followUp = useCallback(
-    (content: string | SendMessageContent) => {
-      if (!session) return;
-      void session.dispatch({ type: "followUp", content: toChatContent(content) });
+    async (content: string | SendMessageContent): Promise<SessionDispatchOutcome> => {
+      if (!session) return { ok: false, error: "Agent not initialized" };
+      const result = await session.dispatch({ type: "followUp", content: toChatContent(content) });
+      return result.ok ? { ok: true } : { ok: false, error: result.error };
     },
     [session]
   );
@@ -463,21 +502,36 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
   }, [session]);
 
   const forceSubmit = useCallback(
-    (content: string | SendMessageContent) => {
-      if (!session) return;
-      void session.dispatch({ type: "forceSubmit", content: toChatContent(content) });
+    async (content: string | SendMessageContent): Promise<SessionDispatchOutcome> => {
+      if (!session) return { ok: false, error: "Agent not initialized" };
+      const result = await session.dispatch({ type: "forceSubmit", content: toChatContent(content) });
+      return result.ok ? { ok: true } : { ok: false, error: result.error };
     },
     [session]
   );
 
   const addToolApprovalResponse = useCallback(
-    async (options: { id: string; approved: boolean; reason?: string; toolCallId?: string; toolName?: string }) => {
-      await session?.dispatch({
+    async (options: {
+      id: string;
+      approved: boolean;
+      reason?: string;
+      toolCallId?: string;
+      toolName?: string;
+    }): Promise<SessionDispatchOutcome> => {
+      if (!session) return { ok: false, error: "Agent not initialized" };
+      const result = await session.dispatch({
         type: "respondApproval",
         approvalId: options.id,
         approved: options.approved,
         reason: options.reason,
       });
+      if (!result.ok) {
+        // The approval may already have been answered by auto mode / another host, or the session
+        // may be switching. Neither is silent: the question the user just answered is gone.
+        useUserInput.getActions().setInputError(result.error ?? "Approval could not be delivered.");
+        return { ok: false, error: result.error };
+      }
+      return { ok: true };
     },
     [session]
   );
@@ -510,12 +564,24 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
   );
 
   const addToolOutput = useCallback(
-    async (options: { tool: string; toolCallId: string; output: Record<string, unknown> }) => {
-      await session?.dispatch({
+    async (options: {
+      tool: string;
+      toolCallId: string;
+      output: Record<string, unknown>;
+    }): Promise<SessionDispatchOutcome> => {
+      if (!session) return { ok: false, error: "Agent not initialized" };
+      const result = await session.dispatch({
         type: "addToolResult",
         toolCallId: options.toolCallId,
         output: options.output,
       });
+      if (!result.ok) {
+        // Rejected means the call was already answered (or the turn ended). Surface it so the UI
+        // does not look like the answer was accepted.
+        useUserInput.getActions().setInputError(result.error ?? "Tool result could not be delivered.");
+        return { ok: false, error: result.error };
+      }
+      return { ok: true };
     },
     [session]
   );
