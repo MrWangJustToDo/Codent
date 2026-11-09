@@ -25,6 +25,10 @@ export function presentationFromInfo(info: ToolPresentationInfo): ToolPresentati
   if (info.clientSide) present.clientSide = true;
   if (info.labelKey) present.labelKey = info.labelKey;
   if (info.hasText) present.text = () => undefined;
+  // `hasSummary` was exported by `describePresentation` and then dropped here, so a remote host's
+  // descriptor always said "no summary" and the two sides disagreed about the same tool. The stub
+  // cannot carry the text (renderers do not cross processes), only the presence.
+  if (info.hasSummary) present.summary = () => undefined;
   return present;
 }
 

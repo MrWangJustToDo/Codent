@@ -83,7 +83,11 @@ export class AgentToolRegistry {
       // `validate-extension-tool-restore`).
       const incumbent = stack.find((entry) => entry.ownerId === INCUMBENT_TOOL_OWNER);
       if (incumbent) {
-        if (incumbent.tool === undefined && this.resolve(name)?.tool !== tool) {
+        // Adopt the record's object as the incumbent when the HOST put a new one there, but never
+        // adopt the extension's own materialized tool (that is what makes an extension unloadable —
+        // section 3 of `validate-extension-tool-restore`). `resolve(name)?.tool !== tool` is the
+        // test: it is false exactly when `tool` is what the live stack already produced.
+        if (incumbent.tool !== tool && this.resolve(name)?.tool !== tool) {
           incumbent.tool = tool;
           this.materialize(name);
         }
@@ -115,10 +119,11 @@ export class AgentToolRegistry {
     this.materialize(name);
   }
 
-  /** Remove every entry owned by `ownerId`; returns whether this name changed. */
+  /** Remove every entry owned by `ownerId`; returns whether the LIVE tool for this name changed. */
   unregisterOwner(name: string, ownerId: string): boolean {
     const stack = this.stacks.get(name);
     if (!stack) return false;
+    const liveBefore = this.resolve(name)?.tool;
     const remaining = stack.filter((entry) => entry.ownerId !== ownerId);
     if (remaining.length === stack.length) return false;
     // An incumbent placeholder (`tool: undefined`) is not a live registration: a name first seen
@@ -130,7 +135,9 @@ export class AgentToolRegistry {
     }
     this.stacks.set(name, remaining);
     this.materialize(name);
-    return true;
+    // Dropping a SHADOWED entry changes the stack but not what runs. Reporting `true` made the
+    // caller invalidate the runner config + presentation catalog for nothing.
+    return this.resolve(name)?.tool !== liveBefore;
   }
 
   /** The live entry for a name: the highest dispatch rank, with the incumbent at the bottom. */

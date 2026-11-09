@@ -14,7 +14,6 @@ import type { ResolvedCoreEnv } from "../env";
 import type { EmitAgentTelemetryFn } from "./agent-events.js";
 import type { Epoch } from "./epoch.js";
 import type { WhenClearStatus } from "./session-payloads.js";
-import type { AgentLog } from "../agent/agent-log";
 import type { ToolApprovalTable } from "../agent/approval/tool-approval-table.js";
 import type { ToolCompactCache } from "../agent/compaction/tool-compact/tool-compact-cache.js";
 import type { SessionData } from "../agent/persistence/types.js";
@@ -105,8 +104,6 @@ export interface SessionHost {
   getToolCompactCache: () => ToolCompactCache;
   resolveTextAdapter?: () => Promise<TextAdapterConfig | null>;
   emitEvent: EmitAgentTelemetryFn;
-  /** The agent's log, for side queries the helpers run on their own (session titles). */
-  getLog?: () => AgentLog | undefined;
   /** Update the agent's display name (broadcast via the state channel). */
   setDisplayName?: (name: string) => void;
   /** Re-emit the L1 state snapshot (after swapping the on-disk session id). */

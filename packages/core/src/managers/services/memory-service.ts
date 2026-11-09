@@ -78,6 +78,8 @@ export class MemoryService implements MemorySelectionPort {
   private extractionInProgress = false;
   /** Latest extract request while one is running (coalesce; do not drop turns). */
   private pendingExtraction: MemoryExtractionInput | null = null;
+  /** Set by {@link dispose}: a teardown must stop the fire-and-forget extraction loop. */
+  private disposed = false;
 
   // ---- per-turn selection state (owned here, reset by the session lifecycle) ----
   private relevantContent = "";
@@ -224,6 +226,9 @@ export class MemoryService implements MemorySelectionPort {
 
     (async () => {
       try {
+        // A teardown raced the extraction: stop before the side query spends tokens, before
+        // `flushIndex()` writes into a disposed manager, and before the `finally` re-enters.
+        if (this.disposed) return;
         const textAdapter = (await resolveTextAdapter?.()) ?? null;
         if (!textAdapter) {
           // No provider configured — skip rather than report a memory error.
@@ -240,17 +245,23 @@ export class MemoryService implements MemorySelectionPort {
           usage,
           sessionCurrent
         );
+        // The extraction is the long await: re-check after it, before the first write through the
+        // manager. A teardown during the side query disposed that manager.
+        if (this.disposed) return;
         if (count > 0) {
           await memoryManager.flushIndex();
+          if (this.disposed) return;
           emit("memory:extract", { status: "complete", count });
         } else {
           emit("memory:extract", { status: "empty" });
         }
 
         const memoryCount = await memoryManager.getMemoryCount();
+        if (this.disposed) return;
         if (memoryCount >= memoryManager.getConsolidateThreshold()) {
           emit("memory:consolidate", { status: "start", count: memoryCount });
           const result = await consolidateMemories(memoryManager, textAdapter, onSideQuery, usage, sessionCurrent);
+          if (this.disposed) return;
           if (result.changed) {
             await memoryManager.flushIndex();
             emit("memory:consolidate", {
@@ -267,18 +278,21 @@ export class MemoryService implements MemorySelectionPort {
         emit("memory:extract", { status: "error", error: errorMsg });
       } finally {
         this.extractionInProgress = false;
-        const pending = this.pendingExtraction;
-        this.pendingExtraction = null;
-        if (pending) {
-          this.runExtraction(pending);
+        // No `return` in a `finally` (it would swallow a throw): guard the whole tail instead.
+        if (!this.disposed) {
+          const pending = this.pendingExtraction;
+          this.pendingExtraction = null;
+          if (pending) {
+            this.runExtraction(pending);
+          }
+          // The spend above was booked AFTER the turn's persist; make it durable — but only when
+          // the agent is still on the session that spent it, exactly like the booking. After a
+          // switch the write would target the new session for a query the old one paid for (and the
+          // old session's spend was not booked at all, so there is nothing to land). A queued
+          // extraction re-enters and persists its own spend. `persistState()` is fire-and-forget and
+          // reports its own failures, so the port is total.
+          if (sessionCurrent()) input.persist?.();
         }
-        // The spend above was booked AFTER the turn's persist; make it durable — but only when the
-        // agent is still on the session that spent it, exactly like the booking. After a switch the
-        // write would target the new session for a query the old one paid for (and the old session's
-        // spend was not booked at all, so there is nothing to land). A queued extraction re-enters
-        // and persists its own spend. `persistState()` is fire-and-forget and reports its own
-        // failures, so the port is total.
-        if (sessionCurrent()) input.persist?.();
       }
     })();
   }
@@ -293,5 +307,19 @@ export class MemoryService implements MemorySelectionPort {
     this.pendingSurfacedFilenames = [];
     this.alreadySurfaced.clear();
     this.pendingExtraction = null;
+  }
+
+  /**
+   * Terminal: this service belongs to a destroyed agent.
+   *
+   * `runExtraction` is a fire-and-forget IIFE, so without a flag it kept calling `flushIndex()` /
+   * `getMemoryCount()` on a disposed manager and re-entered from its `finally`. A reset clears
+   * conversation state; only this stops the loop.
+   */
+  dispose(): void {
+    this.disposed = true;
+    this.extractionInProgress = false;
+    this.pendingExtraction = null;
+    this.resetState();
   }
 }

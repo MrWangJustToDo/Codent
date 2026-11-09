@@ -61,3 +61,15 @@ export function whenClearForReconcilePolicy(policy: StatusReconcilePolicy): When
       return "idle";
   }
 }
+
+/**
+ * The verdict for a turn the user cancelled.
+ *
+ * It reads the AXIS, never the projection: `wait=question` outranks `outcome=error`, so a failed run
+ * parked on `ask_user` PROJECTS as `awaiting_user` and `getStatus() === "error"` is false. Deriving
+ * from the projection recorded that run as `aborted`, contradicting the `agent:stream-error` it had
+ * just emitted. Shared by the canceller and its validator so the rule has one definition.
+ */
+export function deriveCancelVerdict(state: Pick<AgentState, "outcome">): "error" | "aborted" {
+  return state.outcome === "error" ? "error" : "aborted";
+}

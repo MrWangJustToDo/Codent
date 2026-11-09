@@ -53,3 +53,22 @@ export function deliverContained<TArgs extends unknown[]>(
     safeReport(report, error);
   }
 }
+
+/**
+ * Stable identity for "this handler failed, in this dispatch mode, on this scope".
+ *
+ * `kind` is part of it on purpose: one handler name can be registered as BOTH an observer and an
+ * interceptor, and without it the first failure claimed the key so the other mode's failure never
+ * reached the console. Shared by the bus (default reporter) and the scope cache (stderr fallback),
+ * which had two hand-written copies of this string.
+ */
+export interface HandlerFailureIdentity {
+  kind?: "interceptor" | "observer";
+  scopeId: string;
+  event: string;
+  pattern: string;
+}
+
+export function handlerFailureKey(info: HandlerFailureIdentity): string {
+  return `${info.kind ?? "interceptor"}\0${info.scopeId}\0${info.event}\0${info.pattern}`;
+}

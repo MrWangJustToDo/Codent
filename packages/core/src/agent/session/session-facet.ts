@@ -1,9 +1,16 @@
 /**
- * Session facet: identity writes, the sync tracker and the persistence entry points.
+ * Session facet: the agent-side view of session identity + persistence.
  *
- * The switch transaction lives in `SessionLifecycleService`; this facet is the agent-side view the
- * transaction mutates (`setSessionData` / placeholder) and the place every fire-and-forget save
- * goes through. Keeping it separate means `ManagedAgent` delegates instead of owning the tracker.
+ * Three layers are intentional and each owns a distinct question — do not flatten them without
+ * moving the question:
+ * - `SessionFacet` (here): what `ManagedAgent` exposes (`setSessionData` / placeholder, and the
+ *   fire-and-forget save entry points).
+ * - `SessionPersistence` (`session-persistence.ts`): what THIS agent has already persisted (tracker,
+ *   coalescing, the "refuse a write aimed at another session" guard).
+ * - `SessionService` (`managers/services/session-service.ts`): the store itself (read/restore/rotate)
+ *   and the serialized write.
+ *
+ * The switch transaction lives in `SessionLifecycleService`; this file never decides a switch.
  */
 
 import { SessionPersistence } from "./session-persistence.js";

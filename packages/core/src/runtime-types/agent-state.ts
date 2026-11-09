@@ -247,8 +247,11 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
         outcome: "error",
         stream: "none",
         errorMessage: event.error,
+        // All three lease-phase fields clear together (same rule as `interrupt`): leaving
+        // `resumeStream` behind lets a later `compaction-start` restore a stream from a dead run.
         resumeRun: undefined,
         resumeOutcome: undefined,
+        resumeStream: undefined,
       };
 
     case "pause":
@@ -296,6 +299,9 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
         ...(event.error !== undefined ? { errorMessage: event.error } : {}),
         resumeRun: undefined,
         resumeOutcome: undefined,
+        // All three lease-phase fields clear together: `compaction-start` overwrites this, but any
+        // future reader (or a removed overwrite) would otherwise see a stream from a dead run.
+        resumeStream: undefined,
       };
 
     case "compaction-start":

@@ -90,7 +90,10 @@ export class ExtensionLoader {
         if (!stat.isDirectory) continue;
 
         const entries = await env.fs.readdir(absDir);
-        for (const entry of entries) {
+        // `readdir` order is not guaranteed (and differs across filesystems). The registration
+        // sequence becomes the dispatch tie-break for interceptors / transformers / sections, so an
+        // unsorted walk made the effective extension order machine-dependent.
+        for (const entry of [...entries].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
           if (entry.type !== "file" || !isExtensionModuleFile(entry.name)) continue;
 
           const id = env.path.basename(entry.name, env.path.extname(entry.name));

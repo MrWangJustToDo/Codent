@@ -53,7 +53,11 @@ export interface ToolCompactCacheEntry {
    * silent wrong answer to the model, so a near-miss must miss.
    */
   readonly source: unknown;
-  /** The model-facing content. */
+  /**
+   * The model-facing content. A tool with no `toModelOutput` caches its raw content here (an
+   * identity projection), so the next model call hits the cache before `JSON.parse` instead of
+   * re-parsing a payload it will discard.
+   */
   readonly projected: ModelToolContent;
 }
 

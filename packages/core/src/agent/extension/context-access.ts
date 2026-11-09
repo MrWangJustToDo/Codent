@@ -83,7 +83,12 @@ export interface ExtensionRuntimeAccess {
   sessionId(): string | null;
   /** The session's display name (auto-generated from the first message), or null when unbound. */
   sessionName(): string | null;
-  /** Whether a run is in flight. */
+  /**
+   * Whether NO run is active.
+   *
+   * True for an idle/completed/failed/cancelled/destroyed agent. FALSE for a run parked on an
+   * approval or `ask_user` (that is an active wait, not idle) — do not read it as "safe to write".
+   */
   isIdle(): boolean;
   /** Session mode as the runtime reports it (`normal` / `auto` / plan phase). */
   mode(): string;

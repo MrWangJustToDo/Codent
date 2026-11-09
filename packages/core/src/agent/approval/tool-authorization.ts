@@ -123,7 +123,12 @@ export class ToolAuthorizationService {
               source: "policy" as const,
               ...(analyzed.reason ? { reason: analyzed.reason } : {}),
             }
-          : input?.env && Object.keys(input.env).length > 0
+          : // `input` is the `run_command` projection (`{command,cwd,env}`), extracted from ANY
+            // tool's arguments. Applying the command rule without the `isCommand` guard made every
+            // gated tool whose schema happens to contain an `env` object (an MCP server, an
+            // extension) a hard `ask` — unanswerable by auto mode, with a message about a command
+            // it never ran.
+            isCommand && input?.env && Object.keys(input.env).length > 0
             ? {
                 action: "ask" as const,
                 source: "policy" as const,
@@ -132,7 +137,6 @@ export class ToolAuthorizationService {
             : undefined;
       const decision = await authorizeToolCall({
         toolName: toolCall.name,
-        args: (input ?? {}) as Record<string, unknown>,
         facts,
         approval: requirement ?? {
           requiresApproval: true,

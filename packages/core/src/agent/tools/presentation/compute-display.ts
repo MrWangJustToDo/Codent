@@ -30,13 +30,13 @@ function safe<T>(render: () => T): T | undefined {
  * a tool looks has to be reachable in the host process: remote CoreEnv / Agent Session
  * and extension hosts get the same strings as the local CLI.
  *
- * `text` is the tool's **own** renderer (`present.text`, the old `toUI` contract): that one
- * string *is* the row, and hosts read its presence as "this tool owns a result block".
- * Built-ins deliberately get no `text` here — their formatting lives in core's
- * self-contained output switch (a host can run it without the registry), and filling
- * `text` for them made every tool look like it owns a block (`read_file` / `grep` grew
- * output blocks). `summary` prefers `present.summary`, then the built-in inline summary;
- * `label` is the tool's declarative input label.
+ * `text` is the tool's **own** renderer (`present.text`, the old `toUI` contract). For an
+ * EXTENSION tool that string *is* the row result. A built-in may also declare `text` (session
+ * search/read, tree, memory, LSP) — there it is the full-display body only. `row-rules.ts` decides
+ * the row from tool identity for built-ins, and from the presence of `present.text` for extension
+ * tools (for an extension, that string is its whole result). `summary` prefers
+ * `present.summary`, then the built-in inline summary; `label` is the tool's declarative input
+ * label.
  *
  * Deterministic by construction: every renderer is a pure function of the stored
  * output / parsed input (see {@link ToolPresentation}), so the payload can be persisted

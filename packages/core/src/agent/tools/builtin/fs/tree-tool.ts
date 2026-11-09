@@ -9,7 +9,7 @@ import { toPosixPath, toPosixPathKey } from "../../../../utils/posix-path.js";
 import { TOOL_CANCELLED_MESSAGE } from "../../../stream/incomplete-tool-calls.js";
 import { defineServerTool, isProjectedModelContent } from "../../runtime/define-tool.js";
 import { maybeCacheOutput } from "../../shared/cache/tool-output-cache.js";
-import { OUTPUT_LIMITS, truncateString } from "../../shared/output-limits.js";
+import { OUTPUT_LIMITS, truncateToolOutput } from "../../shared/output-limits.js";
 import { toolOutputBaseSchema } from "../../shared/schemas.js";
 import { withDuration } from "../../shared/tool-result.js";
 import { canExecArgs, execArgs } from "../shell/exec-args.js";
@@ -330,7 +330,7 @@ export const createTreeTool = () => {
             tree = cached.content;
             truncated = true;
           } else {
-            ({ text: tree, truncated } = truncateString(rawTree, MAX_TREE_CHARS));
+            ({ text: tree, truncated } = truncateToolOutput(rawTree, MAX_TREE_CHARS));
           }
 
           return {
@@ -355,7 +355,7 @@ export const createTreeTool = () => {
           truncatedTree = cached.content;
           truncated = true;
         } else {
-          ({ text: truncatedTree, truncated } = truncateString(result.stdout, MAX_TREE_CHARS));
+          ({ text: truncatedTree, truncated } = truncateToolOutput(result.stdout, MAX_TREE_CHARS));
         }
 
         return {

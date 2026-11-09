@@ -118,6 +118,8 @@ export type SessionEventPayloads = {
   "session:bootstrap-summary": {
     attempted: number;
     active: number;
+    /** Loaded but switched off by configuration; the remainder of `attempted`. */
+    disabled?: number;
     failed: number;
   };
   /** The user-visible name of the session changed (auto-title or `/rename`). */

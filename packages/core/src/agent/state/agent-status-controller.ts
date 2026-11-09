@@ -60,6 +60,13 @@ export interface AgentStatusControllerDeps {
    */
   shouldAutoApprove?: () => boolean;
   emitEvent?: EmitAgentTelemetryFn;
+  /**
+   * Coalesce L1 publication across a multi-step verdict change (the detached abort path clears the
+   * error text, resets the axes, THEN aborts). Without it each step published its own frame and the
+   * parent/ACP read `error -> idle -> aborted` for one state change.
+   */
+  beginStateBatch?: () => void;
+  endStateBatch?: () => void;
 }
 
 export interface ReconcileFromUIMessagesOptions {
@@ -82,7 +89,10 @@ function applyChunkStatus(
   // Keep interactive pauses and user cancel sticky — leftover chunks must not resurrect "running".
   // `completed` too: the projection checks `run: "streaming"` BEFORE `outcome: "completed"`, so one
   // trailing chunk after `settle` flipped a finished turn back to thinking/running with no pump
-  // left to settle it (Esc then did nothing). Error/aborted are protected by projection order.
+  // left to settle it (Esc then did nothing). `error` is sticky for the same reason as `aborted`:
+  // projection order protects the LABEL, but a trailing chunk still rewrote the AXES
+  // (`run: streaming`, `lifecycle: busy`), so a later `compaction-start` recorded a
+  // `resumeRun: "streaming"` for a stream that had already ended.
   // A compaction lease owns the run phase: a late chunk must not promote `run` to streaming/tooling,
   // or the lease's restore guard (`status === "compacting"`) stops matching and the phase is
   // abandoned by `finish()` without ever being restored.
@@ -90,6 +100,7 @@ function applyChunkStatus(
     current === "waiting" ||
     current === "awaiting_user" ||
     current === "aborted" ||
+    current === "error" ||
     current === "completed" ||
     current === "compacting"
   ) {
@@ -435,7 +446,31 @@ export class AgentStatusController {
     this.deps.setPendingApprovalCount(countPendingToolApprovals(messages));
 
     if (kind === "aborted") {
-      this.onRunAbort();
+      // A DETACHED worker's verdict is the caller's: `runSubagent` clears `failed` when an abort
+      // lands ("an Esc that lands as the provider errors must read as a STOP"), while `interrupt`
+      // deliberately keeps an existing `error` so a CHAT turn cannot relabel a failure. Without
+      // this the task row said "cancelled" while the child's axes still said `error`, and the
+      // parent projection / ACP subagent_update rendered it as a failure.
+      const overridesFault = path === "detached" && this.deps.getAgentState?.()?.outcome === "error";
+      if (overridesFault) {
+        // The axes are reset below, so the L1 `error` text must go with them: `runSubagent` cleared
+        // its local `failed`/`errorMessage` when the abort outranked the fault, and a snapshot that
+        // still carried "stream died" beside `aborted` is the same two-conclusions bug one field over.
+        //
+        // Batched INCLUDING the abort: `setError` + `reset` + `interrupt` would otherwise publish
+        // three frames (`error` with empty text, `idle`, `aborted`) and the parent's subagent
+        // projection read a flicker. The batch publishes once, at the final verdict.
+        this.deps.beginStateBatch?.();
+        try {
+          this.deps.setError("");
+          this.dispatch({ type: "reset" });
+          this.onRunAbort();
+        } finally {
+          this.deps.endStateBatch?.();
+        }
+      } else {
+        this.onRunAbort();
+      }
       // Chat only: a detached worker must not stay in an active wait (see `syncPendingQuestionWait`).
       if (path !== "detached") this.syncPendingQuestionWait(messages);
       return;
@@ -464,8 +499,12 @@ export class AgentStatusController {
 
     if (kind === "waiting") {
       // Pending approval / ask_user: reconcile sets waiting|awaiting_user from messages.
-      // whenClear only matters if messages no longer require a wait (should not happen for this kind).
-      this.reconcileWithPolicy(messages, path === "detached" ? "after-chat-run" : "during-run");
+      //
+      // The unbacked case (the answer landed between the finalize snapshot and here) must SETTLE,
+      // not resume: `during-run` restored `running` with no pump behind it, which left the UI
+      // spinning, gave `Esc` nothing to abort (no pump, no wait, no pre-fork) and kept the session
+      // out of the wake allowlist. This is a finished turn; `completed` is its correct clear.
+      this.reconcileWithPolicy(messages, "after-chat-run");
       if (path === "detached") {
         this.forceDetachedTerminal();
       }

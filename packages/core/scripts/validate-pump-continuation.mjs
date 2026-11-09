@@ -203,8 +203,8 @@ assert.equal(shouldDeferMidRunQueue({ pumpDepth: 0, status: "idle" }), false, "i
   assert.match(interrupt, /finalizeChat\(\{[\s\S]{0,600}?kind,/, "Esc finalizes through the shared finalizer");
   assert.match(
     interrupt,
-    /kind = this\.managed\.getStatus\(\) === "error" \? "error" : "aborted"/,
-    "a failed run keeps `error`"
+    /kind = deriveCancelVerdict\(this\.managed\.getAgentState\(\)\)/,
+    "a failed run keeps `error` (read from the AXIS: `wait=question` hides it in the projection)"
   );
   assert.match(interrupt, /usageBefore: baselines\.usage/, "the summary uses the pump's usage baseline");
   assert.match(interrupt, /costBefore: baselines\.cost/, "…cost baseline");

@@ -7,6 +7,7 @@
  */
 
 import { createAgentEventBus } from "../agent/agent-event-bus";
+import { handlerFailureKey } from "../utils/contained-report.js";
 import { errorMessage } from "../utils/errors.js";
 
 import type { AgentEventListener, AgentEventBus, AgentEventType } from "../agent/agent-event-bus";
@@ -29,6 +30,11 @@ export interface AgentEventBusScopeDeps {
    * that goes through the telemetry funnel.
    */
   resolveMeta?: (agentId: string) => { runId?: string; sessionId?: string } | undefined;
+  /**
+   * Per-chain interceptor budget override (a host with a longer teardown contract, and validators
+   * that cannot wait the default). Omitted ⇒ `EXTENSION_CALLBACK_TIMEOUT_MS`.
+   */
+  interceptorTimeoutMs?: number;
 }
 
 export class AgentEventBusScope {
@@ -61,6 +67,7 @@ export class AgentEventBusScope {
   constructor(private readonly deps: AgentEventBusScopeDeps) {
     this.root = createAgentEventBus("root", (info) => this.reportHandlerError(info), {
       resolveMeta: (agentId) => this.deps.resolveMeta?.(agentId),
+      ...(this.deps.interceptorTimeoutMs !== undefined ? { interceptorTimeoutMs: this.deps.interceptorTimeoutMs } : {}),
     });
   }
 
@@ -84,7 +91,10 @@ export class AgentEventBusScope {
     if (ownerId === undefined) {
       // Nothing owns an `AgentLog` here, so the emitted report cannot reach disk. Say it on stderr
       // instead of dropping the only evidence that a root listener is broken.
-      const key = `${info.scopeId}\0${info.event}\0${info.pattern}`;
+      // `kind` is part of the identity: one handler name can be registered as BOTH an observer and
+      // an interceptor (legal). Without it the first failure claimed the key and the second mode's
+      // failure never reached stderr — the diagnostic swallowed by the diagnostic mechanism.
+      const key = handlerFailureKey(info);
       if (!this.reportedRootFailures.has(key)) {
         if (this.reportedRootFailures.size >= 100) this.reportedRootFailures.clear();
         this.reportedRootFailures.add(key);

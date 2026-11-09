@@ -9,6 +9,7 @@ import { ApprovalDecisionCoordinator } from "../approval/approval-decision-coord
 import { assertNotCompactionSummaryInput } from "../compaction";
 import { shouldDeferMidRunQueue } from "../queue/defer-mid-run-queue.js";
 import { PendingMessageQueue, type QueueMode } from "../queue/pending-message-queue.js";
+import { deriveCancelVerdict } from "../state/agent-run-outcome.js";
 import { stripEmptyAssistantShells } from "../stream/empty-assistant-shell.js";
 import { extractAssistantText } from "../stream/extract-assistant-text.js";
 import {
@@ -125,6 +126,9 @@ export class AgentChatController {
 
   /** @internal Attach the agent's scoped unified event bus. */
   setEventBus(bus: AgentEventBus): void {
+    // Same-bus rebind is a no-op: `initChat` wires the channel once through `setUIChannel` and again
+    // through the controller, and each call would otherwise replace the retained provider.
+    if (this.eventBus === bus) return;
     this.eventBus = bus;
     this.channel.setEventBus(bus);
     bus.retain("session:queues", () => this.getQueuedMessages());
@@ -199,6 +203,10 @@ export class AgentChatController {
     this.advanceLifecycleEpoch();
     this.clearQueuedMessages();
     this.channel.clearMessages();
+    // "Clearing the transcript must invalidate the projection" belongs in the same place as the
+    // clear, not only in the store's revision counter: a fingerprint that does not move would
+    // serve the previous conversation's wire to the next model call.
+    this.managed.invalidateWireProjection?.();
   }
 
   /** A pump is executing or queued. Distinct from "the run is parked on the user". */
@@ -355,8 +363,10 @@ export class AgentChatController {
     //
     // A run that ALREADY failed (the pump is between phases, e.g. awaiting the command-safety
     // check) keeps `error`: `onUserCancel` was a no-op there, and reporting `aborted` would hide
-    // the stream failure and contradict `agent:stream-error`.
-    const kind = this.managed.getStatus() === "error" ? "error" : "aborted";
+    // the stream failure and contradict `agent:stream-error`. `deriveCancelVerdict` reads the AXIS:
+    // a failed run parked on `ask_user` PROJECTS as `awaiting_user`, so the old
+    // `getStatus() === "error"` test called it a cancel.
+    const kind = deriveCancelVerdict(this.managed.getAgentState());
     const baselines = this.pumpBaselines;
     if (baselines) {
       this.pumpBaselines = null;
@@ -453,6 +463,11 @@ export class AgentChatController {
     // A late `compact()` finally (its lease superseded by a NEW compaction) must not drain input
     // that belongs to the new compaction's turn into a pump beside its summarizer.
     if (this.managed.compactions.isRunning()) return;
+    // A late finally can also land after the whole switch transaction settled: `dropIfSwitching`
+    // is false again, the compaction lease is gone, and the only remaining evidence is that the
+    // target already has a pump or is parked on an interaction. Draining then injects the new
+    // conversation's queued input ahead of a gated tool result and starts a second pump.
+    if (this.isPumpLive() || hasPendingInteraction(this.channel.getMessages())) return;
     if (!this.hasQueuedMessages()) return;
     const drained = this.drainSteerIntoChannel() || this.drainFollowUpIntoChannel();
     if (drained) void this.enqueueRunOnce();

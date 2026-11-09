@@ -425,6 +425,11 @@ assert.equal(
 );
 assert.equal(typeof textOnly.text, "function", "as a presence stub");
 
+// `hasSummary` is exported by `describePresentation` for the same reason, and used to be dropped on
+// rehydration — a remote host then disagreed with the local one about the same tool.
+const summaryOnly = core.presentationFromInfo({ name: "session_summary_only", category: "other", hasSummary: true });
+assert.equal(typeof summaryOnly.summary, "function", "the summary presence survives the descriptor round-trip");
+
 // A row that already shipped its rendered text must not fold, even when the local lookup has
 // never heard of the tool (pre-change history replayed into a remote host).
 const shippedRow = {

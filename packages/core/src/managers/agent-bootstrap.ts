@@ -4,7 +4,7 @@
  * This used to be one long branch in `agent-factory` with two independent extension counters. The
  * counters disagreed with each other: some loaders incremented "active" without reading the
  * instance state, others read the state but never incremented "failed". The report below is the
- * single accounting point, so `attempted === active + failed` is an invariant rather than a hope.
+ * single accounting point, so `attempted === active + disabled + failed` is an invariant rather than a hope.
  */
 
 import { CODE_MODE_LAZY_TOOL_NAMES, CODE_MODE_TOOL_NAMES, createCodeModeExtension } from "../agent/code-mode";
@@ -42,6 +42,8 @@ export interface BootstrapExtensionFailure {
 export interface BootstrapExtensionReport {
   attempted: number;
   active: number;
+  /** Loaded but deliberately disabled by configuration (`enabled: false`). Not a failure. */
+  disabled: number;
   failed: number;
   failures: BootstrapExtensionFailure[];
 }
@@ -54,7 +56,7 @@ export interface BootstrapReport {
 }
 
 export function createBootstrapReport(): BootstrapReport {
-  return { extensions: { attempted: 0, active: 0, failed: 0, failures: [] } };
+  return { extensions: { attempted: 0, active: 0, disabled: 0, failed: 0, failures: [] } };
 }
 
 /** Account for a loader result. Fail-open activation errors count as failures. */
@@ -68,6 +70,15 @@ export function recordExtensionResult(
   if (instance.state === "active") {
     extensions.active += 1;
     return true;
+  }
+  // A deliberately disabled extension (`enabled: false`) is not a failure. It is also not active,
+  // so it needs its own bucket: `attempted === active + failed` is the report's stated invariant,
+  // and silently dropping it made the summary read "1/2 extensions active" with no explanation
+  // (the user sees an extension vanish). Counting it as `failed` put an `error: "unknown"` row in
+  // a healthy workspace.
+  if (instance.state === "inactive") {
+    extensions.disabled += 1;
+    return false;
   }
   extensions.failed += 1;
   extensions.failures.push({
@@ -275,6 +286,9 @@ export class AgentBootstrap {
       // telling the model the extension is gone while its tools are live again. The content itself
       // returns with the next prepared turn.
       onExtensionEnabled: (extensionId) => managed.clearExtensionTurnContext(extensionId),
+      // State changes notify from the MECHANISM (runner), not from the one dispatch command that
+      // used to emit: any other caller of `setEnabled` changed state without telling anyone.
+      onExtensionStateChanged: () => managed.publishExtensionState(),
       cwd: rootPath,
       agentId: managed.id,
       getCoreEnv: () => env,
@@ -483,7 +497,7 @@ export class AgentBootstrap {
 
   /** The one aggregated bootstrap row: how many extensions were attempted, live and failed. */
   private logSummary(report: BootstrapReport): void {
-    const { attempted, active, failed } = report.extensions;
-    this.emitEvent("session:bootstrap-summary", { attempted, active, failed });
+    const { attempted, active, disabled, failed } = report.extensions;
+    this.emitEvent("session:bootstrap-summary", { attempted, active, disabled, failed });
   }
 }

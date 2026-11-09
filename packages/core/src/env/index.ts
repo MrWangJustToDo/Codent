@@ -615,3 +615,13 @@ export function getEnv(): ResolvedCoreEnv {
 export function hasCoreEnv(): boolean {
   return _env !== null;
 }
+
+/**
+ * The registered env object itself (not the resolved wrapper), for identity checks.
+ *
+ * A runtime that owns its env must not destroy it while the ambient registry still hands it out;
+ * `CodentAgent.dispose` compares identity with this. @internal
+ */
+export function peekCoreEnv(): CoreEnv | null {
+  return _env;
+}

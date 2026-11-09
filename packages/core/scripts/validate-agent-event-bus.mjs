@@ -195,4 +195,41 @@ import { AGENT_EVENT_META, createAgentEventBus } from "../dist/dev.mjs";
   assert.equal(asyncFrames, 1, "an async wildcard is contained instead of becoming an unhandled rejection");
 }
 
+// ============================================================================
+// Interceptor bounding: synchronous entry + a hung handler must not hang the chain
+// ============================================================================
+{
+  // Fire-and-forget emitters (`emitSessionShutdown` / `emitSessionBootstrap`) rely on the handler
+  // running synchronously before `intercept` yields. Deferring the call behind a microtask made a
+  // synchronous observer see the hook never fire — and no other assertion catches that.
+  const bus = createAgentEventBus();
+  let ran = false;
+  bus.onIntercept("session:shutdown", () => {
+    ran = true;
+  });
+  const pending = bus.intercept({ type: "session:shutdown", payload: {} });
+  assert.equal(ran, true, "the interceptor is invoked synchronously (before the first await)");
+  await pending;
+}
+
+{
+  const reported = [];
+  // Injected budget: a real 60s wait is untestable, and this is the only way to prove the bound.
+  const bus = createAgentEventBus("root", (info) => reported.push(info), { interceptorTimeoutMs: 25 });
+  let hung = false;
+  bus.onIntercept("session:shutdown", () => {
+    hung = true;
+    return new Promise(() => {});
+  });
+
+  const started = Date.now();
+  await bus.intercept({ type: "session:shutdown", payload: {} });
+  const elapsed = Date.now() - started;
+
+  assert.equal(hung, true, "the handler started");
+  assert.ok(elapsed < 1000, `a hung handler cannot hold the chain (waited ${elapsed}ms)`);
+  assert.equal(reported.length, 1, "the timeout is reported once, like a throw");
+  assert.match(String(reported[0].error), /did not settle within \d+ms/);
+}
+
 console.log("agent-event-bus validation passed");

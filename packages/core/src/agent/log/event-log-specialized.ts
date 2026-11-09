@@ -75,7 +75,16 @@ function logSessionMcp(log: AgentLog, event: AgentEvent): void {
 
   for (const server of servers) {
     if (server.status === "connected") {
-      entry(log, event, "info", "system", `MCP server: ${server.name} (${server.toolCount ?? 0} tools)`);
+      // `name/transport` is the shape the MCP diagnostics have always used, and it is what makes
+      // "which server, over which transport" answerable from one line. It lives HERE (event →
+      // single policy) rather than as a second `ctx.logger` row in the extension.
+      entry(
+        log,
+        event,
+        "info",
+        "system",
+        `MCP server: ${server.name}/${server.transport} (${server.toolCount ?? 0} tools)`
+      );
     } else if (server.status === "disabled") {
       // A deliberate `enabled: false` is not a failure. Logging it as one put a false "MCP server
       // failed" line in every session's agent.log for a server the user switched off on purpose.

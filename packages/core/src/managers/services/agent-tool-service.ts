@@ -57,6 +57,10 @@ export class AgentToolService {
       }
       this.registry = new AgentToolRegistry(tools);
     }
+    // Always re-seed: a host may write into the record directly (`agent-bootstrap` fills
+    // `tools.task`) and relies on this pass to adopt it as the incumbent. A "record identity
+    // unchanged" fast path skipped that and made unloading an extension delete the host tool
+    // instead of restoring it (validate-extension-tool-restore §3b).
     this.seed(tools);
     return this.registry.getToolsRecord();
   }
@@ -158,10 +162,11 @@ export class AgentToolService {
   register(def: ExtensionToolDefinition, ctx: AgentToolRegistrationContext): void {
     const existing = (this.getToolsRecord() as Record<string, unknown>)[def.name];
     // Covering a BUILT-IN is a supported, expected capability; only a same-name claim held by a
-    // DIFFERENT owner is worth warning about (an extension fighting another extension). Comparing
-    // only "not the incumbent" also warned an extension that re-registered its own tool.
+    // DIFFERENT extension is worth warning about (an extension fighting another extension).
+    // Requiring a resolvable owner avoids the false positive where the record holds the host-built
+    // tool but the registry has no stack for it yet (bootstrap seeds them in that order).
     const owner = this.registry.resolve(def.name)?.ownerId;
-    if (existing && !this.registry.isIncumbent(def.name) && owner !== ctx.ownerId) {
+    if (existing && owner !== undefined && owner !== ctx.ownerId && !this.registry.isIncumbent(def.name)) {
       ctx.warn?.(`Tool "${def.name}" already registered by another extension, overwriting`);
     }
 

@@ -13,6 +13,28 @@
 /** Upper bound on one extension lifecycle / turn-context callback. */
 export const EXTENSION_CALLBACK_TIMEOUT_MS = 60_000;
 
+/**
+ * A bounded wait that ran out.
+ *
+ * Typed so callers do not have to re-parse the message: teardown classifies a timeout as a warning
+ * and anything else as a failure, and `/did not settle within \d+ms$/` flipped that classification
+ * the moment someone reworded the text.
+ */
+export class CallbackTimeoutError extends Error {
+  readonly code = "timeout";
+  constructor(
+    readonly label: string,
+    readonly timeoutMs: number
+  ) {
+    super(`${label} did not settle within ${timeoutMs}ms`);
+    this.name = "CallbackTimeoutError";
+  }
+}
+
+export function isCallbackTimeoutError(error: unknown): error is CallbackTimeoutError {
+  return error instanceof CallbackTimeoutError;
+}
+
 /** Settle `promise`, or reject with a labelled timeout. A late rejection is consumed by the race. */
 export function withCallbackTimeout<T>(
   promise: Promise<T>,
@@ -21,7 +43,7 @@ export function withCallbackTimeout<T>(
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} did not settle within ${timeoutMs}ms`)), timeoutMs);
+    timer = setTimeout(() => reject(new CallbackTimeoutError(label, timeoutMs)), timeoutMs);
   });
   return Promise.race([promise, timeout]).finally(() => {
     if (timer !== undefined) clearTimeout(timer);

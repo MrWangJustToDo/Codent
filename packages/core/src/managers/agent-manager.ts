@@ -443,9 +443,9 @@ export class AgentManager {
       this.releaseConstructionLog(managed.id);
 
       if (bootstrap) {
-        // Attach the JSONL log sink BEFORE bootstrap events so the session
-        // timeline includes session:start/doc/skill/memory (persistence-only
-        // log — pre-attach entries would be dropped).
+        // The JSONL sink is already bound by `agent-factory.ts` (`bindLogSink`, before
+        // `bootstrapRoot`), so the session timeline includes session:start/doc/skill/memory. This
+        // call only guarantees the session DATA exists; it attaches no sink.
         managed.ensureSessionData();
         // A live root agent holds the disk session it is running from the start, not only after a
         // resume. Without this, a fresh session was invisible to the ownership table (and became

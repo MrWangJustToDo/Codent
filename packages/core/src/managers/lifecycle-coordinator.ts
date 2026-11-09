@@ -8,7 +8,7 @@
  * flush is the last step, never the first.
  */
 
-import { withCallbackTimeout } from "../agent/extension/callback-timeout.js";
+import { isCallbackTimeoutError, withCallbackTimeout } from "../agent/extension/callback-timeout.js";
 import { clearTaskRuns } from "../agent/subagent/subagent-runs.js";
 import { SUBAGENT_ABORT_REASONS } from "../agent/subagent/subagent-stop-reason.js";
 import { errorMessage } from "../utils/errors.js";
@@ -67,6 +67,11 @@ export class LifecycleCoordinator {
     };
 
     attempt(() => this.deps.clearAgentScope(id));
+    // Release the UI channel's subscriptions (approval-request, retained providers) while the graph
+    // is still alive. A host that keeps the `AgentSession` around used to pin the whole object graph
+    // (transcript, runner, tool registry, log sink) until the next connect, because nothing ever
+    // passed `undefined` to `setUIChannel`.
+    attempt(() => managedAgent.setUIChannel(undefined));
     // Force-kill MCP child processes synchronously to prevent orphans on exit.
     attempt(() => managedAgent.getMcpManager()?.forceKill());
     // A debounced memory-index refresh can outlive the agent and write after teardown.
@@ -131,7 +136,8 @@ export class LifecycleCoordinator {
         // A timeout means "stop waiting" (warn); any other throw is a real teardown failure and is
         // reported as an error, so a broken step cannot hide behind the timeout wording.
         const message = errorMessage(error);
-        const timedOut = /did not settle within \d+ms$/.test(message);
+        // Typed, not regex-parsed: the classification must survive a wording change.
+        const timedOut = isCallbackTimeoutError(error);
         try {
           managedAgent.emitEvent("session:diagnostic", {
             area: "session",

@@ -24,12 +24,13 @@ import {
 import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
 
 const report = createBootstrapReport();
-assert.deepEqual(report.extensions, { attempted: 0, active: 0, failed: 0, failures: [] });
+assert.deepEqual(report.extensions, { attempted: 0, active: 0, disabled: 0, failed: 0, failures: [] });
 
 assert.equal(recordExtensionResult(report, "disk", { id: "active-ext", state: "active" }), true);
 assert.deepEqual(report.extensions, {
   attempted: 1,
   active: 1,
+  disabled: 0,
   failed: 0,
   failures: [],
 });
@@ -54,11 +55,28 @@ assert.deepEqual(report.extensions.failures.at(-1), { id: "other-error", error: 
 recordExtensionError(report, "factory", new Error("create failed"));
 assert.deepEqual(report.extensions.failures.at(-1), { id: "factory", error: "create failed" });
 
-assert.equal(report.extensions.attempted, report.extensions.active + report.extensions.failed);
+// A deliberately disabled extension is loaded but not active and NOT a failure. It needs its own
+// bucket, or `attempted === active + failed` breaks and the summary reports a phantom failure.
+assert.equal(
+  recordExtensionResult(report, "config", { id: "off-ext", state: "inactive" }),
+  false,
+  "a disabled extension is not active"
+);
+assert.equal(report.extensions.disabled, 1);
+
+assert.equal(
+  report.extensions.attempted,
+  report.extensions.active + report.extensions.disabled + report.extensions.failed
+);
 assert.deepEqual(
-  { attempted: report.extensions.attempted, active: report.extensions.active, failed: report.extensions.failed },
-  { attempted: 4, active: 1, failed: 3 },
-  "attempted is active + failed, across all load paths"
+  {
+    attempted: report.extensions.attempted,
+    active: report.extensions.active,
+    disabled: report.extensions.disabled,
+    failed: report.extensions.failed,
+  },
+  { attempted: 5, active: 1, disabled: 1, failed: 3 },
+  "attempted is active + disabled + failed, across all load paths"
 );
 
 // ---------------------------------------------------------------------------
@@ -136,7 +154,10 @@ assert.deepEqual(
     assert.equal(report.extensions.failed, 1);
     assert.equal(report.extensions.failures[0].id, "config");
     assert.match(report.extensions.failures[0].error, /factory boom/);
-    assert.equal(report.extensions.attempted, report.extensions.active + report.extensions.failed);
+    assert.equal(
+      report.extensions.attempted,
+      report.extensions.active + report.extensions.disabled + report.extensions.failed
+    );
     assert.deepEqual(report.memory, { enabled: false });
 
     built.managed.getExtensionRunner()?.destroyAll?.();

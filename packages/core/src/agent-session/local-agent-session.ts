@@ -83,11 +83,21 @@ type ChannelPayload<C extends AgentSessionChannel> = Extract<AgentSessionEvent, 
  */
 const CHANNEL_DROPPED_PAYLOAD_KEYS = ["tool_input", "tool_output", "output"] as const;
 
+/**
+ * One event whose `output` is the FACT, not an arbitrary tool result.
+ *
+ * `agent:client-tool-result` carries the host's answer to a client tool (`ask_user`). Dropping
+ * `output` left a remote consumer with a call id and no answer, while the local bus kept it —
+ * the two read the same event and disagreed.
+ */
+const OUTPUT_IS_PAYLOAD_EVENT = "agent:client-tool-result";
+
 function channelSafeLifecycleEvent(event: AgentEvent): AgentEvent {
   const payload = event.payload as Record<string, unknown> | null | undefined;
   if (!payload || typeof payload !== "object") return event;
   let next: Record<string, unknown> | undefined;
   for (const key of CHANNEL_DROPPED_PAYLOAD_KEYS) {
+    if (key === "output" && event.type === OUTPUT_IS_PAYLOAD_EVENT) continue;
     if (!(key in payload)) continue;
     next ??= { ...payload };
     delete next[key];

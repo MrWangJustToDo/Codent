@@ -109,7 +109,12 @@ export class RunnerWiring {
     });
   }
 
-  /** Release the approval subscription without touching the channel (destroy path). */
+  /**
+   * Release the approval subscription without touching the channel.
+   *
+   * Narrow counterpart to `setUIChannel(undefined)` (which also clears the binding): a host or
+   * validator that wants the channel to stay readable but stop routing approval requests.
+   */
   detachUIChannel(): void {
     this.approvalRequestUnsub?.();
     this.approvalRequestUnsub = undefined;

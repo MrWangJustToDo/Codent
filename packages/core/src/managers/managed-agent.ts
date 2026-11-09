@@ -769,6 +769,8 @@ export class ManagedAgent {
       // The controller is built before `this.mode`; the callback is read per call, at runtime.
       shouldAutoApprove: () => this.mode.shouldAutoApprove(),
       emitEvent: (type, ...args) => this.emitEvent(type, ...args),
+      beginStateBatch: () => this.beginStateBatch(),
+      endStateBatch: () => this.endStateBatch(),
     });
     this.compactions = new CompactionController({
       getStatus: () => this.getStatus(),
@@ -1053,9 +1055,12 @@ export class ManagedAgent {
   /**
    * Legacy status writer (compaction's `compacting` value and host compatibility).
    *
-   * Re-derives the axes from the status; new writers use {@link transitionStatus}.
+   * `@internal` — new writers use {@link transitionStatus}. Rebuilding the axes from a projection is
+   * lossy by nature (it cannot see `resumeRun`/`resumeOutcome` behind a live compaction lease), so
+   * a destroyed agent — the one state that must never be resurrected — refuses it outright.
    */
   setStatus(status: AgentStatus, event?: AgentStateEventType): void {
+    if (this.destroyed) return;
     this.agentState = deriveAgentState(status, this.getError());
     this.applyStatus(status, event);
   }
@@ -1133,9 +1138,13 @@ export class ManagedAgent {
   /**
    * Record the pending-approval count.
    *
-   * A derived value, not independent state: every writer must derive it from the transcript
+   * A derived value, not independent state: every writer derives it from the transcript
    * (`countPendingToolApprovals`) or, at request time, from the engine's own batch — the one moment
-   * the parts may not be in the channel yet. There is deliberately no writer that just zeroes it.
+   * the parts may not be in the channel yet.
+   *
+   * One place sets a literal: `markDestroyed` zeroes the field, because a destroyed agent has no
+   * interaction surface left to answer. Any other literal write is a bug (it was the shape that
+   * made a parked approval invisible to the badge).
    */
   setPendingApprovalCount(count: number): void {
     this.pendingApprovalCount = count;
@@ -1312,6 +1321,10 @@ export class ManagedAgent {
     this.run.setLastFinishReason(null);
     this.run.setLastIterationState(null);
     this.run.resetLastStreamDuration();
+    // Session-scoped, like the fields above: a wake cause set for a turn that ended (or was
+    // switched away) before reaching `run:wake` must not label the NEXT session's first wake.
+    // It lives on the agent, not on `RunCoordinator`, which is how it survived `/new` and `/resume`.
+    this.pendingWakeCause = undefined;
   }
 
   /**
@@ -1801,6 +1814,21 @@ export class ManagedAgent {
     return this.wireProjectionCache;
   }
 
+  /** Drop the projection cache (transcript cleared / replaced). */
+  invalidateWireProjection(): void {
+    this.wireProjectionCache?.invalidate();
+  }
+
+  /**
+   * Re-publish the extensions summary after a runtime load / enable / disable.
+   *
+   * The runner calls this through `onExtensionStateChanged`, so the notification belongs to the
+   * state transition rather than to whichever dispatch command happened to trigger it.
+   */
+  publishExtensionState(): void {
+    this.getEventBus()?.emit("session:extensions", readExtensionSummary(this.extensions.getExtensionRunner()));
+  }
+
   setLog(c: AgentLog): void {
     this.log = c;
   }
@@ -2185,6 +2213,11 @@ export class ManagedAgent {
         // instead re-projected the whole history through the NEW definition: after an extension
         // shadowed `read_file`, earlier read results were formatted by the extension's
         // `toModelOutput` (and vice versa on disable), rewriting the model-visible prefix.
+        //
+        // The rule has exactly two exceptions, and they are not this one: a DECORATOR change
+        // (tool-facet.ts) and a session restore (session-restore.ts) DO clear, because in both the
+        // same implementation's output must be re-read (the decorator wraps every formatter; a
+        // restored session has no cache to trust). Registration is not such a case.
         if (options.publishCatalog !== false) this.publishToolPresentationCatalog();
       },
       agentId: this.id,
@@ -2335,6 +2368,20 @@ export class ManagedAgent {
     }
     try {
       this.getMemoryManager()?.dispose();
+    } catch {
+      // Best-effort teardown.
+    }
+    // Same resources the registered path releases. Missing here (a build that fails AFTER the todo
+    // manager exists) leaked its 3s auto-clear timer, which then published `session:todos` from an
+    // agent nobody owns. Every resource added to `LifecycleCoordinator.destroy` must be mirrored
+    // here, or it only leaks on the bootstrap-failure path.
+    try {
+      this.getTodoManager?.()?.dispose();
+    } catch {
+      // Best-effort teardown.
+    }
+    try {
+      this.markDestroyed();
     } catch {
       // Best-effort teardown.
     }
@@ -2933,18 +2980,26 @@ export class ManagedAgent {
    */
   markDestroyed(): void {
     this.destroyed = true;
-    // Go through the state machine: `teardown` is the one transition a destroyed agent accepts,
-    // and it clears the run outcome (a destroyed runtime has no status to report). Late transitions
-    // then hit the destroyed guard instead of being accepted by a state machine that still believes
-    // the agent is alive.
-    this.agentState = transition(this.agentState, { type: "teardown" }, { strict: false });
+    // A destroyed agent is not "idle, writable, with N approvals pending". The L1 snapshot carries
+    // both fields and `isIdle()` derives from the status, so a host that kept a reference read a
+    // healthy idle agent off a torn-down graph. Nothing can answer an interaction after teardown,
+    // which is why this is the one place allowed to zero the derived count outright.
+    this.pendingApprovalCount = 0;
+    if (this.run.getError()) this.run.setError("");
+    // Stop the fire-and-forget memory extraction loop (it writes through a manager this teardown
+    // disposes).
+    try {
+      this.memory.dispose();
+    } catch {
+      // Best-effort teardown.
+    }
+    // Go through the ONE state writer: `teardown` is the transition a destroyed agent accepts, and
+    // routing it through `transitionStatus` keeps the destroyed guard / diagnostics / single
+    // publication point in force (a direct `applyStatus` bypassed all three).
+    this.transitionStatus({ type: "teardown" });
     // A destroyed runtime has no in-flight retry to report: the terminal-status branch of
     // `applyStatus` is unreachable here (teardown projects `idle`), so clear it explicitly.
     this.run.setRetryState(null);
-    // ...and the status must agree with the axes. Route through `applyStatus` — the one writer that
-    // also publishes the `agent:status` row — instead of assigning the field: a bare write left a
-    // destroyed agent with no transition in the timeline.
-    this.applyStatus(projectAgentStatus(this.agentState), "teardown");
   }
 
   /** Whether {@link markDestroyed} ran. */
@@ -3151,13 +3206,34 @@ export class ManagedAgent {
     this.sessionLifecycle.stop(reason);
   }
 
-  reset(reason: SessionLifecycleReason = "session-switch"): void {
+  /**
+   * Reset transient state without rotating the transcript.
+   *
+   * @internal A building block, not a user action: it does NOT take the switch lock. Running it
+   * inside a `new`/`resume` transaction cleared the TARGET session's approvals/mode/usage while the
+   * restore was still writing, and left a background-job reset nobody awaited. During a switch the
+   * transaction owns the reset, so this refuses (`false`) instead of interleaving.
+   *
+   * @returns whether the reset ran.
+   */
+  reset(reason: SessionLifecycleReason = "session-switch"): boolean {
+    if (this.sessionLifecycle.isTransitioning()) {
+      // Observable rather than silent: a host that calls this as "force clear" during a switch must
+      // be able to tell that the transaction owns the reset and it did not run.
+      this.emitEvent("session:diagnostic", {
+        area: "session",
+        level: "debug",
+        message: "Reset refused: a session switch is in flight",
+      });
+      return false;
+    }
     this.emitEvent("session:reset", {
       reason,
       previousStatus: this.getStatus(),
       hadTodos: this.getTodoManager()?.hasTodos() ?? false,
     });
     this.sessionLifecycle.reset(reason);
+    return true;
   }
 
   // ============================================================================

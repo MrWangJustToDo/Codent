@@ -66,7 +66,14 @@ export class DefaultExtensionUI implements ExtensionUI {
 
   constructor(
     private readonly bus: AgentEventBus | null,
-    private readonly buildContext: () => ExtensionUiContext
+    private readonly buildContext: () => ExtensionUiContext,
+    /**
+     * Report a payload that could not be normalized / written (an extension bug).
+     *
+     * Without it the `catch` below was silent: `ctx.ui.render` accepts arbitrary JSON from
+     * arbitrary code, and a malformed payload simply never appeared with no diagnostic anywhere.
+     */
+    private readonly reportFailure?: (extensionId: string, error: unknown, source: string) => void
   ) {}
 
   /**
@@ -137,8 +144,10 @@ export class DefaultExtensionUI implements ExtensionUI {
       if (fingerprintOf(this.slots.get(surface)?.get(key) ?? null) === next.fingerprint) return;
       this.writeSlot(surface, key, next.value);
       this.queueNotify(surface, key, next.value);
-    } catch {
-      // Failure contained: a broken publish must not break the host UI or the agent loop.
+    } catch (error) {
+      // Failure contained: a broken publish must not break the host UI or the agent loop. It is
+      // REPORTED now, though — a malformed payload used to vanish without a trace.
+      this.reportFailure?.(ownerId ?? "unknown", error, "extension:ui:render");
     }
   }
 

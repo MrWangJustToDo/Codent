@@ -41,8 +41,23 @@ function suppressRepeatedHandlerFailure(event: AgentEvent): boolean {
   const key = `${event.agentId ?? ""}\0${String(d.pattern ?? "")}\0${String(d.event ?? "")}\0${String(d.kind ?? "")}`;
   const now = Date.now();
   const last = handlerFailureReportedAt.get(key);
-  if (last !== undefined && now - last < HANDLER_FAILURE_REPORT_WINDOW_MS) return true;
-  if (handlerFailureReportedAt.size >= MAX_TRACKED_HANDLER_FAILURES) handlerFailureReportedAt.clear();
+  if (last !== undefined) {
+    // A Map does NOT move an existing key on `set`, so the "oldest" entry was the one FIRST seen,
+    // not the one least recently reported — it could be the hot handler currently being suppressed.
+    // Re-insert so insertion order tracks recency.
+    handlerFailureReportedAt.delete(key);
+    if (now - last < HANDLER_FAILURE_REPORT_WINDOW_MS) {
+      handlerFailureReportedAt.set(key, last);
+      return true;
+    }
+  }
+  // Evict the OLDEST window, not the whole table. `clear()` re-armed every currently-failing
+  // handler at once, so a high-frequency broken observer wrote a fresh `warn` burst exactly when
+  // suppression mattered most. Map preserves insertion order, so the first key is the oldest.
+  if (handlerFailureReportedAt.size >= MAX_TRACKED_HANDLER_FAILURES) {
+    const oldest = handlerFailureReportedAt.keys().next();
+    if (!oldest.done) handlerFailureReportedAt.delete(oldest.value);
+  }
   handlerFailureReportedAt.set(key, now);
   return false;
 }
@@ -122,7 +137,11 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
     formatMessage: (event) => (p(event).message as string) ?? "Agent documentation loaded",
   },
   "session:skill": {
-    level: "debug",
+    // `info`, not `debug`: this is the ONE row for "skills loaded". Built-in extensions used to
+    // write their own `ctx.logger.info("Skills extension activated …")` copy, so at
+    // `AGENT_LOG_LEVEL=info` the canonical row disappeared while the duplicate survived —
+    // exactly backwards from "the policy table decides what is recorded".
+    level: "info",
     category: "skill",
     formatMessage: (event) => `Loaded ${p(event).count ?? 0} skills`,
   },
@@ -176,8 +195,9 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
     category: "system",
     formatMessage: (event) => {
       const d = p(event);
+      const disabled = typeof d.disabled === "number" && d.disabled > 0 ? `, ${d.disabled} disabled` : "";
       const failed = typeof d.failed === "number" && d.failed > 0 ? `, ${d.failed} failed` : "";
-      return `Bootstrap complete: ${d.active ?? 0}/${d.attempted ?? 0} extensions active${failed}`;
+      return `Bootstrap complete: ${d.active ?? 0}/${d.attempted ?? 0} extensions active${disabled}${failed}`;
     },
   },
   "session:deleted": {
@@ -513,7 +533,14 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
   "compaction:cache-cleanup-error": {
     level: "warn",
     category: "compaction",
-    formatMessage: (event) => `Post-compact cache cleanup failed: ${p(event).error ?? "unknown"}`,
+    // The three compaction paths share this event, so the LINE has to name the path: `stage` used
+    // to live only in `data`, and the auto path never set it at all. Missing means auto (the only
+    // producer that emits without one).
+    formatMessage: (event) => {
+      const stage = p(event).stage;
+      const where = typeof stage === "string" ? stage : "auto";
+      return `Post-compact cache cleanup failed (${where}): ${p(event).error ?? "unknown"}`;
+    },
   },
   "job:changed": SPECIALIZED_EVENT_LOG,
   "run:wake": {

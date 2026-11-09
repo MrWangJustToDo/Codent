@@ -186,6 +186,21 @@ export class McpManager {
   private clients: Map<string, MCPClient> = new Map();
   private stdioTransports: unknown[] = [];
 
+  /**
+   * Bumped by every `initialize`, `shutdown` and `forceKill`; a connect that started under an older
+   * generation must not write into the current incarnation.
+   *
+   * `initialize` awaits `createMCPClient` and `client.tools()`. Activation is bounded by a callback
+   * timeout, so a teardown can run while a connect is still in flight — and that continuation used
+   * to `clients.set(...)` into the just-cleared map, resurrecting a live client (and a "connected"
+   * status) on a manager the extension had already discarded.
+   *
+   * A single `closed` boolean was an ABA: disable→re-enable resets it to `false`, so a continuation
+   * from the FIRST activation looked live again, and a shutdown in flight could clear the NEW
+   * incarnation's state. The counter survives both.
+   */
+  private generation = 0;
+
   private serverStatuses: Map<string, McpServerStatus> = new Map();
 
   /**
@@ -298,6 +313,14 @@ export class McpManager {
    * Failed connections are logged but do not block other servers.
    */
   async initialize(config: McpConfig): Promise<McpToolsRecord> {
+    // A re-enable calls `initialize` again on the same manager (the extension instance survives a
+    // disable), and each call takes a new generation; any continuation from an older one is stale
+    // (see `generation`).
+    const generation = ++this.generation;
+    const isStale = (): boolean => generation !== this.generation;
+    // A fresh activation must not inherit the previous one's reported servers.
+    this.serverStatuses.clear();
+    this.serverInstructions.clear();
     const allTools: McpToolsRecord = {};
     const servers = Object.entries(config.mcpServers) as [string, McpServerConfig][];
 
@@ -352,6 +375,13 @@ export class McpManager {
             mcpClientOptions(name, transport, policy, this.options.elicit, (message) => this.note(message))
           );
 
+          // A teardown / newer activation that ran while we were connecting: close what we just
+          // created instead of writing it into the cleared map (see `generation`).
+          if (isStale()) {
+            await client.close().catch(() => undefined);
+            return;
+          }
+
           const tools = await client.tools().catch(async (error: unknown) => {
             // `createMCPClient` has already connected; a failed `tools()` would otherwise leave
             // the child process alive because it is not in `clients` for `shutdown()`.
@@ -359,9 +389,21 @@ export class McpManager {
             throw error;
           });
 
-          for (const tool of tools) {
-            // TanStack prefers structuredContent and drops content[] images; re-wrap execute.
-            allTools[tool.name] = wrapMcpToolForMultimodalContent(tool, client);
+          if (isStale()) {
+            await client.close().catch(() => undefined);
+            return;
+          }
+
+          try {
+            for (const tool of tools) {
+              // TanStack prefers structuredContent and drops content[] images; re-wrap execute.
+              allTools[tool.name] = wrapMcpToolForMultimodalContent(tool, client);
+            }
+          } catch (error) {
+            // The client is not in `clients` yet, so `shutdown()` cannot close it. Contain the leak
+            // here before the outer catch records the failure.
+            await client.close().catch(() => undefined);
+            throw error;
           }
 
           this.clients.set(name, client);
@@ -378,6 +420,10 @@ export class McpManager {
             approvalMode: policy.approval,
           });
         } catch (err) {
+          // A teardown that happened while this connect was failing must not write "failed" back
+          // into a status table the teardown already cleared: `/mcp` would report a server that is
+          // no longer part of this incarnation.
+          if (isStale()) return;
           const error = toError(err);
 
           this.serverStatuses.set(name, {
@@ -432,26 +478,52 @@ export class McpManager {
   }
 
   forceKill(): void {
+    // Invalidate any connect already in flight (see `generation`).
+    this.generation += 1;
     this.closeStdioTransports();
+    // Close the CLIENT as well, not just drop the reference. This is the synchronous half of
+    // teardown (process exit), so it cannot await — but `clients.clear()` alone left an HTTP/SSE
+    // transport's fetch/stream open until process exit, and `deactivate()`'s `shutdown()` then
+    // iterated an empty map and closed nothing. stdio children are reaped above; this is for the
+    // transports that have no child process.
+    for (const [, client] of this.clients) {
+      try {
+        void Promise.resolve(client.close()).catch(() => {
+          // Best-effort: the process is going away.
+        });
+      } catch {
+        // A synchronous throw from `close()` must not abort the teardown loop.
+      }
+    }
     this.clients.clear();
     this.serverStatuses.clear();
     this.serverInstructions.clear();
+    // The sink is a closure over the extension's `ctx`, which dies with it (see `shutdown`).
+    this.diagnosticSink = undefined;
   }
 
   async shutdown(): Promise<void> {
-    for (const [, client] of this.clients) {
+    // Invalidate any connect that started before this shutdown, and take ownership of the clients
+    // that belong to THIS incarnation. A generation bump is what keeps a later `initialize`
+    // (re-enable) from being clobbered by the clears at the end of this method.
+    const generation = ++this.generation;
+    const clients = [...this.clients.values()];
+    this.clients.clear();
+    // Close transports even when no client reached `clients`: a server that failed during
+    // connect (or after `createMCPClient` but before its tools were wrapped) has already
+    // spawned a child. `shutdown` reaps it here; `forceKill` does the same on the sync path.
+    // Disabling the MCP extension is a graceful shutdown, so a half-connected server must not
+    // survive it.
+    this.closeStdioTransports();
+    for (const client of clients) {
       try {
         await client.close();
       } catch {
         // Ignore close errors during shutdown
       }
     }
-    this.clients.clear();
-    // Close transports even when no client reached `clients`: a server that failed during
-    // connect (or after `createMCPClient` but before its tools were wrapped) has already
-    // spawned a child, and only `forceKill` used to reap it. Disabling the MCP extension is a
-    // graceful shutdown, so a half-connected server must not survive it.
-    this.closeStdioTransports();
+    // A newer incarnation already owns the maps; dropping its state would erase live servers.
+    if (generation !== this.generation) return;
     this.serverStatuses.clear();
     this.serverInstructions.clear();
     // The sink is a closure over the extension's `ctx`, and the ctx dies with the extension. A

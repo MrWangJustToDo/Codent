@@ -15,6 +15,7 @@
  */
 
 import { createLocalAgentSessionHost } from "../agent-session/local-agent-session-host.js";
+import { clearCoreEnv, peekCoreEnv } from "../env";
 import { AgentManager } from "../managers/agent-manager.js";
 import { createDirectModelProvider } from "../provider/model-provider.js";
 
@@ -337,6 +338,12 @@ export class CodentAgent {
       }
       if (this.runtime.ownsEnv) {
         try {
+          // A host that followed the bootstrap sequence also called `registerCoreEnv(env)`.
+          // Destroying the env without clearing the registry left `getEnv()` handing out a
+          // torn-down workspace, and skipped the teardown hooks `clearCoreEnv` owns (background-job
+          // reaping). Compare the SOURCE env: `runtime.env` is the resolved wrapper, a different
+          // object, so an identity check against it never matched (dead code).
+          if (peekCoreEnv() === this.runtime.sourceEnv) clearCoreEnv();
           await this.runtime.env.destroy?.();
         } catch (error) {
           firstError ??= error;

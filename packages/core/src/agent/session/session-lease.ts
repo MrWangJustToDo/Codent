@@ -110,13 +110,14 @@ export class SessionLease {
    * generation, then run the commit side effects. Idempotent when already committed to this id.
    */
   commit(): void {
-    if (!this.sessionId) throw new Error("SessionLease.commit called without a claimed session");
+    const id = this.sessionId;
+    if (!id) throw new Error("SessionLease.commit called without a claimed session");
     if (this.state === "active" && this.leavingId === undefined) {
       // A caller (e.g. restore) may commit the session that is already active — do not advance the
       // generation twice; only a real transition or the first claim does.
       return;
     }
-    if (this.leavingId !== undefined && this.leavingId !== this.sessionId) {
+    if (this.leavingId !== undefined && this.leavingId !== id) {
       this.ports.release(this.leavingId, this.ownerId);
       // The departure may have been a reused empty session this lease reserved at bootstrap. A
       // committed switch away from it must release that reservation, or it stays invisible to
@@ -127,7 +128,9 @@ export class SessionLease {
     this.leavingReserved = false;
     this.state = "active";
     this.generation += 1;
-    this.ports.onCommit?.(this.sessionId, this.generation);
+    // `id` is captured above: a methods-local const survives any later field write, whereas
+    // re-reading `this.sessionId` relied on TypeScript's narrowing of a mutable property.
+    this.ports.onCommit?.(id, this.generation);
   }
 
   /**

@@ -26,6 +26,19 @@ export class FileSync {
   private tracked: Map<string, TrackedDocument> = new Map();
   /** Files whose write could not be synced yet (server still starting), by language. */
   private pendingSync = new Map<string, Set<string>>();
+  /**
+   * Writes that arrived while a synthetic-dot completion held the document lock, by URI.
+   *
+   * The lock branch used to DROP them (`touchAndEvict; return`), which was survivable while the
+   * lock only covered "insert dot + settle". It now covers the whole completion round-trip, so a
+   * real edit during a slow completion would never reach the server — and the revert would leave
+   * the server holding the pre-edit text. Deferring and replaying after the unlock is the only
+   * correct behaviour: the source of truth is the file on disk, so we sync whatever is there then.
+   */
+  private syntheticPending = new Map<string, string>(); // uri -> absPath
+  private syntheticTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Consecutive polls. Bounded so a completion that never releases the lock cannot poll forever. */
+  private syntheticPolls = 0;
   private maxTracked: number;
   private readFile: (absPath: string) => Promise<string>;
   private exists: (p: string) => Promise<boolean>;
@@ -47,6 +60,11 @@ export class FileSync {
     this.manager = manager;
     this.tracked.clear();
     this.pendingSync.clear();
+    this.syntheticPending.clear();
+    if (this.syntheticTimer) {
+      clearTimeout(this.syntheticTimer);
+      this.syntheticTimer = null;
+    }
   }
 
   /** Remember a file whose sync has to wait for the server to come up. */
@@ -162,6 +180,11 @@ export class FileSync {
 
       if (existing) {
         if (syntheticDotLocks.has(uri)) {
+          // A synthetic-dot completion owns the text right now. Replay after it reverts instead of
+          // dropping the edit (see `syntheticPending`).
+          this.syntheticPending.set(uri, absPath);
+          this.syntheticPolls = 0;
+          this.scheduleSyntheticFlush();
           this.touchAndEvict(uri);
           return;
         }
@@ -176,6 +199,40 @@ export class FileSync {
     } catch {
       // File might not exist or be unreadable — ignore
     }
+  }
+
+  /**
+   * Replay writes deferred by an in-flight synthetic-dot completion.
+   *
+   * Polling rather than a callback because the lock is a plain `Set` shared with the completion
+   * tool: there is no "unlocked" event to subscribe to, and the window is one LSP round-trip.
+   * `unref` keeps a host process from being held open by the timer.
+   */
+  private scheduleSyntheticFlush(): void {
+    if (this.syntheticTimer) return;
+    this.syntheticPolls += 1;
+    // 40 x 50ms = 2s: a completion that has not reverted in that time is not coming back, and the
+    // next real write (or `setManager`) will sync the file anyway.
+    if (this.syntheticPolls > 40) {
+      this.syntheticPending.clear();
+      return;
+    }
+    this.syntheticTimer = setTimeout(() => {
+      this.syntheticTimer = null;
+      void this.flushSyntheticPending();
+    }, 50);
+    (this.syntheticTimer as { unref?: () => void }).unref?.();
+  }
+
+  private async flushSyntheticPending(): Promise<void> {
+    for (const [uri, absPath] of [...this.syntheticPending]) {
+      if (syntheticDotLocks.has(uri)) continue;
+      this.syntheticPending.delete(uri);
+      // Re-enter the normal path: it re-reads the file, so whatever the editor last wrote is what
+      // the server receives (the completion's revert put the version where this continues from).
+      await this.handleFileWrite(absPath).catch(() => {});
+    }
+    if (this.syntheticPending.size > 0) this.scheduleSyntheticFlush();
   }
 
   /** Get the current tracked version for a URI, or null if not tracked. */

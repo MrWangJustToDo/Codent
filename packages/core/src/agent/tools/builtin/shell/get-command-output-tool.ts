@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { defineServerTool, isProjectedModelContent } from "../../runtime/define-tool.js";
-import { OUTPUT_LIMITS, truncateString } from "../../shared/output-limits.js";
+import { OUTPUT_LIMITS, truncateToolOutput } from "../../shared/output-limits.js";
 import { getCommandOutputSchema } from "../../shared/schemas.js";
 
 import type { AgentToolContext } from "../../runtime/tool-context.js";
@@ -36,8 +36,8 @@ export const createGetCommandOutputTool = ({ context }: { context?: AgentToolCon
       // rides the model wire on every poll. Foreground `run_command` already spills past the same
       // budget; the job's durable log (`cachedOutputPath`) is where the rest is read from, so keep
       // the TAIL of each stream here — the part a failure is reported at.
-      const stdout = truncateString(result.stdout, OUTPUT_LIMITS.MAX_CONTENT_CHARS, true);
-      const stderr = truncateString(result.stderr, OUTPUT_LIMITS.MAX_CONTENT_CHARS, true);
+      const stdout = truncateToolOutput(result.stdout, OUTPUT_LIMITS.MAX_CONTENT_CHARS, true);
+      const stderr = truncateToolOutput(result.stderr, OUTPUT_LIMITS.MAX_CONTENT_CHARS, true);
       return {
         ...result,
         stdout: stdout.text,

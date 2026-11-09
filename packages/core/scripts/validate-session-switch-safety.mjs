@@ -84,6 +84,7 @@ function runtime(host) {
       getTodoManager: host.getTodoManager ?? (() => ({ reset: () => {} })),
       getToolCompactCache: host.getToolCompactCache,
       clearExtensionUi: host.clearExtensionUi,
+      clearExtensionSessionNotices: host.clearExtensionSessionNotices,
       destroyChildAgents: host.destroyChildAgents ?? (() => {}),
       clearTaskRuns: host.clearTaskRuns ?? (() => {}),
       resetBackgroundWork: host.resetBackgroundWork ?? (() => {}),
@@ -563,6 +564,55 @@ assert.equal(
   );
   assert.equal(waiting.ok, false);
   assert.match(String(waiting.error), /compaction/i);
+}
+
+// ---------------------------------------------------------------------------
+// A bootstrap restore loads the SAME session the agent already holds
+// (`createManagedAgent` activates extensions, then `restoreSession(initialSessionId)`).
+// The resume reset must NOT clear extension UI slots there — the Session subscriber that could
+// replay them does not exist yet, so "restart lost my extension panel" was the result.
+// ---------------------------------------------------------------------------
+{
+  const session = { id: "ses_same", uiMessages: [], model: "m", modelStyle: "openai" };
+  let clearedUi = 0;
+  let clearedNotices = 0;
+  const host = {
+    getSessionData: () => session,
+    lease: activeLease(session.id),
+    sessionPersistence: {
+      restore: async (sessionId) => ({ ...session, id: sessionId }),
+      resetTracker: () => {},
+      clearRestorePlaceholder: () => {},
+    },
+    clearExtensionUi: () => {
+      clearedUi += 1;
+    },
+    clearExtensionSessionNotices: () => {
+      clearedNotices += 1;
+    },
+  };
+  const lifecycle = new SessionLifecycleService(runtime(host));
+  const restored = await lifecycle.resume(session.id);
+  assert.equal(restored.id, session.id);
+  assert.equal(clearedUi, 0, "a same-session restore keeps the slots activate() just published");
+  assert.equal(clearedNotices, 0, "…and its notices");
+
+  // A real switch still clears them.
+  const target = { id: "ses_other", uiMessages: [], model: "m", modelStyle: "openai" };
+  const switchingHost = {
+    ...host,
+    getSessionData: () => ({ ...session }),
+    lease: activeLease(session.id),
+    sessionPersistence: {
+      restore: async (sessionId) => ({ ...target, id: sessionId }),
+      resetTracker: () => {},
+      clearRestorePlaceholder: () => {},
+    },
+  };
+  const switching = new SessionLifecycleService(runtime(switchingHost));
+  await switching.resume(target.id);
+  assert.equal(clearedUi, 1, "a switch to a different session clears the old conversation's slots");
+  assert.equal(clearedNotices, 1, "…and its notices");
 }
 
 console.log("session-switch-safety validation passed");

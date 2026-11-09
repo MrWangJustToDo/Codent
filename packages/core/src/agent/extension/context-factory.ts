@@ -342,7 +342,12 @@ export function createExtensionContext(
         // Same bookkeeping as `registerInterceptor`: without it, an interceptor registered through
         // this entry point kept firing (and cancelling tools) after the extension was disabled.
         registrations?.unsubInterceptors.push(unsub);
-        return unsub;
+        // Lease-checked disposer, matching `ctx.registerInterceptor`: a context retained from a
+        // previous incarnation must not be able to unregister anything.
+        return () => {
+          if (!host.isLive(context)) return;
+          unsub();
+        };
       },
       off: (type, handler) => {
         // A retained `ctx` from a previous incarnation must not unregister the handler a NEW

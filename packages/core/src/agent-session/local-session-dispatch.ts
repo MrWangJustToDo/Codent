@@ -2,7 +2,6 @@
  * Local AgentSession command dispatch against ManagedAgent.
  */
 
-import { readExtensionSummary } from "../agent/extension/extension-summary.js";
 import { describeToolPresentations } from "../agent/tools/presentation/describe.js";
 import { errorMessage } from "../utils/errors.js";
 
@@ -242,9 +241,10 @@ export async function dispatchLocalAgentSessionCommand(
           return { ok: false, code: "failed", error: "No extension runner" };
         }
         const result = await runner.setEnabled(command.id, command.enabled);
-        // Publish the list even when teardown reported an error: the instance IS disabled in that
-        // case, and skipping the frame left remote panels showing an extension whose tools are gone.
-        managed.getEventBus()?.emit("session:extensions", readExtensionSummary(runner));
+        // `session:extensions` is published by the runner's `onExtensionStateChanged` (the state
+        // transition owns the notification), including the teardown-error path — the instance IS
+        // disabled there, and skipping the frame left remote panels showing an extension whose tools
+        // are gone.
         // Enabling/disabling an extension adds or drops its tools, so the presentation
         // catalog changes too — publishers (SSE subscribers) must see the new shape. Route through
         // the owner so its signature de-duplication applies (the runner's batch callback may

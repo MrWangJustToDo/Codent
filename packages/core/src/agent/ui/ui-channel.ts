@@ -119,6 +119,10 @@ export class AgentUIChannel {
 
   /** @internal Attach the agent's scoped unified event bus. */
   setEventBus(bus: AgentEventBus): void {
+    // Idempotent for the same bus. A channel is bound once when it is attached (`setUIChannel`) and
+    // again when its controller receives the bus — both happen during `initChat`, and the second
+    // bind replaced the retained `session:messages` provider with an equivalent closure.
+    if (this.eventBus === bus) return;
     this.eventBus = bus;
     // A copy, matching `getSnapshot()` and the live frames (`emitMessagesChange` copies too). The
     // retained provider used to hand out the channel's live array to every new subscriber, so one

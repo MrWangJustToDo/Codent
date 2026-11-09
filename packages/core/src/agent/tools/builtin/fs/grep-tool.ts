@@ -26,9 +26,9 @@ const DEFAULT_LIMIT = 100;
 /**
  * Cut one matched LINE to `maxLength`, marking the cut inline.
  *
- * Deliberately not `OUTPUT_LIMITS.truncateString`: that one inserts a newline before its marker,
- * which is fine for a block of text but would split a single match line in two — and this result is
- * parsed line-by-line, so the cut has to stay on one line.
+ * Deliberately not `truncateToolOutput`: that one inserts a newline before its marker, which is
+ * fine for a block of text but would split a single match line in two — and this result is parsed
+ * line-by-line, so the cut has to stay on one line.
  */
 function truncateMatchLine(content: string, maxLength: number): string {
   if (content.length <= maxLength) {

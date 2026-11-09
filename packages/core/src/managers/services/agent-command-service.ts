@@ -19,7 +19,7 @@
 
 import { COMMAND_JOB_KIND, settledTerminalStatus } from "../../agent/jobs/background-work.js";
 import { CommandJobRegistry } from "../../agent/tools/builtin/shell/jobs/registry.js";
-import { truncateString } from "../../agent/tools/shared/output-limits.js";
+import { truncateToolOutput } from "../../agent/tools/shared/output-limits.js";
 import {
   collectRunCommandToolCallIds,
   formatBackgroundJobsSection,
@@ -261,8 +261,8 @@ const COMMAND_BODY_TAIL_CHARS = 3000;
  */
 export function formatCommandBody(job: Pick<CompletedCommandJob, "stdout" | "stderr" | "logPath">): string {
   const lines: string[] = [];
-  const stdout = truncateString(job.stdout, COMMAND_BODY_TAIL_CHARS, true).text;
-  const stderr = truncateString(job.stderr, COMMAND_BODY_TAIL_CHARS, true).text;
+  const stdout = truncateToolOutput(job.stdout, COMMAND_BODY_TAIL_CHARS, true).text;
+  const stderr = truncateToolOutput(job.stderr, COMMAND_BODY_TAIL_CHARS, true).text;
   if (stdout) lines.push(`stdout:\n${stdout}`);
   if (stderr) lines.push(`stderr:\n${stderr}`);
   // Always last, and always after truncation: this is the only copy of what was cut.

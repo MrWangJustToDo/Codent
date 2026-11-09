@@ -17,18 +17,16 @@ export const generateLogId = createSequentialIdGenerator("log");
 /**
  * Entries retained while no sink is bound.
  *
- * Bootstrap logs before the session sink exists (`agent-factory.ts` emits the
- * extension load results and the bootstrap summary, then `AgentManager.createManagedAgent`
- * attaches the sink). With no retention those entries — including every extension
- * activation failure — were silently discarded. The buffer is drained into the first
- * sink that attaches, and capped so a session that never binds a sink (or binds one
- * only at the very end) cannot grow memory without bound.
+ * With today's construction order the window is SHORT: `agent-factory.ts` binds the JSONL sink
+ * (`bindLogSink`) before `new AgentBootstrap(...).bootstrapRoot()`, so bootstrap logs do not touch
+ * this buffer at all. What lands here is the earlier build window (`buildToolset` / `setEventBus`
+ * diagnostics) plus embedded hosts that never attach a managed sink and call
+ * `attachFileSink` themselves at the very end.
  *
- * The cap only has to exceed a bootstrap's emission count. Measured (validate-bootstrap-log-binding:
- * one throwing extension + a documentation file + the search-directory note + the summary): **8 entries**, of which the
- * extension's own activation failure is one. 200 leaves two orders of magnitude of headroom for a
- * workspace with many extensions, so the cap is not the thing to raise if bootstrap ever grows —
- * the fix would be binding the sink earlier, not buffering more.
+ * The buffer is drained into the first sink that attaches, and capped so such a host cannot grow
+ * memory without bound. 200 is headroom for build-time noise, not a measured bootstrap count — the
+ * old "measured 8 bootstrap entries" note described a call order that no longer exists. If a
+ * healthy workspace ever approaches the cap, the fix is binding the sink earlier, not a bigger cap.
  */
 export const MAX_PENDING_LOG_ENTRIES = 200;
 
@@ -42,7 +40,10 @@ export interface LogSink {
   /**
    * Directory this sink writes to, when it is a file sink. Surfaced by `getFileSinkDir()` — the
    * seam does not decide it, because a sink that cannot write (no `appendFile`) must not report a
-   * directory: core reads that value to place a subagent's log next to its parent's.
+   * directory.
+   *
+   * The timeline is FLAT (`<root>/.agents/logs/agent.log`, rotated in place): subagent entries go
+   * to the same file with a `taskCallId` scope, so nothing places a child beside a parent any more.
    */
   dir?: string;
 }
@@ -91,6 +92,36 @@ export class AgentLog {
   private pendingDropped = 0;
   /** One line for the first entry whose construction threw (a broken `data` getter, etc.). */
   private entryBuildFailureReported = false;
+  /** One line for the first sink whose `handleEntry` threw (a host/diagnostic sink bug). */
+  private sinkFailureReported = false;
+
+  /**
+   * Report a sink that threw from `handleEntry`.
+   *
+   * Kept separate from {@link entryBuildFailureReported}: the two failures have different causes
+   * (our builder vs. the host's sink) and used to share one boolean, so a sink bug permanently
+   * silenced the construction diagnostic and vice versa.
+   */
+  private reportSinkFailure(error: unknown): void {
+    if (this.sinkFailureReported) return;
+    this.sinkFailureReported = true;
+    console.warn("[agent] log sink threw while handling an entry; entries are still accepted:", error);
+  }
+
+  /**
+   * Hand an entry to a sink without letting a host sink defect escape.
+   *
+   * The LIVE path and the pending-buffer DRAIN are two call sites of the same host callback; the
+   * drain used to call `handleEntry` raw, so a throwing sink rejected `attachSink` and could abort
+   * bootstrap — the exact failure the live-path guard was added for.
+   */
+  private safeHandle(handle: (entry: LogEntry) => void, entry: LogEntry): void {
+    try {
+      handle(entry);
+    } catch (error) {
+      this.reportSinkFailure(error);
+    }
+  }
 
   private static readonly levelPriority: Record<LogLevel, number> = {
     debug: 0,
@@ -213,7 +244,11 @@ export class AgentLog {
       // until one attaches. Bootstrap emits before the session sink exists, and those
       // entries are the ones that explain how bootstrap went.
       if (this.sinkEntry) {
-        this.sinkEntry(entry);
+        // Separately guarded (`safeHandle`): `attachSink` accepts any `LogSink`, and a throwing sink
+        // used to be caught by the CONSTRUCTION catch below — reported as "could not build log
+        // entry" and, because that reporter fires once per process, every later entry vanished
+        // silently. The pending-buffer DRAIN goes through the same helper.
+        this.safeHandle(this.sinkEntry, entry);
       } else {
         this.pendingEntries.push(entry);
         if (this.pendingEntries.length > MAX_PENDING_LOG_ENTRIES) {
@@ -327,7 +362,7 @@ export class AgentLog {
       const markerSlot = retained.length > 0 ? 1 : 0;
       const lostTotal = dropped + markerSlot;
       if (dropped > 0 && this.shouldLog("warn")) {
-        sink.handleEntry({
+        this.safeHandle(sink.handleEntry, {
           scope: { ...this.scope },
           id: generateLogId(),
           timestamp: Date.now(),
@@ -347,7 +382,7 @@ export class AgentLog {
       // the one volume knob ineffective exactly for the bootstrap diagnostics it was meant to
       // filter.
       for (const entry of retained) {
-        if (this.shouldLog(entry.level)) sink.handleEntry(entry);
+        if (this.shouldLog(entry.level)) this.safeHandle(sink.handleEntry, entry);
       }
     }
   }
@@ -371,8 +406,8 @@ export class AgentLog {
   /**
    * Directory the active sink writes to, or null when none is attached.
    *
-   * Retained as seam state (rather than sink state) because core reads it to place a subagent's
-   * log inside its parent session's directory.
+   * Retained as seam state for diagnostics/tests that need to know WHERE the timeline lives. It is
+   * no longer used for placement: the timeline is one flat file per workspace.
    */
   getFileSinkDir(): string | null {
     return this.fileSinkDir;

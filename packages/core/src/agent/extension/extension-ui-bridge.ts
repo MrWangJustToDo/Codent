@@ -93,7 +93,7 @@ export function createExtensionUiBridge(options: ExtensionUiBridgeOptions): Exte
     };
   };
 
-  const ui = new DefaultExtensionUI(bus, buildContext);
+  const ui = new DefaultExtensionUI(bus, buildContext, options.reportFailure);
 
   // Coalesced push so subscribers see changes without polling.
   let contextTimer: ReturnType<typeof setTimeout> | null = null;
@@ -148,12 +148,21 @@ export function createExtensionUiBridge(options: ExtensionUiBridgeOptions): Exte
         };
         const unsub = ui.subscribe(type, contained);
         registrations?.unsubObservers.push(unsub);
-        return unsub;
+        // Lease-checked like every other disposer the context hands out: a revoked context must not
+        // keep acting on the runner (the closure only removes its own subscription, so this is about
+        // refusing the action, not about protecting a newer registration).
+        return () => {
+          if (isLive && !isLive()) return;
+          unsub();
+        };
       },
       render: (surface, key, payload) => {
         if (isLive && !isLive()) return;
         ui.render(surface, key, payload, ownerId);
       },
+      // Read-only facts, not registrations: a retained context may still read them after a revoke
+      // (like `ctx.getMessages`/`mode`). The lease covers what the extension REGISTERS, not what it
+      // observes about the workspace it is already bound to.
       getContext: () => ui.getContext(),
     }),
     clearOwner: (ownerId) => ui.clearSlotsByOwner(ownerId),

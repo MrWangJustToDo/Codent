@@ -6,6 +6,7 @@
  */
 
 import type { EmitAgentTelemetryFn } from "./agent-events.js";
+import type { AgentState } from "./agent-state.js";
 import type { AgentStatus, RunFinalizeReason } from "./agent-status.js";
 import type { Epoch } from "./epoch.js";
 import type { SessionDiagnosticArea } from "./event-payloads/payload-primitives.js";
@@ -39,12 +40,16 @@ export interface AgentChatHost {
   readonly toolService: AgentToolService;
   captureEpoch: () => Epoch;
   getStatus(): AgentStatus;
+  /** The explicit axes behind `getStatus()`. Read the AXIS when a projection is ambiguous. */
+  getAgentState(): AgentState;
   getApprovals(): ToolApprovalTable;
   getModeState(): ModeState;
   getPolicyFacts(): AgentPolicyFacts;
   getApprovalRequirement(toolName: string): ApprovalRequirement | undefined;
   getCoreEnv(): ResolvedCoreEnv;
   getToolCompactCache(): ToolCompactCache;
+  /** Drop the channel→wire projection cache (a transcript clear must not hit a stale wire). */
+  invalidateWireProjection?(): void;
   getUI?(): AgentUIChannel | undefined;
   getCurrentRunId?(): string | null;
   setUIChannel(channel: AgentUIChannel): void;

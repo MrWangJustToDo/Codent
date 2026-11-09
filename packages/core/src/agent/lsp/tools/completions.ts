@@ -146,9 +146,11 @@ export function createCompletionsTool(deps: CompletionsToolDeps) {
       let originalContent: string | null = null;
       let revertVersion = 99991;
       let completionPosition = position;
+      let lockHeld = false;
 
       if (trigger === "auto" && !syntheticDotLocks.has(uri)) {
         syntheticDotLocks.add(uri);
+        lockHeld = true;
         try {
           const absPath = deps.manager.resolvePath(filePath);
           const readFile = deps.readFile ?? ((p) => deps.manager.readFileIfPossible(p).then((c) => c ?? ""));
@@ -180,9 +182,12 @@ export function createCompletionsTool(deps: CompletionsToolDeps) {
           }
         } catch {
           // fall through to normal completion
-        } finally {
-          syntheticDotLocks.delete(uri);
         }
+        // The lock is NOT released here: it must cover the whole window in which the server's copy
+        // of the document is the synthetic-dot version. Releasing it at the end of this block left
+        // the revert (in the `sendRequest` finally below) outside the lock, so a write landing in
+        // between was pushed by file-sync as `version + 1` and then overwritten by the revert —
+        // the server then held the wrong text and published diagnostics for it.
       }
 
       try {
@@ -194,6 +199,7 @@ export function createCompletionsTool(deps: CompletionsToolDeps) {
             { signal: options?.abortSignal }
           );
         } finally {
+          // Revert first, release second — the reverse order reopens the same race.
           if (syntheticDot && originalContent !== null) {
             try {
               client.connection.didChange(uri, revertVersion, originalContent);
@@ -204,6 +210,7 @@ export function createCompletionsTool(deps: CompletionsToolDeps) {
               // best effort revert
             }
           }
+          if (lockHeld) syntheticDotLocks.delete(uri);
         }
 
         if (!response) {

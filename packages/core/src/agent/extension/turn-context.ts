@@ -211,9 +211,18 @@ export class ExtensionTurnContext {
       // The disable path awaits this before unregistering, so a producer that never settles would
       // leave `pendingToggles` locked and the extension impossible to disable — the one state a
       // broken extension must never be able to create.
+      //
+      // `timeoutMs === 0` means "no wall-clock bound" for per-turn CONTENT (a producer bounded by
+      // the run signal). It must NOT carry into the disable path: that path is awaited before the
+      // lease is revoked, so honouring `0` here is exactly the un-disableable state described
+      // above. Fall back to the callback timeout instead — `bound()` treats `undefined` as the
+      // runner default.
       return (
-        (await this.bound(Promise.resolve(produce()), `extension "${extensionId}" disabled notice`, timeoutMs)) ??
-        undefined
+        (await this.bound(
+          Promise.resolve(produce()),
+          `extension "${extensionId}" disabled notice`,
+          timeoutMs === 0 ? undefined : timeoutMs
+        )) ?? undefined
       );
     } catch (err) {
       // One report, not two: `reportFailure` already emits `agent:extension-error`, which the log

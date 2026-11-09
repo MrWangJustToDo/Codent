@@ -53,23 +53,21 @@ import type { ModelMessage } from "@tanstack/ai";
 // ============================================================================
 
 /**
- * Allowed identifiers — extension ids and section names alike.
+ * Extension ids.
  *
- * Both become part of the `<ctx kind="…">` shell, and the kind is recovered from message text by
- * splitting on whitespace, so anything outside this set (a space, a quote, `>`) corrupts the
- * envelope and breaks per-kind admission.
- */
-
-/**
- * Extension ids additionally allow `/` — `author/name` is a common namespacing convention, and a
- * slash is safe inside a `<ctx kind>` tag (recovery splits on whitespace, not punctuation).
+ * They allow `/` in addition to the general slug set below — `author/name` is a common namespacing
+ * convention, and a slash is safe inside a `<ctx kind>` tag (recovery splits on whitespace, not
+ * punctuation).
+ *
+ * The id and any section name alike become part of that shell, and the kind is recovered from
+ * message text by splitting on whitespace, so anything outside this set (a space, a quote, `>`)
+ * corrupts the envelope and breaks per-kind admission. Section names are narrower — they are
+ * validated by `SECTION_NAME_RE` in `turn-context.ts` (through `normalizeSections`), not here.
  */
 const EXTENSION_ID_RE = /^[A-Za-z][A-Za-z0-9._/-]*$/;
 
 /** Result of one activation transaction — see {@link ExtensionRunner.activateInstance}. */
 type ActivationOutcome = { kind: "active" } | { kind: "revoked" } | { kind: "failed"; error: Error };
-
-/** Reserved namespace for extension-authored turn-context kinds (see {@link ExtensionRunner.sectionKind}). */
 
 export interface ExtensionRunnerOptions {
   /**
@@ -123,6 +121,14 @@ export interface ExtensionRunnerOptions {
    * extension's own section returns on the next prepared turn (it was dropped at disable).
    */
   onExtensionEnabled?: (extensionId: string) => void;
+  /**
+   * The extension's lifecycle state changed (loaded, activated, disabled, re-enabled, failed).
+   *
+   * Separate from the two directional callbacks above because it is the general "republish the
+   * list" signal: a host that only wired `extension.toggle` published `session:extensions` from the
+   * DISPATCH site, so any other caller of `setEnabled` / `loadExtension` changed state silently.
+   */
+  onExtensionStateChanged?: (extensionId: string) => void;
   cwd?: string;
   agentId?: string;
   /**
@@ -275,7 +281,9 @@ export class ExtensionRunner {
       ...(options.getUiContext ? { getUiContext: options.getUiContext } : {}),
       ...(options.cwd ? { cwd: options.cwd } : {}),
       getSessionName: () => options.getRuntime?.()?.sessionName() ?? null,
-      reportFailure: (extensionId, err, source) => this.reportObserverFailure(extensionId, err, source),
+      // UI render/subscribe failures are NOT event-observer failures: a dedicated reporter keeps
+      // the phase honest and carries the source (surface/key) into the row.
+      reportFailure: (extensionId, err, source) => this.reportUiFailure(extensionId, err, source),
     });
 
     this.turnContextSections = new ExtensionTurnContext({
@@ -313,7 +321,13 @@ export class ExtensionRunner {
         this.options.onRegisterTool?.(def, extensionId, rank);
         // Activation publishes one catalog after ALL tools are in. A runtime registration has no
         // such batch boundary, so publish immediately after it lands.
-        if (!this.activating.has(extensionId)) this.options.onToolRegistrationComplete?.();
+        if (!this.activating.has(extensionId)) {
+          this.runHostCallback(
+            "onToolRegistrationComplete",
+            () => this.options.onToolRegistrationComplete?.(),
+            extensionId
+          );
+        }
       },
       registerToolOutputDecorator: (extensionId, toolName, decorator) => {
         const ownerId = scopeExtensionOwnerId(this.options.agentId ?? "standalone", extensionId);
@@ -381,6 +395,36 @@ export class ExtensionRunner {
 
   getEventBus(): ExtensionEventBus {
     return this.eventBus;
+  }
+
+  /**
+   * Run a HOST reporting callback without letting a host defect change extension state.
+   *
+   * These callbacks (`onToolRegistrationComplete`, `onExtensionEnabled`, …) publish what the
+   * runner already decided. A throw from one is a host wiring bug, not an extension failure, and
+   * it must not be allowed to (a) fail an activation that succeeded (the activation `try` used to
+   * catch it and roll a healthy extension back to `error`), or (b) abort `setEnabled` before the
+   * host publishes the new state, which left the management panel showing the old one.
+   */
+  private runHostCallback(label: string, run: () => void, extensionId?: string): void {
+    try {
+      run();
+    } catch (error) {
+      this.emitExtensionEvent("agent:extension-error", {
+        ...(extensionId ? { extensionId } : {}),
+        phase: "host-callback",
+        error: `${label}: ${errorMessage(error)}`,
+      });
+    }
+  }
+
+  /** Tell the host this extension's state moved (the mechanisms, not the call sites, decide). */
+  private notifyStateChanged(extensionId: string): void {
+    this.runHostCallback(
+      "onExtensionStateChanged",
+      () => this.options.onExtensionStateChanged?.(extensionId),
+      extensionId
+    );
   }
 
   /**
@@ -529,6 +573,24 @@ export class ExtensionRunner {
 
   private reportingObserverFailure = false;
 
+  /**
+   * Report a UI render/subscription failure against the extension that produced it.
+   *
+   * Contained: `render` catches the normalization error and calls this from inside its own catch, so
+   * a reporter defect must not escape either.
+   */
+  private reportUiFailure(extensionId: string, err: unknown, source: string): void {
+    try {
+      this.emitExtensionEvent("agent:extension-error", {
+        extensionId,
+        phase: "extension-ui",
+        error: `${source}: ${errorMessage(err)}`,
+      });
+    } catch {
+      // A broken reporter must not break the render path.
+    }
+  }
+
   private reportObserverFailure(extensionId: string, err: unknown, eventType?: string): void {
     const message = errorMessage(err);
     // Reporting by emitting the event the failing handler observes is a recursion: an `observeAny`
@@ -647,10 +709,27 @@ export class ExtensionRunner {
         api.id,
         `duplicate extension id — replacing the earlier instance (${duplicate.api.name ?? "unnamed"})`
       );
-      await this.destroyExtension(duplicate);
+      // Teardown reaches host callbacks and the extension's own `deactivate()`. A throw there is
+      // reported, NOT propagated: letting it escape aborted this whole load before the
+      // filter/rank/notice cleanup below, leaving the old instance in the list AND no new one —
+      // exactly the two-instances-one-id state this block exists to prevent.
+      try {
+        await this.destroyExtension(duplicate);
+      } catch (error) {
+        this.emitExtensionEvent("agent:extension-error", {
+          extensionId: api.id,
+          phase: "teardown",
+          error: `replacing duplicate instance: ${errorMessage(error)}`,
+        });
+      }
       this.extensions = this.extensions.filter((entry) => entry !== duplicate);
       this.ranks.delete(api.id);
       this.turnContextSections.clearNotices(api.id);
+      // The old instance's `<ctx kind="ext:ID">` section may already be in THIS turn's collected
+      // snapshot; `clearNotices` only affects future collections. Retract the section the same way
+      // a disable does, but with no notice: the replacement is about to activate and must not be
+      // described to the model as gone.
+      this.runHostCallback("onExtensionDisabled", () => this.options.onExtensionDisabled?.(api.id, ""), api.id);
     }
 
     // `destroyExtension` is the one suspension point in this method; a `destroyAll()` that ran
@@ -686,8 +765,16 @@ export class ExtensionRunner {
         `Invalid extension id "${api.id}": ids must match [A-Za-z][A-Za-z0-9._/-]* (it becomes a <ctx kind> tag).`
       );
       this.writeExtensionLog("error", api.id || "unknown", error.message);
+      // Also on the lifecycle channel: this is one of the most common configuration mistakes, and
+      // `extension:log` alone left it out of the error timeline the panel/report read.
+      this.emitExtensionEvent("agent:extension-error", {
+        extensionId: api.id || "unknown",
+        phase: "config",
+        error: error.message,
+      });
       const invalid: ExtensionInstance = { api, context: ctx, state: "error", error, registrations };
       this.extensions.push(invalid);
+      this.notifyStateChanged(api.id);
       return invalid;
     }
 
@@ -714,9 +801,13 @@ export class ExtensionRunner {
       // No disabled notice: the notice exists so the model learns its tools VANISHED mid-session
       // (a runtime disable), and one injected at load time describes an extension this session
       // never had — it is pure per-turn prompt cost. A later enable writes the section normally.
+      this.notifyStateChanged(api.id);
       return instance;
     }
-    await this.activateInstance(instance, ctx);
+    const outcome = await this.activateInstance(instance, ctx);
+    // A revoke ALREADY announced its transition (the disable path owns it). Announcing again here
+    // emitted two `session:extensions` frames for one state change.
+    if (outcome.kind !== "revoked") this.notifyStateChanged(api.id);
     return instance;
   }
 
@@ -762,7 +853,13 @@ export class ExtensionRunner {
       }
       instance.state = "active";
       instance.error = undefined;
-      this.options.onToolRegistrationBatchComplete?.();
+      // Outside the activation `try`: publishing the catalog is a HOST step, and a throwing
+      // callback used to roll a healthy extension back to `error` (see `runHostCallback`).
+      this.runHostCallback(
+        "onToolRegistrationBatchComplete",
+        () => this.options.onToolRegistrationBatchComplete?.(),
+        instance.api.id
+      );
       return { kind: "active" };
     } catch (err) {
       const error = toError(err);
@@ -814,6 +911,14 @@ export class ExtensionRunner {
     }
   }
 
+  /**
+   * Tear one instance's incarnation down (flush + deactivate + release artifacts).
+   *
+   * **Not an "unload".** It leaves the instance in `this.extensions`, keeps its rank and sends no
+   * notification — callers that mean "load's inverse" must do those themselves (see
+   * `loadExtension`'s duplicate path and `setEnabled(false)`). `@internal` so a future public
+   * `unloadExtension` is not confused with it.
+   */
   async destroyExtension(instance: ExtensionInstance): Promise<void> {
     // Flush phase first: land anything the extension buffered (behind a timer or debounce) while
     // the resources it writes through are still held. Not folded into `deactivate()` — deactivate
@@ -963,6 +1068,18 @@ export class ExtensionRunner {
       this.turnContextSections.clear();
       this.messageTransformers.clearAll();
       this.uiBridge.clearAll();
+      // Bookkeeping that looks alive after destroy. Functionally inert (`destroyed` refuses every
+      // entry point), but clearing it makes "no residue after destroy" an assertable property and
+      // drops retained closures (a `contexts` entry holds the whole extension context).
+      this.ranks.clear();
+      this.activating.clear();
+      this.pendingToggles.clear();
+      this.revoking.clear();
+      this.refusedRegistrations.clear();
+      this.warnedInvalidObservable.clear();
+      // WeakMap has no `clear()`; a fresh one drops every retained wrapper.
+      this.interceptorWrappers = new WeakMap();
+      this.contexts.clear();
     } finally {
       this.uiBridge.dispose();
     }
@@ -1080,7 +1197,17 @@ export class ExtensionRunner {
             // the model why the tools vanished, like every other disable.
             const revokedNotice = `Extension "${instance.api.name ?? id}" is disabled — its tools and commands are unavailable.`;
             this.turnContextSections.setDisabledNotice(instance.api.id, revokedNotice);
-            this.options.onExtensionDisabled?.(instance.api.id, revokedNotice);
+            // Contained, and announced: this path is the ONLY way to disable an extension whose
+            // activation never settles, so a throwing host callback must not make it unreachable —
+            // and the state DID change, so the panel/snapshot must hear about it. The normal disable
+            // path owns both through `runHostCallback` + `notifyStateChanged`; this branch bypassed
+            // them and, once the dispatch site stopped emitting, left the list stale.
+            this.runHostCallback(
+              "onExtensionDisabled",
+              () => this.options.onExtensionDisabled?.(instance.api.id, revokedNotice),
+              instance.api.id
+            );
+            this.notifyStateChanged(instance.api.id);
             return { ok: true, message: `Extension "${id}" disabled; its activation was revoked` };
           } finally {
             this.revoking.delete(id);
@@ -1163,12 +1290,20 @@ export class ExtensionRunner {
         instance.disabledSections = undefined;
         // Runtime enable only: the initial load has no prepared turn whose snapshot could hold a
         // stale notice, so bootstrap does not need this call.
-        this.options.onExtensionEnabled?.(instance.api.id);
+        this.runHostCallback(
+          "onExtensionEnabled",
+          () => this.options.onExtensionEnabled?.(instance.api.id),
+          instance.api.id
+        );
+        this.notifyStateChanged(instance.api.id);
         return { ok: true, message: `Extension "${id}" enabled` };
       }
       if (outcome.kind === "revoked") {
         return { ok: false, message: `Extension "${id}" was disabled while activating` };
       }
+      // A failed enable is a state change too (the panel must show the error rather than the old
+      // state), so it publishes as well.
+      this.notifyStateChanged(instance.api.id);
       return { ok: false, message: `Failed to enable "${id}": ${outcome.error.message}` };
     }
 
@@ -1275,7 +1410,12 @@ export class ExtensionRunner {
     // management panel read "inactive + failed to activate (…)" forever, as if the state were
     // current. A teardown failure is reported through the returned message and the bus event.
     if (teardownError === undefined) instance.error = undefined;
-    this.options.onExtensionDisabled?.(instance.api.id, notice);
+    this.runHostCallback(
+      "onExtensionDisabled",
+      () => this.options.onExtensionDisabled?.(instance.api.id, notice),
+      instance.api.id
+    );
+    this.notifyStateChanged(instance.api.id);
     return teardownError === undefined
       ? { ok: true, message: `Extension "${id}" disabled` }
       : { ok: false, message: `Extension "${id}" disabled with errors: ${errorMessage(teardownError)}` };

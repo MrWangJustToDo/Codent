@@ -111,7 +111,11 @@ export class SessionLifecycleService {
    * field had to be added to both. One ordered list with scoped calls makes the invariant
    * structural (the shared order below is identical in both paths).
    */
-  private resetTransientState(reason: SessionLifecycleReason, scope: "full" | "resume"): void {
+  private resetTransientState(
+    reason: SessionLifecycleReason,
+    scope: "full" | "resume",
+    options: { sameSession?: boolean } = {}
+  ): void {
     const full = scope === "full";
     try {
       if (full) {
@@ -140,10 +144,17 @@ export class SessionLifecycleService {
       // Extension render slots describe the conversation, not the agent: a plan board or file tree
       // published for the old transcript must not survive into the new one (and must not be replayed
       // to a later subscriber as that session's initial state).
-      this.rt.sidecars.clearExtensionUi?.();
-      // Notices are conversation-scoped too: "Extension X is disabled" (or its retraction) must not
-      // be replayed into a transcript that never had that extension's tools.
-      this.rt.sidecars.clearExtensionSessionNotices?.();
+      //
+      // Skipped when the "leaving" session IS the target: the bootstrap create activates extensions
+      // and then loads the SAME session (`restoreSession(initialSessionId)`), so clearing here
+      // dropped every slot a freshly activated extension had just published — and the Session
+      // subscriber that could replay them does not exist yet. "Restart lost my extension panel".
+      if (!options.sameSession) {
+        this.rt.sidecars.clearExtensionUi?.();
+        // Notices are conversation-scoped too: "Extension X is disabled" (or its retraction) must
+        // not be replayed into a transcript that never had that extension's tools.
+        this.rt.sidecars.clearExtensionSessionNotices?.();
+      }
       if (full) this.rt.transcript.resetSessionSyncTracker();
       this.rt.transcript.resetIterationProgress();
       // Session-scoped, like the iteration progress above: a completed task keeps its row for the
@@ -313,6 +324,23 @@ export class SessionLifecycleService {
         return next;
       } else {
         this.rt.lease.abortClaim();
+        // Unload already ran but nothing was adopted: the run was stopped and its queues cleared,
+        // yet the agent is still on the leaving session. Re-apply what its transcript still says
+        // (a parked approval / question) so it is usable again — `/resume` does the same through
+        // `recoverLeavingSession`; `/new` had no equivalent and left a stopped-looking session with
+        // no wait and a discarded queue.
+        if (current) {
+          try {
+            // Re-read the channel: `stop()` in the unload half may have denied pending approvals and
+            // rewritten the transcript, so the snapshot taken BEFORE unload can be a superseded
+            // interaction state (it would re-park on an approval that was just answered).
+            const live = this.rt.transcript.getSessionData() ?? current;
+            this.rt.run.syncInteractionStateFromUIMessages?.(live.uiMessages);
+            this.rt.transcript.refreshState();
+          } catch {
+            // Best-effort recovery: the original failure is what the caller must see.
+          }
+        }
       }
       throw error;
     }
@@ -367,10 +395,13 @@ export class SessionLifecycleService {
         const session = await this.resumeInner(prepared.sessionId, reason);
         return { ok: true as const, session };
       })
-    );
-    // Same post-transaction lifecycle as `resume()`, including the failure path: the reset may
-    // have dropped the facade, so rebuild it after the switch is decided.
-    this.rt.sidecars.resumeBackgroundWork?.();
+    ).finally(() => {
+      // Same post-transaction lifecycle as `resume()`, including the failure path: the reset may
+      // have dropped the facade, so rebuild it after the switch is decided. In a `finally` — the
+      // commit half can throw between the reset and the commit, and a missing facade leaves the
+      // session without `session:jobs` or background completions until the next switch.
+      this.rt.sidecars.resumeBackgroundWork?.();
+    });
     return result;
   }
 
@@ -420,7 +451,15 @@ export class SessionLifecycleService {
       const steps: Array<[string, () => void | Promise<void>]> = [
         // Clear the leaving run's volatile state. The `resume` scope keeps mode/approvals/usage/todos —
         // the restore just adopted those.
-        ["session resume reset", () => this.resetTransientState("session-resume", "resume")],
+        [
+          "session resume reset",
+          () =>
+            this.resetTransientState("session-resume", "resume", {
+              // First load / same-session reload: the slots published by `activate()` belong to
+              // this conversation, so the reset must not drop them.
+              sameSession: leavingId === sessionId,
+            }),
+        ],
         ["session resume background reset", () => this.settleTransientReset()],
         // The reset makes the status idle; re-apply the restored interaction state so a session that
         // was waiting on approval/ask_user does not come back as idle.

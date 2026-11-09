@@ -172,7 +172,6 @@ const ALLOWED_EDGES = {
       "hosts.ts exposes the AgentUIChannel port (`agent/ui/ui-channel.ts` implements it); session-runtime.ts names the agent-side collaborators of the session switch.",
     onlySources: ["hosts", "session-runtime", "session-host", "chat-host", "run-host"],
     onlyTargets: [
-      "agent-log/index",
       "approval/approval-requirement",
       "approval/tool-approval-table",
       "compaction/compaction-controller",

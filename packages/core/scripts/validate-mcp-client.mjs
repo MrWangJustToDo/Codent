@@ -365,6 +365,42 @@ await checkAsync("an unusable policy is a failed server, not a silent default", 
   assert.match(status.error, /expected one of/);
 });
 
+// `forceKill` used to clear the client map without closing anything, so a teardown left HTTP/SSE
+// transports open (and `deactivate`'s `shutdown()` then iterated an empty map).
+await checkAsync("forceKill closes attached clients, not just the reference", async () => {
+  const manager = new McpManager({}, {});
+  let closed = 0;
+  manager.clients.set("s1", {
+    close: async () => {
+      closed += 1;
+    },
+  });
+  manager.forceKill();
+  await Promise.resolve();
+  assert.equal(closed, 1, "close() is initiated synchronously");
+  assert.equal(manager.getConnectedServers().length, 0, "and the map is cleared");
+});
+
+// `shutdown()` awaits `client.close()`. A re-enable can start inside that window; the old shutdown
+// must not clear the NEW incarnation's statuses (a single `closed` boolean could not express this,
+// which is what `generation` is for).
+await checkAsync("a shutdown in flight does not clear a newer incarnation's state", async () => {
+  const manager = new McpManager({}, {});
+  let releaseClose;
+  const closing = new Promise((resolve) => {
+    releaseClose = resolve;
+  });
+  manager.clients.set("old", { close: () => closing });
+  const shutdown = manager.shutdown();
+  await manager.initialize({
+    mcpServers: { off: { transport: "stdio", command: "no-such-binary", enabled: false } },
+  });
+  assert.equal(manager.getServerStatuses()[0]?.status, "disabled");
+  releaseClose();
+  await shutdown;
+  assert.equal(manager.getServerStatuses()[0]?.status, "disabled", "the newer incarnation keeps its server list");
+});
+
 // ============================================================================
 
 if (failures > 0) {

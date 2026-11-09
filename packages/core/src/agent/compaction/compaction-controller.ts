@@ -244,8 +244,16 @@ export class CompactionController {
    */
   cancel(reason = "user-cancelled"): boolean {
     if (this.active?.lease.kind !== "manual") return false;
+    const { previousStatus } = this.active;
     this.deps.onUserCancel();
     this.abortActive(reason);
+    // Restore the phase the lease took. `onUserCancel()` is a no-op once the projection is
+    // terminal (`outcome: "error" | "aborted"`), and dropping the lease removes the only owner
+    // that could publish `compaction-end` — the run phase then stayed `compacting` forever, which
+    // rejects every later `prepare` and `compaction-start` while the terminal projection hides it.
+    // `restoreStatusFor` reads the run AXIS and is a no-op when a transition already moved on, so
+    // this is safe on both branches (it keeps the `aborted` verdict `interrupt` just wrote).
+    this.restoreStatusFor("manual", previousStatus);
     return true;
   }
 

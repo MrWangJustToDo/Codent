@@ -33,8 +33,18 @@ export const OUTPUT_LIMITS = {
   MAX_IMAGE_DIMENSION: 16_384,
 } as const;
 
-/** Truncate a string from the end (or the start) with an indicator of what was dropped. */
-export function truncateString(str: string, maxLength: number, fromEnd = false): { text: string; truncated: boolean } {
+/**
+ * Truncate a string from the end (or the start) with an indicator of what was dropped.
+ *
+ * Scoped to TOOL OUTPUT on purpose (hence the name): it inserts a newline before the marker and
+ * reports the drop count, which is not the general character-truncation contract. That one lives in
+ * `utils/text-truncation.ts` (`truncateText`, with the shared omission marker).
+ */
+export function truncateToolOutput(
+  str: string,
+  maxLength: number,
+  fromEnd = false
+): { text: string; truncated: boolean } {
   if (str.length <= maxLength) {
     return { text: str, truncated: false };
   }

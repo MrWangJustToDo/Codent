@@ -273,6 +273,29 @@ managed.getEventBus().emit("session:subagents", { subagents: [] });
 assert.ok(channels.includes("subagents"), "session:subagents must reach its channel");
 unsub();
 
+// `agent:client-tool-result` carries the host's ANSWER to a client tool. The lifecycle channel
+// strips arbitrary `output` values (they can be multi-MB tool payloads), but dropping it for THIS
+// event left a remote consumer with a call id and no answer.
+{
+  const bus = createAgentEventBus("client-tool-result");
+  const fake = createFake("client-tool-result", undefined, { bus });
+  const sessionWithToolResult = createLocalAgentSession({ managed: fake, manager: null });
+  const lifecycleFrames = [];
+  const unsubscribe = sessionWithToolResult.subscribe((event) => lifecycleFrames.push(event), {
+    channels: ["lifecycle"],
+  });
+  bus.emit("agent:client-tool-result", {
+    tool_call_id: "call-ask",
+    tool_name: "ask_user",
+    output: { answer: "yes" },
+  });
+  unsubscribe();
+
+  const frame = lifecycleFrames.find((event) => event.payload?.type === "agent:client-tool-result");
+  assert.ok(frame, "the client-tool result reaches the lifecycle channel");
+  assert.deepEqual(frame.payload.payload.output, { answer: "yes" }, "and keeps the answer itself");
+}
+
 // Retained session projection is scope-local: a child without its own todo/queue
 // provider must not inherit the parent's retained values through the bus scope chain.
 {

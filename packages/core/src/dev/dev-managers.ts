@@ -141,7 +141,7 @@ export { AgentToolService } from "../managers/services/agent-tool-service.js";
 export { createTools } from "../agent/tools";
 export { buildToolset } from "../managers/toolset-factory.js";
 export { resolveToolsRecord } from "../agent/tools/catalog/tool-set.js";
-export { whenClearForReconcilePolicy } from "../agent/state/agent-run-outcome.js";
+export { deriveCancelVerdict, whenClearForReconcilePolicy } from "../agent/state/agent-run-outcome.js";
 export {
   applyRestoredSessionChatState,
   getSessionPersistInput,

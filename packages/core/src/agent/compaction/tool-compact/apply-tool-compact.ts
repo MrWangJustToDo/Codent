@@ -143,7 +143,16 @@ export async function applyToolCompact(
       // refuse a replaced tools record. A resolver failure is the same class of fault as a
       // formatter failure — contain it to this result instead of failing every model call.
       const toModelOutput = options.registry.get(toolName);
-      if (!toModelOutput) continue;
+      if (!toModelOutput) {
+        // No formatter: the projection IS the raw content. Caching that identity is what makes the
+        // "cache before parse" rule hold for these tools too — without it the payload was parsed
+        // on every model call and the result discarded (only tools that declare a formatter ever
+        // reached a cache write). `projected === source`, so a later hit rewrites nothing.
+        if (message.content !== null) {
+          cache.set(cacheKey, { source: message.content, projected: message.content });
+        }
+        continue;
+      }
       transformed = await toModelOutput({
         toolCallId: target.toolCallId,
         input,

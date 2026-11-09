@@ -1,6 +1,11 @@
-import { reportContained } from "../../utils/contained-report.js";
+import { handlerFailureKey, reportContained } from "../../utils/contained-report.js";
 import { Emitter } from "../../utils/emitter.js";
 import { compareDispatchRank, resolveExtensionOrder } from "../dispatch-order.js";
+import {
+  EXTENSION_CALLBACK_TIMEOUT_MS,
+  isCallbackTimeoutError,
+  withCallbackTimeout,
+} from "../extension/callback-timeout.js";
 import { INTERNAL_EXTENSION_EVENTS } from "../extension/event-visibility.js";
 
 import type {
@@ -64,6 +69,21 @@ function interceptorMatches(pattern: string, name: string): boolean {
   return false;
 }
 
+/**
+ * Wall-clock budget for ONE `intercept` call, across the whole scope chain.
+ *
+ * `intercept` is awaited by the tool gate and the run lifecycle, and it is the one dispatch mode
+ * that can HOLD a tool call. A handler that never settles used to freeze every call it matched
+ * with no escape: `Esc` cancels the run, not this `await`. A per-handler bound is not enough (N
+ * stuck handlers would cost N x the bound), so the budget is for the chain: the first hung handler
+ * consumes the remainder and the chain stops.
+ *
+ * It uses the same budget as `EXTENSION_CALLBACK_TIMEOUT_MS` (one constant, so the two cannot drift):
+ * a legitimate slow `session:shutdown` interceptor is not cut off before the teardown wrapper around
+ * it would have given up.
+ */
+const INTERCEPTOR_CHAIN_TIMEOUT_MS = EXTENSION_CALLBACK_TIMEOUT_MS;
+
 // ============================================================================
 // DefaultAgentEventBus
 // ============================================================================
@@ -87,6 +107,8 @@ export interface HandlerFailureInfo {
 export class DefaultAgentEventBus implements AgentEventBus {
   /** First failure per (scope, event, pattern); a broken handler would otherwise flood stderr. */
   private readonly reportedFailures = new Set<string>();
+  /** Types already warned about a replaced retained provider (the map keeps exactly one owner). */
+  private readonly reportedRetainedConflicts = new Set<string>();
   private readonly reporter: (info: HandlerFailureInfo) => void;
 
   constructor(
@@ -106,12 +128,17 @@ export class DefaultAgentEventBus implements AgentEventBus {
      * including the domain objects that emit straight on their scoped bus instead of going through
      * the telemetry funnel (`plan`, `ui`, `stream-hub`, the extension runner).
      */
-    private readonly resolveMeta?: (agentId: string) => { runId?: string; sessionId?: string } | undefined
+    private readonly resolveMeta?: (agentId: string) => { runId?: string; sessionId?: string } | undefined,
+    /**
+     * Budget for one `intercept` chain. Injectable so a validator can exercise the bound without
+     * waiting a minute, and so a host with a different teardown contract can widen it.
+     */
+    private readonly interceptorTimeoutMs: number = INTERCEPTOR_CHAIN_TIMEOUT_MS
   ) {
     this.reporter =
       onInterceptorError ??
       ((info) => {
-        const key = `${info.scopeId}\0${info.event}\0${info.pattern}`;
+        const key = handlerFailureKey(info);
         if (this.reportedFailures.has(key)) return;
         if (this.reportedFailures.size >= 100) this.reportedFailures.clear();
         this.reportedFailures.add(key);
@@ -268,6 +295,23 @@ export class DefaultAgentEventBus implements AgentEventBus {
 
   retain<T extends AgentEventType>(type: T, provider: () => AgentEvent<T>["payload"]): () => void {
     const stored = provider as () => unknown;
+    const existing = this.node.retained.get(type);
+    // "One provider per type" is what makes a retained replay meaningful (one channel, one
+    // snapshot owner). `Map.set` used to overwrite silently: a second module retaining the same
+    // event left the first provider unreachable and the channel replaying someone else's snapshot,
+    // with nothing to notice. Re-registering the SAME provider is silent (still one owner), but note
+    // the map is keyed by type: either registration's disposer then drops the type for both.
+    if (existing !== undefined && existing !== stored) {
+      const key = `${this.node.id}\0${type}`;
+      if (!this.reportedRetainedConflicts.has(key)) {
+        // Bounded like `reportedFailures`: a long-lived process with many scopes must not grow it.
+        if (this.reportedRetainedConflicts.size >= 100) this.reportedRetainedConflicts.clear();
+        this.reportedRetainedConflicts.add(key);
+        console.warn(
+          `[agent:event] retained provider for "${type}" was replaced (scope ${this.node.id}); a channel has one retained owner`
+        );
+      }
+    }
     this.node.retained.set(type, stored);
     return () => {
       // Only clear if this node still owns the same provider.
@@ -278,15 +322,36 @@ export class DefaultAgentEventBus implements AgentEventBus {
   scope(id: string): AgentEventBus {
     // Child scopes share the parent's error sink and metadata resolver: a scoped bus is the same bus
     // with a narrower view, not a separate pipeline.
-    return new DefaultAgentEventBus(new EventBusScopeNode(id, this.node), this.onInterceptorError, this.resolveMeta);
+    return new DefaultAgentEventBus(
+      new EventBusScopeNode(id, this.node),
+      this.onInterceptorError,
+      this.resolveMeta,
+      this.interceptorTimeoutMs
+    );
   }
 
   // --------------------------------------------------------------------------
   // Interceptor mode
   // --------------------------------------------------------------------------
 
+  /**
+   * Run an interceptable event through the interceptor chain, nearest scope first.
+   *
+   * **Cancel semantics:** `return false` / `event.skipDefault` short-circuits the WHOLE chain —
+   * this scope's remaining interceptors AND every ancestor scope's. That is the intended shape for
+   * `tool:before` ("already denied, do not ask anyone else"), but it means a subagent-scoped
+   * interceptor can suppress a parent-scoped one. A handler that only wants to observe must return
+   * `undefined`.
+   *
+   * The WHOLE chain is bounded (see `INTERCEPTOR_CHAIN_TIMEOUT_MS`): a hang is reported and the
+   * chain stops, so a broken extension cannot freeze the tool call it wraps.
+   */
   async intercept<T extends InterceptableEvent>(event: T): Promise<T["defaultReturn"] | undefined> {
-    for (let node: EventBusScopeNode | null = this.node; node; node = node.parent) {
+    const deadline = Date.now() + this.interceptorTimeoutMs;
+    // Attribution for the budget-exhausted report: the handler that consumed it, not the next one
+    // (which never ran).
+    let lastPattern = "*";
+    outer: for (let node: EventBusScopeNode | null = this.node; node; node = node.parent) {
       // Snapshot: `node.interceptors` is mutated by onIntercept()/its disposer, and this loop
       // awaits between entries. Iterating the live array let an interceptor registered during
       // dispatch run twice and one unregistered during dispatch shift indices (skipping a later
@@ -296,18 +361,63 @@ export class DefaultAgentEventBus implements AgentEventBus {
         // the entry alive, but it is no longer registered.
         if (!registration.active) continue;
         if (!interceptorMatches(registration.pattern, event.type)) continue;
+        lastPattern = registration.pattern;
         // Isolated like the observer wildcards: a throwing interceptor must not
         // propagate into the tool call it wraps (one broken extension would fail
         // every tool it touches). The observer/transformer/context-provider
         // channels are already isolated — this one is the most-written and was
         // the only one that was not.
+        //
+        // Bounded as well as contained: `await` alone let a handler that never settles hold the
+        // tool call forever (`Esc` aborts the run, not this promise). The budget is per CHAIN, not
+        // per handler: N stuck handlers would otherwise cost N x the bound.
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
+          reportContained(() =>
+            this.reporter({
+              pattern: lastPattern,
+              event: event.type,
+              scopeId: node.id,
+              error: new Error(`interceptor chain exceeded ${this.interceptorTimeoutMs}ms`),
+            })
+          );
+          break outer;
+        }
         let result: unknown;
         try {
-          result = await registration.handler(event as InterceptableEvent);
+          // `registration.handler(event)` is evaluated EAGERLY: deferring it behind
+          // `Promise.resolve().then(...)` put it on a microtask, so a fire-and-forget emitter
+          // (`emitSessionShutdown` / `emitSessionBootstrap`) returned before the interceptor ran.
+          result = await withCallbackTimeout(
+            Promise.resolve(registration.handler(event as InterceptableEvent)),
+            `interceptor "${registration.pattern}"`,
+            remaining
+          );
         } catch (error) {
           reportContained(() =>
-            this.reporter({ pattern: registration.pattern, event: event.type, scopeId: node.id, error })
+            this.reporter({
+              pattern: registration.pattern,
+              event: event.type,
+              scopeId: node.id,
+              error,
+            })
           );
+          // A timed-out handler consumed the remaining budget and CANNOT be trusted to have
+          // finished its work: a half-executed interceptor may have written `modifiedArgs` /
+          // `modifiedResult` before hanging, and those are read by the caller. Drop the rewrites and
+          // fail CLOSED (`skip`) — a handler that could not complete is not evidence of approval.
+          if (isCallbackTimeoutError(error)) {
+            const mutable = event as {
+              skip?: boolean;
+              skipDefault?: boolean;
+              modifiedArgs?: unknown;
+              modifiedResult?: unknown;
+            };
+            mutable.modifiedArgs = undefined;
+            mutable.modifiedResult = undefined;
+            mutable.skip = true;
+            break outer;
+          }
           continue;
         }
         // `cancel` = return false or set `skipDefault`; stop the chain.
@@ -436,7 +546,16 @@ export function createAgentEventBus(
     error: unknown;
     kind?: "interceptor" | "observer";
   }) => void,
-  options?: { resolveMeta?: (agentId: string) => { runId?: string; sessionId?: string } | undefined }
+  options?: {
+    resolveMeta?: (agentId: string) => { runId?: string; sessionId?: string } | undefined;
+    /** Override the per-chain interceptor budget (tests / a host with a different teardown bound). */
+    interceptorTimeoutMs?: number;
+  }
 ): AgentEventBus {
-  return new DefaultAgentEventBus(new EventBusScopeNode(id, null), onInterceptorError, options?.resolveMeta);
+  return new DefaultAgentEventBus(
+    new EventBusScopeNode(id, null),
+    onInterceptorError,
+    options?.resolveMeta,
+    options?.interceptorTimeoutMs
+  );
 }

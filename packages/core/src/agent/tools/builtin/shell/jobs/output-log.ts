@@ -21,6 +21,7 @@
  */
 
 import { getEnv } from "../../../../../env";
+import { registerExtensionExitFlush } from "../../../../agent-log/lifecycle-guards.js";
 import { COMMAND_JOB_CACHE_DIR, sweepWorkspaceCache } from "../../../shared/cache/workspace-cache.js";
 
 import type { CoreEnvFs, ResolvedCoreEnv } from "../../../../../env";
@@ -59,6 +60,15 @@ export interface CommandJobLogWriter {
   finalize(status: string, exitCode: number | null, endedAt: number): Promise<void>;
   /** Stop buffering and delete the file (job eviction / teardown). */
   remove(): Promise<void>;
+  /**
+   * Synchronous best-effort flush for the process-exit path (there is no `await` there).
+   *
+   * A background job's log is the only evidence a hard exit left behind, and "no footer means the
+   * job is still running" is a contract the agent reads back. Losing the last 250 ms of output (or
+   * the footer) makes a finished job look live. Degrades to an async flush when the host has no
+   * synchronous fs primitives.
+   */
+  flushSync?(): void;
 }
 
 export interface CommandJobLogWriterOptions {
@@ -88,6 +98,8 @@ class FileJobLogWriter implements CommandJobLogWriter {
   private stopped = false;
   /** Whether the next stderr line begins at a line boundary (chunks split mid-line). */
   private stderrAtLineStart = true;
+  /** Removes this writer's process-exit flush (see `flushSync`). */
+  private exitFlushDisposer: (() => void) | undefined;
 
   constructor(options: CommandJobLogWriterOptions & { fs: CoreEnvFs }) {
     this.fs = options.fs;
@@ -98,6 +110,13 @@ class FileJobLogWriter implements CommandJobLogWriter {
     this.appendFile = options.fs.appendFile as (path: string, content: string) => Promise<void>;
     this.path = jobLogPath(options.jobId);
     this.header = `# ${options.command}\n# started ${new Date(options.startedAt).toISOString()}\n`;
+    // A background job's log is the durable evidence of how it ended, and the 250ms batch timer is
+    // lost on a hard exit. Registered in the SAME exit path the agent log uses — it writes the file
+    // directly rather than through the logger, so the two registrations do not depend on each
+    // other's order — and owned per job so eviction/finalize can unregister it.
+    this.exitFlushDisposer = registerExtensionExitFlush(() => this.flushSync(), {
+      ownerId: `job-log:${this.path}`,
+    });
   }
 
   appendStdout(chunk: string): void {
@@ -120,6 +139,41 @@ class FileJobLogWriter implements CommandJobLogWriter {
     this.pending.push(footer);
     this.clearTimer();
     await this.flush();
+    // The file is complete: release the process-exit closure. A parked session evicts finished jobs
+    // without calling `remove()`, and the registry is a process-global Map — an undisposed closure
+    // per job would accumulate (with its buffer and fs binding) for the life of the process.
+    this.exitFlushDisposer?.();
+    this.exitFlushDisposer = undefined;
+  }
+
+  /**
+   * Synchronous best-effort flush for the exit path.
+   *
+   * Land the buffered batch with the host's sync primitives when it has them, otherwise fall back to
+   * the async flush an exit will usually not complete.
+   *
+   * Only an ALREADY-created file is written here. Creating it would race the async path's truncating
+   * `writeFile(header)` (a sync write landing inside that await is then erased), so the first-batch
+   * window falls back to the async flush. Hard-exit coverage therefore starts at the first tick
+   * (≤250ms), not at the very first chunk — write order is not something the exit path may trade.
+   */
+  flushSync(): void {
+    if (this.stopped) return;
+    this.clearTimer();
+    const appendFileSync = this.fs.appendFileSync;
+    if (!appendFileSync || !this.created) {
+      void this.flush();
+      return;
+    }
+    const batch = this.pending;
+    this.pending = [];
+    if (batch.length === 0) return;
+    try {
+      appendFileSync(this.path, batch.join(""));
+    } catch {
+      // Put the batch back so the ordinary teardown flush can still land it.
+      this.pending = [...batch, ...this.pending];
+    }
   }
 
   async remove(): Promise<void> {
@@ -127,6 +181,8 @@ class FileJobLogWriter implements CommandJobLogWriter {
     this.finalized = true;
     this.pending = [];
     this.clearTimer();
+    this.exitFlushDisposer?.();
+    this.exitFlushDisposer = undefined;
     // Let an in-flight flush settle before deleting: otherwise its append could
     // recreate the file right after removal.
     await this.chain.catch(() => {});
@@ -188,8 +244,12 @@ class FileJobLogWriter implements CommandJobLogWriter {
         try {
           if (!this.created) {
             await this.fs.mkdir(COMMAND_JOB_CACHE_DIR);
-            await this.fs.writeFile(this.path, this.header);
-            this.created = true;
+            // Re-check after the await: an exit-path `flushSync` may have created and written the
+            // file while we were waiting for mkdir. Truncating then would erase its batch.
+            if (!this.created) {
+              await this.fs.writeFile(this.path, this.header);
+              this.created = true;
+            }
           }
           if (batch.length > 0) {
             await this.appendFile(this.path, batch.join(""));
@@ -207,6 +267,8 @@ class FileJobLogWriter implements CommandJobLogWriter {
     this.stopped = true;
     this.pending = [];
     this.clearTimer();
+    this.exitFlushDisposer?.();
+    this.exitFlushDisposer = undefined;
     // Let callers stop advertising a log path that will never be written.
     this.onDisabled?.();
   }

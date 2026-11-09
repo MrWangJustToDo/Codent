@@ -29,7 +29,6 @@ export type PersistedToolDecision = "approved" | "denied" | "pending" | undefine
 
 export interface AuthorizeToolCallInput {
   toolName: string;
-  args: Record<string, unknown>;
   facts: AgentPolicyFacts;
   /** The registered tool's declarative requirement; omitted means free. */
   approval?: ApprovalRequirement;
@@ -53,7 +52,7 @@ const ALLOW_FREE: ToolAuthorizationDecision = {
 };
 
 /**
- * Run the seven stages and return the first decisive verdict.
+ * Run the authorization stages and return the first decisive verdict.
  *
  * A persisted answer is consulted in two places deliberately: a recorded denial is terminal before
  * auto mode (a user's no is not auto-approved), while a recorded approval is returned at the end so

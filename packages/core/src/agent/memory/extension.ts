@@ -415,7 +415,6 @@ creating a duplicate (check memory_list first).`,
     },
   });
 
-  ctx.logger.info(
-    `Memory extension activated (${memoryManager.getIndexContent().trim() ? "index ready" : "empty index"})`
-  );
+  // No `ctx.logger.info("Memory extension activated …")` here: `session:memory` is the one row
+  // (memory count + index length), and a second writer made `AGENT_LOG_LEVEL` filtering arbitrary.
 }

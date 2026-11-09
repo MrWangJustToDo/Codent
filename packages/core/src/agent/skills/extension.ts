@@ -234,5 +234,6 @@ that help you complete specific types of tasks.`,
     },
   });
 
-  ctx.logger.info(`Skills extension activated (${skillRegistry.size} skills)`);
+  // No `ctx.logger.info("Skills extension activated …")` here: `session:skill` already carries
+  // the count and the names, and the duplicate row was the one that survived at info level.
 }

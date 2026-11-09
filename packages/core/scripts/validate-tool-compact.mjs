@@ -467,4 +467,43 @@ assert.doesNotMatch(errorText, /Overwrote file: undefined/);
   assert.ok(JSON.stringify(projected?.content).includes(reason), "the model sees the recorded cancel reason");
 }
 
+// ---------------------------------------------------------------------------
+// A tool WITHOUT `toModelOutput` must still cache its identity projection.
+//
+// The cache is consulted before parsing, but the "cache before parse" rule only held for tools that
+// declare a formatter: the no-formatter branch parsed the payload and then `continue`d without a
+// cache write, so every model call re-parsed a result it would discard.
+// ---------------------------------------------------------------------------
+{
+  const identityCache = new ToolCompactCache();
+  const payload = JSON.stringify({ ok: true, items: [1, 2, 3] });
+  const wire = [
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [{ id: "call-custom", type: "function", function: { name: "custom_tool", arguments: "{}" } }],
+    },
+    { role: "tool", toolCallId: "call-custom", content: payload },
+  ];
+
+  const compactedOnce = await applyToolCompact(structuredClone(wire), {
+    config: {},
+    registry: { get: () => undefined },
+    cache: identityCache,
+  });
+  const entry = identityCache.get(toolCompactCacheKey("call-custom", 1, payload));
+  assert.ok(entry, "an identity projection is cached even without a formatter");
+  assert.equal(entry.source, payload);
+  assert.equal(entry.projected, payload, "projection equals source, so a later hit rewrites nothing");
+  assert.equal(compactedOnce[1].content, payload, "and the wire is unchanged");
+
+  // Second call hits the cache; the tool message stays the SAME reference (no rewrite).
+  const compactedTwice = await applyToolCompact(structuredClone(wire), {
+    config: {},
+    registry: { get: () => undefined },
+    cache: identityCache,
+  });
+  assert.equal(compactedTwice[1].content, payload, "a cache hit keeps the identity projection");
+}
+
 console.log("tool-compact validation passed");

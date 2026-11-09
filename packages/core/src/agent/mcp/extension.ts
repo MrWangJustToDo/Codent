@@ -102,10 +102,12 @@ async function activateMcp(
     return;
   }
 
-  // Names and transports only: `env` / `headers` values are credentials and MUST NOT be
-  // logged — the values are deliberately never read here. The FILE path is included on the file
-  // branch because "which file applied" is the useful answer there (and it is a path, unlike
-  // the source kind, so it does not misrepresent anything).
+  // Configuration inventory, at DEBUG: `session:mcp` is the canonical row (config source + one
+  // line per connected server), so this must not compete with it at `info` — the earlier `info`
+  // copy was the only MCP line left once the policy row was filtered out, which inverted the
+  // intended "the table decides what is recorded". Names and transports only: `env` / `headers`
+  // values are credentials and are never read here. The file path is included on the file branch
+  // because "which file applied" is the useful answer there.
   const inventory = Object.entries(config.mcpServers)
     .map(([name, server]) => `${name}/${server.transport}`)
     .join(", ");
@@ -114,7 +116,7 @@ async function activateMcp(
       ? `${mcpManager.configSourceKind} (${mcpManager.configLoadedFrom})`
       : mcpManager.configSourceKind;
   ctx.logger.log(
-    "info",
+    "debug",
     "system",
     `MCP configuration source: ${origin} (${Object.keys(config.mcpServers).length} servers: ${inventory})`
   );
