@@ -543,6 +543,14 @@ export interface ResolvedCoreEnv extends CoreEnv {
 }
 
 /**
+ * The raw env a resolved wrapper came from — the identity used by process-scoped teardown.
+ *
+ * `rootPath` is not enough: two runtimes may own the same workspace, and reaping one must not kill
+ * the other's running background commands. @internal
+ */
+export const CORE_ENV_SOURCE: unique symbol = Symbol("codent.coreEnv.source");
+
+/**
  * Register the runtime environment for @codent/core.
  *
  * Must be called before using any core functionality.
@@ -571,8 +579,10 @@ export function registerCoreEnv(env: CoreEnv): void {
  */
 export function clearCoreEnv(): void {
   // Pass the env being cleared: process-scoped hooks (background job registries) must only reap the
-  // runtime that is going away, not every runtime in a multi-instance process.
-  runEnvTeardownHooks(_env ?? undefined);
+  // runtime that is going away, not every runtime in a multi-instance process. The RESOLVED wrapper
+  // is passed because it carries `CORE_ENV_SOURCE`, the raw identity the hook compares against —
+  // `rootPath` alone cannot tell two runtimes over the same workspace apart.
+  runEnvTeardownHooks(_resolvedEnv ?? _env ?? undefined);
   _env = null;
   _resolvedEnv = null;
 }
@@ -583,7 +593,7 @@ export function clearCoreEnv(): void {
  * registry. Pure; safe for any env.
  */
 export function resolveCoreEnv(env: CoreEnv): ResolvedCoreEnv {
-  return {
+  const resolved: ResolvedCoreEnv = {
     ...env,
     path: env.path ?? defaultPath,
     byteLength: env.byteLength ?? defaultByteLength,
@@ -592,6 +602,16 @@ export function resolveCoreEnv(env: CoreEnv): ResolvedCoreEnv {
     // Bound to the env being resolved, so the default follows that env's own root.
     cwd: env.cwd ?? (() => Promise.resolve(env.rootPath)),
   };
+  // Identity token: process-scoped teardown (background job registries) must reap the runtime that
+  // is going away, not every runtime over the same `rootPath`. Comparing the raw object is what
+  // makes that possible after resolution created a new wrapper; preserving an inherited token keeps
+  // `resolveCoreEnv(resolveCoreEnv(env))` stable. Non-enumerable so it never leaks into a spread or
+  // a serialized env.
+  Object.defineProperty(resolved, CORE_ENV_SOURCE, {
+    value: (env as unknown as Record<PropertyKey, unknown>)[CORE_ENV_SOURCE] ?? env,
+    enumerable: false,
+  });
+  return resolved;
 }
 
 /**

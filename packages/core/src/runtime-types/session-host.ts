@@ -41,6 +41,8 @@ export interface SessionPersistInput {
    * and name write without comparing session ids (see `runtime-types/epoch.ts`).
    */
   epoch?: Epoch;
+  /** The run that requested this write (see `generateSessionTitle`'s side-query rows). */
+  runId?: string;
   resolveTextAdapter?: () => Promise<TextAdapterConfig | null>;
   emitEvent?: EmitAgentTelemetryFn;
   /**
@@ -82,6 +84,11 @@ export interface SessionHost {
   getUI?: () => AgentUIChannel | undefined;
   /** Capture the session/run generation before an async write (see `runtime-types/epoch.ts`). */
   captureEpoch?: () => Epoch;
+  /**
+   * The run that produced the write, so an async side query (auto-title) pins its rows to the turn
+   * that asked instead of the telemetry fallback's "current run" (which may be a later turn).
+   */
+  getCurrentRunId?: () => string | null;
   /** The restored transcript was adopted: reset the persistence baseline against it. */
   onSessionAdopted?: (uiMessages: TanStackUIMessage[]) => void;
   usage: UsageTracker;

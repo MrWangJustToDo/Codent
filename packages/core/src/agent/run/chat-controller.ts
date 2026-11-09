@@ -818,6 +818,29 @@ export class AgentChatController {
       return this.pumpToolPhases({ startsNewTurn });
     };
     this.runChain = this.runChain.then(run, run);
+    // A rejection here must never escape as an unhandled rejection: the host process guard turns
+    // one into `exit(1)`, so an admission fault (a legacy message the transcript scan cannot read)
+    // would take the whole CLI/ACP process down instead of failing one turn. `void enqueueRunOnce()`
+    // callers are the common case, and `void` does not mean "no handler".
+    //
+    // Reported as a real failed turn, not a diagnostic row: `session:diagnostic` has no session
+    // channel, so ACP/remote hosts would see a user message hang unanswered with no signal at all.
+    // Epoch-checked so a rejection that lands after a session switch is not filed under the target.
+    //
+    // Never over a live interaction or an existing failure verdict: the pump's `finally` can reject
+    // AFTER the turn parked on `ask_user`, and setting `error` there would contradict the pending
+    // question — input is then admitted against `error` and the next pump breaks on the interaction.
+    // A rejection after a COMPLETED turn is still reported (it is indistinguishable from an
+    // admission failure for the next turn), but it cannot reopen a turn boundary.
+    this.runChain = this.runChain.catch((error) => {
+      if (this.lifecycleEpoch !== epoch || this.managed.isDestroyed()) return;
+      if (hasPendingInteraction(this.channel.getMessages())) return;
+      const status = this.managed.getStatus();
+      if (status === "waiting" || status === "awaiting_user" || status === "error" || status === "aborted") return;
+      const normalized = toError(error);
+      this.managed.setError(normalized.message);
+      this.managed.statusController.onRunError(normalized.message, normalized.stack);
+    });
     return this.runChain;
   }
 

@@ -99,7 +99,7 @@ export { MODEL_CAPABILITIES } from "../models/types.js";
 
 // Drives `validate:capability-unknown-vs-none`: the `undefined` (unknown) vs `[]` (declared
 // none) distinction has to survive the metadata merge, and that merge is only reachable here.
-export { resolveModelConfig } from "../models/config/model-config.js";
+export { resolveModelConfig } from "../models/config/model-connection.js";
 export { MODEL_CAPABILITY_FLAGS } from "../agent/extension/types.js";
 
 export {

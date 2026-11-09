@@ -1,7 +1,13 @@
 import { truncateText } from "../../../../utils/text-truncation.js";
 import { BUILTIN_TOOL_NAMES } from "../../catalog/tool-names.js";
 
-import { ENTRY_VALUE_MAX_CHARS } from "./format.js";
+/**
+ * Max characters for one stringified entry value in argument / input display.
+ *
+ * Owns the budget this file's formatters share; it was 30 in one and 50 in the other, so the same
+ * value rendered at two widths.
+ */
+const ENTRY_VALUE_MAX_CHARS = 50;
 
 function formatFilePathInput(input: Record<string, unknown>, toolName?: string): string {
   const path = input.path as string | undefined;

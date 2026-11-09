@@ -4,9 +4,9 @@
  * Past conversation lives in ONE authoritative shape: `.agents/sessions/<id>.session.jsonl`, the
  * append-only log, one message per line. Compaction only APPENDS a summary checkpoint to the
  * channel — it never removes the pre-cut messages — and the session is persisted from that
- * channel, so the log is the complete conversation. (The `.agents/transcripts/<id>/compact-<N>.md`
- * archives are a derived, lower-fidelity serialization of messages that still exist in the log;
- * they are deliberately NOT searched here.) Message text is nested in JSON, so a raw line match is
+ * channel, so the log is the complete conversation. There is no separate transcript archive to
+ * search (the former `.agents/transcripts/<id>/compact-<N>.md` files were a derived duplicate of
+ * the log and were removed). Message text is nested in JSON, so a raw line match is
  * not readable; folding is delegated to the persistence module (`readLog` + `foldLog`).
  *
  * Everything is read through `CoreEnv.fs` (relative workspace paths, like `SessionStore`), so the

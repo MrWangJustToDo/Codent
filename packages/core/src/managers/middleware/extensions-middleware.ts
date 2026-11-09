@@ -1,3 +1,4 @@
+import { isInterceptorTimedOut } from "../../agent/agent-event-bus";
 import { emitToolBeforeHook, ToolBeforeHookLedger } from "../../agent/extension/tool-before-hook.js";
 import { BUILTIN_TOOL_NAMES } from "../../agent/tools/catalog/tool-names.js";
 import { isAbortError, isCancelledOutputMarker } from "../../runtime-types/abort.js";
@@ -195,7 +196,10 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
 
         // If an interceptor set modifiedResult, stash it for onToolPhaseComplete (we cannot
         // return it from onAfterToolCall — that hook returns void in TanStack 0.43.1).
-        if (event.payload.modifiedResult !== undefined) {
+        //
+        // Not when the chain timed out: the handler may still be running and can write the field
+        // after the bus cleared it. A half-executed interceptor is not evidence of a decision.
+        if (!isInterceptorTimedOut(event) && event.payload.modifiedResult !== undefined) {
           modifiedResults.set(info.toolCallId, event.payload.modifiedResult);
         }
       } else {

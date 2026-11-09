@@ -100,9 +100,6 @@ export const SUBAGENT_RUN_RESTART_REASONS: readonly string[] = [SUBAGENT_ABORT_R
 
 export type SubagentStopReason = "user" | "parent-run" | "parent-stop" | "unknown";
 
-/** Every stop reason, in a runtime list — the payload/tool schemas derive their enum from it. */
-export const SUBAGENT_STOP_REASONS: readonly SubagentStopReason[] = ["user", "parent-run", "parent-stop", "unknown"];
-
 /** Notices, exported so consumers match on them instead of on a copied literal. */
 export const SUBAGENT_CANCELLED_NOTICE = "[Task cancelled by user.]";
 export const SUBAGENT_PARENT_RUN_NOTICE = "[Task stopped with its parent run.]";

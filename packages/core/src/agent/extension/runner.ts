@@ -233,6 +233,16 @@ export class ExtensionRunner {
    * with the same sentence. Cleared when the extension is activated again.
    */
   private readonly refusedRegistrations = new Set<string>();
+  /**
+   * Incarnations revoked by an EXTERNAL teardown (disable / destroyAll / duplicate-id replacement).
+   *
+   * The activation-failure catch needs this after its own teardown has run: `isContextLive` is
+   * false either way (our teardown deletes the lease too), so it cannot distinguish "we cleaned up
+   * a failed activation" from "the user disabled it while we were cleaning up". This marker is the
+   * difference — an externally revoked incarnation must keep the disable's verdict (`inactive` +
+   * the disabled notice), never be rewritten to `error`.
+   */
+  private readonly revokedIncarnations = new WeakSet<object>();
   /** One warning per (extension, event) for a subscription outside the observable set. */
   private readonly warnedInvalidObservable = new Set<string>();
   /** Guards `writeExtensionLog` against a log consumer that itself logs. */
@@ -887,14 +897,20 @@ export class ExtensionRunner {
             error: toError(teardownError).message,
           });
         }
-        instance.state = "error";
-        instance.error = error;
-        // There is no section on a failed activation either, so without this the model sees the
-        // tools simply vanish — the same reason the runtime-disable path writes one.
-        this.turnContextSections.setDisabledNotice(
-          instance.api.id,
-          `Extension "${instance.api.id}" failed to activate (${error.message}); its tools and commands are unavailable.`
-        );
+        // Re-check AFTER the awaits. `isContextLive` is false for BOTH an external revoke and the
+        // teardown we just ran ourselves, so the marker — not the lease — decides: an external
+        // disable already published "disabled" and its verdict must stand. `instance.context`
+        // still guards against a newer incarnation owning the instance.
+        if (instance.context === context && !this.revokedIncarnations.has(context)) {
+          instance.state = "error";
+          instance.error = error;
+          // There is no section on a failed activation either, so without this the model sees the
+          // tools simply vanish — the same reason the runtime-disable path writes one.
+          this.turnContextSections.setDisabledNotice(
+            instance.api.id,
+            `Extension "${instance.api.id}" failed to activate (${error.message}); its tools and commands are unavailable.`
+          );
+        }
       }
       // Emitting is the record (and bootstrap reports it too); the direct logger row duplicated it.
       this.emitExtensionEvent("agent:extension-error", {
@@ -922,6 +938,9 @@ export class ExtensionRunner {
    * `unloadExtension` is not confused with it.
    */
   async destroyExtension(instance: ExtensionInstance): Promise<void> {
+    // External teardown: record it before the awaits so a failed activation's catch does not
+    // overwrite the verdict this path publishes (see `revokedIncarnations`).
+    this.revokedIncarnations.add(instance.context);
     // Flush phase first: land anything the extension buffered (behind a timer or debounce) while
     // the resources it writes through are still held. Not folded into `deactivate()` — deactivate
     // *releases* the extension, and a fire-and-forget teardown would drop the last batch. A
@@ -1170,6 +1189,9 @@ export class ExtensionRunner {
             // instance active, and never call `deactivate()` (its resources then leak), while a
             // hung activation never resolves and leaves nobody to run the teardown at all.
             this.contexts.delete(id);
+            // Record the external revoke before the awaits below: the in-flight activation's catch
+            // must not relabel this disable as a failed activation.
+            this.revokedIncarnations.add(instance.context);
             try {
               await this.teardownIncarnation(instance);
             } catch (error) {

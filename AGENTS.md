@@ -231,7 +231,7 @@ Internal modules (tools, middleware, subagent runner, hook registry, session-syn
 `@codent/core` uses **TanStack AI** (`@tanstack/ai`, provider adapters) for agent execution.
 
 Key integration points:
-- `packages/core/src/models/config/model-config.ts` — connection resolution (`openai` | `anthropic` style, baseURL, apiKey, models.dev metadata)
+- `packages/core/src/models/config/model-connection.ts` — connection resolution (`openai` | `anthropic` style, baseURL, apiKey, models.dev metadata)
 - `packages/core/src/models/adapter/adapter-factory.ts` — TanStack text adapters (`createOpenaiChatCompletions`, `createAnthropicChat`)
 - `packages/core/src/managers/run-agent.ts` — `AgentRunner` + `chat()` stream, compaction middleware
 - `packages/core/src/agent/compaction/` — Channel convert + summary-first wire projection (`getModelVisibleMessages`); engine messages are ephemeral
@@ -342,7 +342,7 @@ A `devDependencies` entry in a host package is **not** a publish blocker: npm pa
 import { tool } from "ai";                     // 1. External (no extension)
 import { z } from "zod";
 
-import { resolveModelConfig } from "./models/model-config.js";  // 2. Local (.js)
+import { resolveModelConfig } from "./models/model-connection.js";  // 2. Local (.js)
 
 import type { AppConfig } from "./adapter/types.js";  // 3. Type-only (local first, then external, alphabetical)
 import type { LanguageModel, ToolSet } from "ai";
@@ -1393,7 +1393,7 @@ packages/
 │   │   ├── model-facet.ts / tool-facet.ts / extension-facet.ts / compact-facet.ts
 │   │   │                               # agent-facing views over the manager-owned services
 │   │   └── telemetry/                  # Usage tracking + telemetry emit helpers (bus lives in agent/agent-event-bus)
-│   ├── models/                        # Model config (model-config.ts), adapters, cache
+│   ├── models/                        # Model config (model-connection.ts), adapters, cache
 │   ├── provider/                      # LLM plane: ModelProvider + registry + models.dev metadata
 │   ├── runtime/                       # Instantiable runtime: AgentRuntime + CodentAgent facade
 │   ├── runtime-types/                 # Shared leaves (status / event / usage types); the three port modules

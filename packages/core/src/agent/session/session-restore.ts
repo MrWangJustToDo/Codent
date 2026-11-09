@@ -42,6 +42,7 @@ export function markRestoreReadFailure<T>(error: T): T {
 
 export function getSessionPersistInput(host: SessionHost, uiMessages?: TanStackUIMessage[]): SessionPersistInput {
   const mode = host.getModeState().snapshot();
+  const runId = host.getCurrentRunId?.() ?? undefined;
   return {
     usage: host.usage,
     todoManager: host.getTodoManager(),
@@ -50,6 +51,7 @@ export function getSessionPersistInput(host: SessionHost, uiMessages?: TanStackU
     autoMode: mode.planPhase === "off" && mode.auto,
     reasoningEffort: host.getReasoningEffort(),
     epoch: host.captureEpoch?.(),
+    ...(runId ? { runId } : {}),
     resolveTextAdapter: host.resolveTextAdapter,
     emitEvent: (type, ...args) => host.emitEvent(type, ...args),
     emitSessionTitle: (payload, sessionId) =>

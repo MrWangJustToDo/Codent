@@ -116,10 +116,13 @@ export { BUILTIN_EXTENSION_ORDER } from "./agent/dispatch-order.js";
 export { completeExtensionQuery } from "./managers/extension-completion.js";
 export { ExtensionLlmError } from "./agent/extension/extension-llm-error.js";
 export { copyModelMessages } from "./utils/model-messages.js";
+// Crash-safe whole-file write: the symlink/rename policy is asserted directly, because a bad
+// fallback silently replaces a link instead of writing through it.
+export { writeFileAtomic } from "./utils/atomic-write.js";
 
 // Already reachable through the published entry (`formatDuration`); re-exported here so every
 // validator import stays on `dist/dev.mjs`.
-export { formatDuration } from "./agent/tools/presentation/format/format.js";
+export { formatDuration } from "./agent/tools/presentation/format/duration.js";
 export { createCodeModeExtension } from "./agent/code-mode/extension.js";
 // Binding-name normalisation: a validator must exercise the real helper against the
 // real upstream `createCodeMode`, not a replica of the rename rule.

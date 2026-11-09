@@ -82,10 +82,10 @@ jobs:
         # entry still runs (`validate-format-read-file-result` had neither an entry
         # nor a caller, and had gone unrun while reading as coverage in review).
         #
-        # This drives the files directly instead of `pnpm run validate:*`, because 151
-        # of the 156 core definitions embed `pnpm run build &&` — going through npm
-        # would pay a 3.2s rebuild per validator (~483s) against the 34s the whole
-        # core suite costs when it reuses the build above.
+        # This drives the files directly instead of `pnpm run validate:*`, because most
+        # core definitions embed `pnpm run build &&` — going through npm would pay a
+        # 3.2s rebuild per validator (~483s) against the 34s the whole core suite costs
+        # when it reuses the build above.
         #
         # Replaces the dedicated `validate:builtin-skills` step that used to sit
         # here: the suite includes it and reports it by name.

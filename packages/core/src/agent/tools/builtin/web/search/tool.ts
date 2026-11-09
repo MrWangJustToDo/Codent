@@ -156,8 +156,8 @@ Use the current year from <current_date> in turn context for time-sensitive quer
           // provider forward it upstream (Parallel's `session_id`). Subagents have no
           // session data of their own, so fall back to the agent id — still stable per agent.
           const sessionId = context?.getSessionId() ?? context?.agentId;
-          // configure + search run under one lock: both mutate/read the process-global
-          // manager, so concurrent runs must not interleave (see ProviderManager.runExclusive).
+          // configure + search run under one lock: both mutate/read the same manager instance,
+          // so concurrent runs must not interleave (see ProviderManager.runExclusive).
           const { results: rawResults, provider } = await pm.runExclusive(async (m) => {
             m.configure(context?.getWebsearchConfig());
             m.setSessionId(sessionId);

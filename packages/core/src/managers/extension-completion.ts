@@ -10,7 +10,7 @@
 import { ExtensionLlmError } from "../agent/extension/extension-llm-error.js";
 import { createTextAdapter } from "../models/adapter/adapter-factory.js";
 import { runSideTextQuery } from "../models/adapter/side-text-query.js";
-import { DEFAULT_BASE_URLS, trimBaseURL } from "../models/config/model-config.js";
+import { DEFAULT_BASE_URLS, trimBaseURL } from "../models/config/model-connection.js";
 import { resolveModelInfoFromModelsDev } from "../models/config/models-config.js";
 import { errorMessage } from "../utils/errors.js";
 

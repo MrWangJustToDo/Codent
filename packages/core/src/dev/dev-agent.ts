@@ -28,7 +28,7 @@ export {
   extractRunErrorMessage,
   throwOnRunError,
 } from "../agent/stream/stream-errors.js";
-export { AgentConfigSchema } from "../managers/agent-types.js";
+export { AgentConfigSchema } from "../managers/agent-config.js";
 export { DEFAULT_AGENT_MAX_ITERATIONS, MAX_AGENT_ITERATIONS } from "../runtime-types/agent-limits.js";
 export { mergeModelsConfigToolConfig, websearchToolConfigFromEnv } from "../agent/tools/tool-config.js";
 export { formatReadFileToolResult } from "../agent/tools/builtin/fs/read/format-result.js";

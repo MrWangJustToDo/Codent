@@ -6,7 +6,7 @@
  * - {@link createRemoteProvider} — keys stay on a remote provider server
  */
 
-import { resolveModelConnection, type ResolveModelConfigInput } from "../models/config/model-config.js";
+import { resolveModelConnection, type ResolveModelConfigInput } from "../models/config/model-connection.js";
 
 // ============================================================================
 // Types

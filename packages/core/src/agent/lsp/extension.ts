@@ -156,6 +156,7 @@ function notifyServerLifecycle(
 export function createLspExtension(options?: LspExtensionConfig): ExtensionAPI {
   let shutdownCurrent: (() => Promise<void>) | undefined;
   let shutdownTreeSitter: (() => void) | undefined;
+  let disposeFileSync: (() => void) | undefined;
   return {
     id: "codent-lsp",
     // Built-ins are the baseline: they run first in interceptor/transformer chains and lose a
@@ -176,14 +177,22 @@ export function createLspExtension(options?: LspExtensionConfig): ExtensionAPI {
         },
         (treeSitter) => {
           shutdownTreeSitter = () => treeSitter.shutdown();
+        },
+        (fileSync) => {
+          // `deactivate` is the extension-disable path, where `session:shutdown` never runs; a
+          // deferred-sync poll left behind here can spawn a language server after teardown.
+          disposeFileSync = () => fileSync.dispose();
         }
       );
     },
     async deactivate() {
       const shutdown = shutdownCurrent;
       const shutdownTs = shutdownTreeSitter;
+      const disposeSync = disposeFileSync;
       shutdownCurrent = undefined;
       shutdownTreeSitter = undefined;
+      disposeFileSync = undefined;
+      disposeSync?.();
       await shutdown?.();
       shutdownTs?.();
     },
@@ -194,7 +203,8 @@ async function activateLsp(
   ctx: ExtensionContext,
   options?: LspExtensionConfig,
   onManager?: (manager: LspManager) => void,
-  onTreeSitter?: (treeSitter: TreeSitterManager) => void
+  onTreeSitter?: (treeSitter: TreeSitterManager) => void,
+  onFileSync?: (fileSync: FileSync) => void
 ): Promise<void> {
   const env = ctx.coreEnv;
   const corePath = env.path ?? defaultPath;
@@ -349,6 +359,7 @@ async function activateLsp(
 
   const fileSync = new FileSync(manager, fsHelpers);
   syncRef.current = fileSync;
+  onFileSync?.(fileSync);
 
   // ---- Project config (.lsp.json) ----
   let projectConfig: ProjectLspConfig | null = await loadProjectConfig(ctx, manager);
@@ -399,6 +410,10 @@ async function activateLsp(
   });
 
   ctx.registerInterceptor("session:shutdown", async () => {
+    // Stop the deferred-sync poller before the manager goes away: a poll that lands afterwards
+    // re-enters `handleFileWrite` on a manager that stayed shut (`shuttingDown` is terminal now),
+    // but there is no reason to let it run at all.
+    fileSync.dispose();
     await getManager()
       .shutdownAll()
       .catch(() => {});

@@ -529,7 +529,7 @@ export class SessionStore {
     const snapshot = snapshotTimestamps(messages, stamps, knownTimes);
 
     const { uiMessages: _uiMessages, approvalTimes: _approvalTimes, ...stateFields } = session;
-    const signature = contentSignature(stateFields, messages, fingerprints);
+    const signature = persistedStateSignature(stateFields, messages, fingerprints);
 
     // Fingerprint BEFORE stamping `updatedAt`, so an unchanged save is a true
     // no-op (no IO, no timestamp bump).
@@ -612,7 +612,7 @@ export class SessionStore {
     this.lastSaved.set(session.id, {
       ids: messages.map((m) => m.id),
       fingerprints,
-      signature: contentSignature(stateFields, messages, fingerprints),
+      signature: persistedStateSignature(stateFields, messages, fingerprints),
       stamps,
     });
     if (approvalTimes) {
@@ -641,7 +641,7 @@ export class SessionStore {
 // ============================================================================
 
 /** Content signature used for no-op detection: state (timestamp-normalized) + messages. */
-function contentSignature(
+function persistedStateSignature(
   stateFields: SessionStateFields,
   messages: PersistedUIMessage[],
   fingerprints: Map<string, string>

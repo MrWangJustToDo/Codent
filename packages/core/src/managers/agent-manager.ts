@@ -201,18 +201,17 @@ export class AgentManager {
         null,
       // A log that cannot be written used to be a `console.error` nobody sees (ACP / remote hosts
       // have no stderr reader) while the agent looked healthy. Attribute it to the owning agent so
-      // the fact lands in the session timeline. Construction/teardown logs have no agent to report
-      // to yet — the console line stays their only channel.
+      // the fact lands in the session timeline.
+      //
+      // `session:save-error`, not `session:diagnostic`: the latter has NO session channel, so the
+      // only delivery was the log that had just failed — the diagnostic vanished exactly when it
+      // mattered (a read-only disk, a full disk, a permanent EIO). `save-error` is the
+      // channel-backed shape, and "agent log" is the target that failed.
       onPersistError: (log, info) => {
         const owner = this.agents.all().find((candidate) => candidate.log === log);
-        owner?.emitDiagnostic("session", "Agent log could not be persisted", {
-          level: "warn",
-          error: info.error,
-          data: {
-            stage: info.stage,
-            dropped: info.dropped,
-            consecutiveFailures: info.consecutiveFailures,
-          },
+        owner?.emitEvent("session:save-error", {
+          target: "agent log",
+          error: `${info.error} (stage: ${info.stage}, dropped: ${info.dropped}, consecutive: ${info.consecutiveFailures})`,
         });
       },
     });

@@ -1,4 +1,5 @@
 import { isSyntheticCancelOutput, syntheticCancelMessage } from "../../../runtime-types/abort.js";
+import { formatExtensionDeniedOutput, isExtensionDeniedOutput } from "../../../runtime-types/tool-denial.js";
 import { isBareToolErrorResult } from "../../../runtime-types/tool-error.js";
 import { pairToolResults } from "../tool-call-pairing.js";
 
@@ -130,6 +131,20 @@ export async function applyToolCompact(
     if (isSyntheticCancelOutput(rawOutput)) {
       const normalized = normalizeModelToolContent([
         { type: "text" as const, content: syntheticCancelMessage(rawOutput) },
+      ]);
+      cache.set(cacheKey, { source: message.content, projected: normalized });
+      setContent(target.messageIndex, normalized);
+      continue;
+    }
+
+    // An extension's refusal (`tool:before:*` → `event.skip`) is the same class of shape: a shared
+    // marker, not any tool's output. Without this short-circuit the tool's own formatter read
+    // fields that cannot be there — the model saw `write_file` as "Overwrote file: undefined" and
+    // `grep` as "0 matches", i.e. a denial rendered as success, and retried against a tool that
+    // never ran. The UI path has always handled it (`formatToolOutput`); this is the model side.
+    if (isExtensionDeniedOutput(rawOutput)) {
+      const normalized = normalizeModelToolContent([
+        { type: "text" as const, content: formatExtensionDeniedOutput(rawOutput) },
       ]);
       cache.set(cacheKey, { source: message.content, projected: normalized });
       setContent(target.messageIndex, normalized);

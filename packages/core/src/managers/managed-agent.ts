@@ -127,8 +127,8 @@ import { generateId } from "../utils/generate-id.js";
 import { copyModelMessages } from "../utils/model-messages.js";
 import { truncateText } from "../utils/text-truncation.js";
 
+import { AgentConfigSchema } from "./agent-config.js";
 import { AgentLogBinding } from "./agent-log-binding.js";
-import { AgentConfigSchema } from "./agent-types.js";
 import { handleManagedReactiveCompact, runManualCompact, type ManualCompactHost } from "./compact-facet.js";
 import { completeExtensionQuery, DEFAULT_EXTENSION_CALLS_PER_RUN, ExtensionLlmError } from "./extension-completion.js";
 import { ExtensionFacet } from "./extension-facet.js";
@@ -146,8 +146,8 @@ import { dispatchAgentTelemetry } from "./telemetry/emit-agent-telemetry.js";
 import { UsageTracker } from "./telemetry/usage-tracker.js";
 import { ToolFacet } from "./tool-facet.js";
 
+import type { AgentConfig } from "./agent-config.js";
 import type { AgentManager } from "./agent-manager.js";
-import type { AgentConfig } from "./agent-types.js";
 import type { AgentEvent, AgentEventBus } from "../agent/agent-event-bus";
 import type { AgentLog } from "../agent/agent-log";
 import type { ApprovalRequirement } from "../agent/approval/approval-requirement.js";
@@ -188,7 +188,7 @@ import type { AgentToolConfig } from "../agent/tools/tool-config.js";
 import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
 import type { ResolvedCoreEnv } from "../env";
 import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
-import type { ModelStyle } from "../models/config/model-config.js";
+import type { ModelStyle } from "../models/config/model-connection.js";
 import type { ModelInfo } from "../models/types.js";
 import type { AgentRuntime } from "../runtime/agent-runtime.js";
 import type {
@@ -792,7 +792,7 @@ export class ManagedAgent {
       getAgentState: () => this.agentState,
       getError: () => this.getError(),
       getAbortReason: () => this.run.getAbortReason(),
-      finalizeRun: (reason) => this.finalizeRun(reason),
+      finalizeRun: (reason, options) => this.finalizeRun(reason, options),
       captureFinalIteration: () => this.run.setLastIterationState(this.run.getIterationState()),
       discardPreforkRuns: (cause) => this.discardPreforkRuns(cause),
       emitEvent: (type, ...args) => this.emitEvent(type, ...args),
@@ -1505,10 +1505,13 @@ export class ManagedAgent {
     // `subagent:*` emits — so an extension could not tell a child's turn from its own by envelope alone.
     // The loose dispatch is reached directly: this implementation is what the generic `(type,
     // payload)` plumbing calls, and it cannot satisfy the per-event conditional tuple.
-    dispatchAgentTelemetry(this, type, payload, {
-      ...(this.parentId ? { parentId: this.parentId } : {}),
-      ...options,
-    });
+    // An explicit `parentId: undefined` key must not ERASE the derived link: a conditionally-built
+    // options object does exactly that with a spread, and the parent session then drops the frame.
+    const envelope =
+      this.parentId === undefined || options?.parentId !== undefined
+        ? options
+        : { ...options, parentId: this.parentId };
+    dispatchAgentTelemetry(this, type, payload, envelope);
 
     // Any `subagent:*` transition can change a child row, which is what the retained `subagents`
     // summary carries. Refresh here, at the ONE place these events are dispatched, rather than at
@@ -2020,7 +2023,7 @@ export class ManagedAgent {
    * Owned by {@link AgentChatController} / subagent runners (not per-`chat()` middleware).
    * Memory extraction runs only when `reason === "finished"`. Idempotent per turn until {@link resetTurnLifecycle}.
    */
-  finalizeRun(reason: RunFinalizeReason): void {
+  finalizeRun(reason: RunFinalizeReason, options: { detached?: boolean } = {}): void {
     // Nothing to finalize: the turn already settled. Everything below is run-scoped state, so a
     // late caller (the idle `forceSubmit` path used to reach here) must not touch it — the old
     // order erased `lastIteration` (the reading ACP classifies as `max_turn_requests`) and reset
@@ -2033,7 +2036,7 @@ export class ManagedAgent {
     // A terminal turn (or an abort) must not leave the retained `iteration` channel
     // reporting the last model turn of the run.
     this.resetIterationProgress();
-    finalizeManagedAgentRun(this, reason);
+    finalizeManagedAgentRun(this, reason, options);
     // Belt-and-suspenders for callers that reached `finalizeRun` without `captureFinalIteration`
     // (e.g. the pump's direct stop path). `publishStateChange` de-dupes an unchanged L1 signature,
     // so the normal path does not add a second frame.
@@ -2132,7 +2135,10 @@ export class ManagedAgent {
     this.extensionRuntime = {
       sessionId: () => this.getSessionData()?.id ?? null,
       sessionName: () => this.getSessionData()?.name || null,
-      isIdle: () => !isActiveStatus(this.getStatus()),
+      // A destroyed agent is not idle: the `teardown` transition projects `idle` (run/wait/outcome
+      // are all cleared), so the status alone cannot answer this. Without the flag a host holding a
+      // reference saw "idle, writable" on a torn-down graph.
+      isIdle: () => !this.destroyed && !isActiveStatus(this.getStatus()),
       mode: () => this.getAgentMode(),
       model: () => this.config.model || this.getModelInfo()?.id,
       signal: () => this.extensionRunSignal(),
@@ -2156,7 +2162,8 @@ export class ManagedAgent {
    *
    * `currentAbortController` survives a finished run (it is cleared on session reset, not at run end),
    * so returning it unconditionally made `ctx.signal` truthy while idle and, after a user abort,
-   * handed every idle `ctx.llm` call an already-aborted signal. `isIdle()` and `signal` must agree.
+   * handed every idle `ctx.llm` call an already-aborted signal. A destroyed agent also reports
+   * `isIdle() === false` (by flag) and no signal — there is no run to cancel.
    */
   private extensionRunSignal(): AbortSignal | undefined {
     // Only a live run exposes a signal. `prepareRunPhase` flips the status to `running` BEFORE
@@ -3003,10 +3010,11 @@ export class ManagedAgent {
    */
   markDestroyed(): void {
     this.destroyed = true;
-    // A destroyed agent is not "idle, writable, with N approvals pending". The L1 snapshot carries
-    // both fields and `isIdle()` derives from the status, so a host that kept a reference read a
-    // healthy idle agent off a torn-down graph. Nothing can answer an interaction after teardown,
-    // which is why this is the one place allowed to zero the derived count outright.
+    // A destroyed agent is not "idle, writable, with N approvals pending". `teardown` projects
+    // `idle` from the cleared axes, so the status alone cannot express it; `isIdle()` checks this
+    // flag too, and the snapshot carries `state.lifecycle: "destroyed"`. Nothing can answer an
+    // interaction after teardown, which is why this is the one place allowed to zero the derived
+    // count outright.
     this.pendingApprovalCount = 0;
     if (this.run.getError()) this.run.setError("");
     // Stop the fire-and-forget memory extraction loop (it writes through a manager this teardown

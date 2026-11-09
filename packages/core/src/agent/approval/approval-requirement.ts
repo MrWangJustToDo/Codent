@@ -20,9 +20,6 @@ export interface ApprovalRequirement {
   readonly reason?: string;
 }
 
-/** Free to run without a prompt. */
-export const FREE_APPROVAL: ApprovalRequirement = { requiresApproval: false, source: "default" };
-
 /**
  * Compose the requirement from the tool object's declaration.
  *

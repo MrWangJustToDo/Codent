@@ -163,6 +163,8 @@
     "validate:run-event-identity": "pnpm run build && node scripts/validate-run-event-identity.mjs",
     "validate:run-finalizer": "pnpm run build && node scripts/validate-run-finalizer.mjs",
     "validate:approval-decisions": "pnpm run build && node scripts/validate-approval-decisions.mjs",
+    "validate:approval-table": "pnpm run build && node scripts/validate-approval-table.mjs",
+    "validate:atomic-write": "pnpm run build && node scripts/validate-atomic-write.mjs",
     "validate:mode-coordinator": "pnpm run build && node scripts/validate-mode-coordinator.mjs",
     "validate:agent-log-binding": "pnpm run build && node scripts/validate-agent-log-binding.mjs",
     "validate:bootstrap-report": "pnpm run build && node scripts/validate-bootstrap-report.mjs",

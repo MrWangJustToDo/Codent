@@ -114,8 +114,38 @@ export function redactLogValue(
     if (ancestors.has(value)) return value;
     ancestors.add(value);
     const out: Record<string, unknown> = {};
-    const entries = Object.entries(value as Record<string, unknown>);
+    // An `Error`'s `name`/`message`/`stack` are own NON-enumerable (or prototype) fields, so the
+    // property walk below cannot see them — and without this the whole error was `{}`. Add them
+    // explicitly through the string branch: a message routinely echoes a provider body
+    // (`api_key=…`, `Authorization: Bearer …`, URL credentials), and returning it raw wrote that to
+    // disk unredacted and outside the 64 KB budget.
+    //
+    // Own ENUMERABLE fields are still walked below (a `FileError` carries `code`/`path`): dropping
+    // them lost which failure it was, which is the diagnostic value of logging the error at all.
+    if (value instanceof Error) {
+      for (const key of ["name", "message", "stack"] as const) {
+        const field = readField(value, key);
+        if (typeof field === "string" && field.length > 0) {
+          out[key] = redactLogValue(field, depth + 1, ancestors, budget);
+        }
+      }
+      // `cause` is own but non-enumerable, so the property walk cannot see it — and it is the
+      // underlying OS/provider failure that makes the log row diagnostic. Recursed through the same
+      // budget/ancestor rules (a self-referential cause is caught by `ancestors`).
+      const cause = readField(value, "cause");
+      if (cause !== undefined) out.cause = redactLogValue(cause, depth + 1, ancestors, budget);
+    }
+    let entries: [string, unknown][] = [];
+    try {
+      entries = Object.entries(value as Record<string, unknown>);
+    } catch {
+      // One throwing getter must not lose the row; the fields captured above still describe it.
+    }
+    const isError = value instanceof Error;
     for (const [key, item] of entries.slice(0, MAX_LOG_DATA_KEYS)) {
+      // Only an Error's own fields are duplicated by the explicit capture above; a plain object's
+      // `name`/`message`/`stack` are ordinary data and must survive.
+      if (isError && (key === "name" || key === "message" || key === "stack" || key === "cause")) continue;
       out[key] = isSensitiveKey(key) ? "[redacted]" : redactLogValue(item, depth + 1, ancestors, budget);
     }
     if (entries.length > MAX_LOG_DATA_KEYS) {
@@ -125,4 +155,13 @@ export function redactLogValue(
     return out;
   }
   return value;
+}
+
+/** Read one field without letting a throwing getter abort the log row. */
+function readField(value: object, key: string): unknown {
+  try {
+    return (value as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
 }

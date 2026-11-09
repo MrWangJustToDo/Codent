@@ -717,7 +717,11 @@ export class LspManager {
     // whatever it had grown to.
     this.restartAttempts.clear();
     this.restartBackoff.clear();
-    this.shuttingDown = false;
+    // `shuttingDown` STAYS true: this manager is terminal. Every caller either swaps in a new
+    // manager (`session:bootstrap` root change) or is ending the extension (deactivate /
+    // `session:shutdown`) — none reuse this instance. Clearing it let a straggler `waitForClient`
+    // or a `FileSync` poll that passed the start guard before shutdown spawn a language server no
+    // later `shutdownAll` owns, so the child outlived the session.
   }
 
   /** Restart a specific language server. */

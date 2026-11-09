@@ -22,6 +22,15 @@ export interface AtomicWriteFs {
   rename?(oldPath: string, newPath: string): Promise<void>;
   /** Optional: lets the atomic path preserve the destination's permission bits. */
   chmod?(path: string, mode: number): Promise<void>;
+  /**
+   * Optional: resolve the destination through symlinks before the rename.
+   *
+   * `rename(2)` replaces the destination DIRECTORY ENTRY, so swapping the temp over a symlink
+   * replaces the link itself and leaves its target untouched — an edit that reports success while
+   * the file the user (and the build) actually reads keeps the old content. Hosts without it keep
+   * the lexical behaviour.
+   */
+  realpath?(path: string): Promise<string>;
   remove(path: string): Promise<void>;
 }
 
@@ -73,23 +82,77 @@ export async function writeFileAtomic(
     return;
   }
 
-  // Unique per attempt: two concurrent writers to the same target (models.json is not
-  // serialized) must not share one temp file and rename each other's body.
-  const tmpPath = `${path}.tmp-${processTag()}-${Date.now().toString(36)}-${++tempSequence}.tmp`;
+  // Follow a symlink to its target: the rename must swap the file the link points at, not the
+  // link. A missing target (a new file, or a dangling link) has nothing to resolve — the lexical
+  // path is already the right destination in that case.
+  let target = path;
+  if (fs.realpath) {
+    try {
+      target = await fs.realpath(path);
+    } catch {
+      target = path;
+    }
+  }
+
+  const attempt = async (destination: string): Promise<void> => {
+    // Unique per attempt: two concurrent writers to the same target (models.json is not
+    // serialized) must not share one temp file and rename each other's body.
+    const tmpPath = `${destination}.tmp-${processTag()}-${Date.now().toString(36)}-${++tempSequence}.tmp`;
+    try {
+      await fs.writeFile(tmpPath, content);
+      if (options.mode !== undefined && fs.chmod) await fs.chmod(tmpPath, options.mode);
+      await fs.rename!(tmpPath, destination);
+    } catch (error) {
+      try {
+        await fs.remove(tmpPath);
+      } catch {
+        // The temp file may not exist if the initial write failed.
+      }
+      throw error;
+    }
+  };
+
   try {
-    await fs.writeFile(tmpPath, content);
-    if (options.mode !== undefined && fs.chmod) await fs.chmod(tmpPath, options.mode);
-    await fs.rename(tmpPath, path);
+    await attempt(target);
     return;
   } catch (error) {
-    try {
-      await fs.remove(tmpPath);
-    } catch {
-      // The temp file may not exist if the initial write failed.
+    // A resolved target is not always reachable through the fs layer: a host may reject the real
+    // path when the WORKSPACE ROOT itself sits under a symlink (macOS `/tmp` → `/private/tmp`),
+    // even though it accepts the lexical spelling. Fall back to the lexical destination ONLY for
+    // that containment refusal.
+    //
+    // Not for every failure: if the symlink's TARGET directory is not writable (EACCES, or the
+    // server's mapped `permission_denied`) but the link's directory is, retrying the lexical path
+    // would rename the temp over the LINK — the link is destroyed, the real file untouched, and
+    // the tool reports success.
+    let failure: unknown = error;
+    if (target !== path && isContainmentRefusal(error)) {
+      try {
+        await attempt(path);
+        return;
+      } catch (lexicalError) {
+        // Both spellings failed; the lexical error is the one the caller can act on.
+        failure = lexicalError;
+      }
     }
-    if (options.onError === "throw") throw error;
+    if (options.onError === "throw") throw failure;
   }
-  // Best-effort document save: fall back to an in-place write rather than dropping it; a host
-  // whose `rename` fails simply stays non-atomic.
+  // Best-effort document save: fall back to an in-place write rather than dropping it; the OS
+  // follows a symlink on `writeFile`, so this writes THROUGH the link instead of replacing it.
   await fs.writeFile(path, content);
+}
+
+/**
+ * Whether an fs error is a lexical containment refusal rather than an OS write failure.
+ *
+ * The ERROR CODE ALONE IS NOT ENOUGH: the server maps a genuine `EACCES`/`EPERM` to
+ * `permission_denied` too (`server/src/routes/fs.ts`), so a read-only target directory would look
+ * identical to "the workspace root is a symlink". Retrying the lexical spelling in that case
+ * renames the temp over the link — the corruption this function exists to prevent. Only the
+ * containment message (raised by `resolvePath` in the native/remote env) identifies it.
+ */
+function isContainmentRefusal(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const { code, message } = error as { code?: unknown; message?: unknown };
+  return code === "permission_denied" && typeof message === "string" && /path traversal/i.test(message);
 }

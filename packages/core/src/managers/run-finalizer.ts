@@ -32,7 +32,7 @@ export interface RunFinalizerDeps {
   /** Abort reason of the turn, carried into `turn:summary` for cancel/switch/destroy attribution. */
   getAbortReason?: () => string | undefined;
   /** Turn-level finalization (agent:stop / persistence / memory extraction); idempotent. */
-  finalizeRun: (reason: RunFinalizeReason) => void;
+  finalizeRun: (reason: RunFinalizeReason, options?: { detached?: boolean }) => void;
   /**
    * Snapshot the turn's iteration reading BEFORE the terminal state frame is published.
    *
@@ -117,15 +117,28 @@ export class RunFinalizer {
     // Waiting (approval / ask_user) keeps turn context for the resume pump: it is the one outcome
     // that is not a `RunFinalizeReason`, which is why the narrowed set below is derived from
     // `AgentRunOutcomeKind` by type rather than trusted from this comment.
+    //
+    // A `waiting` verdict can also come from the state AXIS (`state.wait !== "none"`) while the
+    // transcript has no pending interaction left — the answer landed between the finalize snapshot
+    // and here. `applyRunOutcome` settles that turn to `completed` (the unbacked-wait rule), so it
+    // must be finalized like any terminal turn. Skipping it left a completed turn with no
+    // `agent:stop` / `turn:summary`, and the wake's `promptlessTurn` mark was consumed only by a
+    // finalize that never ran, so the NEXT real user turn skipped post-run memory extraction.
+    const settledWaiting = input.kind === "waiting" && !input.waitingForUser;
     if (input.kind !== "waiting") {
       this.deps.finalizeRun(input.kind);
+    } else if (settledWaiting) {
+      this.deps.finalizeRun("finished");
     }
+    // One verdict for every downstream reader: the unbacked wait settled to `completed`, so the
+    // summary must report `finished`, not the `paused: true` marker reserved for a real park.
+    const effectiveKind: AgentRunOutcomeKind = settledWaiting ? "finished" : input.kind;
 
     const totalUsage = this.deps.usage.getTotal();
     const delta = (now: number, before: number) => Math.max(0, now - before);
     const cause = this.deps.getAbortReason?.();
     this.deps.emitEvent("turn:summary", {
-      ...(input.kind !== "waiting" ? { outcome: input.kind } : { paused: true as const }),
+      ...(effectiveKind !== "waiting" ? { outcome: effectiveKind } : { paused: true as const }),
       ...(cause ? { cause } : {}),
       phases: input.phases,
       toolCalls: delta(countToolCalls(input.messages), input.toolCallsBefore),
@@ -137,7 +150,7 @@ export class RunFinalizer {
       durationMs: Date.now() - input.turnStartedAt,
     });
 
-    return input.kind;
+    return effectiveKind;
   }
 
   /** Detached/subagent terminal path: no chat turn summary; status then turn finalize. */
@@ -150,7 +163,9 @@ export class RunFinalizer {
       path: "detached",
       ...(input.errorMessage ? { errorMessage: input.errorMessage } : {}),
     });
-    this.deps.finalizeRun(input.kind);
+    // `detached: true` stops the common finalize from re-asserting a question wait that
+    // `forceDetachedTerminal` just cleared.
+    this.deps.finalizeRun(input.kind, { detached: true });
   }
 
   /** Optional-outcome path in `runAgentOnce` (and any caller that only needs status). */

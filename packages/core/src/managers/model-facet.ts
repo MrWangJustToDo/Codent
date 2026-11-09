@@ -10,12 +10,12 @@ import { selectModel } from "../models/config/model-selection.js";
 import { resolveModelInfoFromModelsDev, selectableModelIds } from "../models/config/models-config.js";
 import { errorMessage } from "../utils/errors.js";
 
-import { AgentConfigSchema } from "./agent-types.js";
+import { AgentConfigSchema } from "./agent-config.js";
 
-import type { AgentConfig } from "./agent-types.js";
+import type { AgentConfig } from "./agent-config.js";
 import type { UsageTracker } from "./telemetry/usage-tracker.js";
 import type { CompactionConfig } from "../agent/compaction/types.js";
-import type { ModelStyle } from "../models/config/model-config.js";
+import type { ModelStyle } from "../models/config/model-connection.js";
 import type { ModelInfo } from "../models/types.js";
 import type { AgentRuntime } from "../runtime/agent-runtime.js";
 

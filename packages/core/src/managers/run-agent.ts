@@ -4,7 +4,7 @@ import { peekTaskPreforkCoordinator } from "../agent/subagent/subagent-runs.js";
 import { resolveToolsRecord } from "../agent/tools/catalog/tool-set.js";
 import { createTextAdapter } from "../models/adapter/adapter-factory.js";
 import { resolvePromptCacheKey } from "../models/cache/prompt-cache.js";
-import { DEFAULT_BASE_URLS } from "../models/config/model-config.js";
+import { DEFAULT_BASE_URLS } from "../models/config/model-connection.js";
 import { DEFAULT_AGENT_MAX_ITERATIONS } from "../runtime-types/agent-limits.js";
 
 import { buildManagedAgentDeps } from "./agent-run-deps.js";

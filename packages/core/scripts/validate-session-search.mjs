@@ -412,7 +412,9 @@ try {
     assert.match(big.messages[0].text, /\[truncated/, "the truncation is marked");
     assert.equal(typeof big.cachedOutputPath, "string", "a large page spills to a cache file");
     assert.match(big.cachedOutputPath, /\.agents\/cache\/tool-output\//);
-    assert.match(big.content, /Full output saved to:/, "the model gets a preview naming the cached file");
+    // `session_read` spills ONE page, not the whole session: the wording must not claim the full
+    // output is on disk. Further messages are reached with `offset`, not by reading the spill.
+    assert.match(big.content, /Output for this page saved to:/, "the model gets a preview naming the cached page");
 
     // A page can stop EARLY — the text ceiling is reached before `limit` messages are collected — so
     // the next offset is `start + returned`, not `start + limit`. The rendered tail is what tells the

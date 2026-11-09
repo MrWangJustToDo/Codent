@@ -155,6 +155,7 @@ assert.equal(AGENT_EVENT_META["subagent:error"]?.channel, "lifecycle");
       clearQueuedMessages: () => {},
       syncInteractionStateFromUIMessages: () => {},
       emitEvent: () => {},
+      getReasoningEffort: () => undefined,
       setDisplayName: (name) => names.push(name),
     },
     "ses_r"

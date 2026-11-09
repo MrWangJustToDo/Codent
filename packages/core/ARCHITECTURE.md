@@ -610,7 +610,7 @@ That cache has **two** collectors, and neither subsumes the other: compaction's 
 | ---------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Adapter-specific**   | `models/adapter/adapter-factory.ts`, `*-adapter.ts` | DeepSeek `reasoning_content` echo (`ReasoningChatCompletionsTextAdapter`); Chat Completions tool-image lift (`liftToolMediaForChatCompletions` — tool text stays string, images become a synthetic user `image_url` message); PDF text extract in `read_file` for Completions; Anthropic vs OpenAI Chat Completions style selection |
 | **Capability-generic** | middleware / reactive retry                 | Multimodal strip via `vision`/`audio`/`video`/`document` (`capability-message-utils`); context-overflow reactive compact (provider `code` first)                                                                                                                  |
-| **Config / metadata**  | `model-config`, `models.dev`, session       | `modelStyle`, pricing, `capabilities[]` (see below), unused-for-now `reasoningConfig` (tag/effort/budget — not yet mapped to request options)                                                                                                                                                                                        |
+| **Config / metadata**  | `model-connection`, `models.dev`, session       | `modelStyle`, pricing, `capabilities[]` (see below), unused-for-now `reasoningConfig` (tag/effort/budget — not yet mapped to request options)                                                                                                                                                                                        |
 
 ### Model capabilities — where the list comes from
 
@@ -1293,7 +1293,7 @@ Domain-owned tools live next to their domain (same pattern as `subagent/begin-su
 | Plan                | `agent/plan/*` (domain + plan tool factories)                                                                                                         |
 | Tools               | `agent/tools/*.ts` (universal), `agent/tools/runtime/define-tool.ts`; domain tools under `plan/` / `skills/` / `subagent/` / `todo/`                     |
 | Subagent            | `agent/subagent/run-subagent.ts`, `agent/subagent/task-tool.ts`; shared span in `agent/run/run-span.ts`                              |
-| Models              | `models/config/model-config.ts`, `models/adapter/adapter-factory.ts`, `models/cache/prompt-cache.ts`                                                              |
+| Models              | `models/config/model-connection.ts`, `models/adapter/adapter-factory.ts`, `models/cache/prompt-cache.ts`                                                              |
 | CoreEnv             | `env/index.ts` (+ `@codent/node` / `@codent/server`)                                                                                           |
 
 ---

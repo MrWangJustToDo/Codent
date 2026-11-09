@@ -12,6 +12,7 @@
  * new id and does not inherit another conversation's jobs.
  */
 
+import { CORE_ENV_SOURCE } from "../../../../../env";
 import { registerEnvTeardownHook } from "../../../../../env/teardown.js";
 import { generateId } from "../../../../../utils/generate-id.js";
 import {
@@ -187,7 +188,7 @@ function ensureTeardownHook(): void {
       // Only the workspace being cleared. `clearCoreEnv()` is process-scoped, but a background job
       // belongs to the runtime that started it: reaping every registry on any teardown killed a
       // second instance's running commands.
-      if (!registry.belongsTo(env?.rootPath)) continue;
+      if (!registry.belongsTo(env)) continue;
       // Best-effort and intentionally not awaited: the hook is synchronous. `destroyAll` preserves
       // terminal un-notified records, so a subsequent resume can still deliver them.
       void registry.destroyAll().catch(() => undefined);
@@ -205,13 +206,23 @@ export class CommandJobRegistry {
     liveRegistries.add(this);
   }
 
-  /** Whether a `clearCoreEnv(rootPath)` for `rootPath` owns this registry's jobs. */
-  belongsTo(rootPath?: string): boolean {
+  /** Whether a `clearCoreEnv()` for this env owns this registry's jobs. */
+  belongsTo(env?: { rootPath: string }): boolean {
     // No env = no attributable owner: a defensive/second `clearCoreEnv()` (or a host that never
     // registered an ambient env and only builds a `CodentAgent`) must NOT reap every runtime's
     // running background commands in the process.
-    if (!rootPath) return false;
-    return this.env !== undefined && this.env.rootPath === rootPath;
+    if (!env || !env.rootPath) return false;
+    if (this.env === undefined) return false;
+    const cleared = env as unknown as Record<PropertyKey, unknown>;
+    const clearedSource = cleared[CORE_ENV_SOURCE];
+    const ownSource = this.env as unknown as Record<PropertyKey, unknown>;
+    // Identity first: two runtimes over the same workspace are legal, and disposing one must not
+    // kill the other's running commands. `rootPath` is only the fallback for a wrapper that never
+    // carried the token (an old resolved env, or a raw env handed straight to a test).
+    if (typeof clearedSource === "object" && clearedSource !== null) {
+      return ownSource[CORE_ENV_SOURCE] === clearedSource;
+    }
+    return this.env.rootPath === env.rootPath;
   }
 
   private readonly jobs = new Map<string, CommandJobRecord>();

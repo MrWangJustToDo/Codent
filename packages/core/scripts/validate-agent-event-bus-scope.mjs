@@ -20,7 +20,7 @@ const scope = new AgentEventBusScope({
 assert.equal(scope.of("a"), scope.of("a"), "scope identity is cached");
 assert.notEqual(scope.of("a"), scope.of("b"));
 scope.of("orphan");
-assert.throws(() => scope.of("orphan", "a"), /different parent/, "a scope cannot be re-parented later");
+assert.throws(() => scope.of("orphan", "a"), /re-parented/, "a scope cannot be re-parented later");
 
 const rootEvents = [];
 scope.on("session:start", (event) => rootEvents.push(event.agentId));

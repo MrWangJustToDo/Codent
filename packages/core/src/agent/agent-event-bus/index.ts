@@ -4,7 +4,7 @@
  * and the metadata table that drives the `AgentSession` channel projection.
  */
 
-export { DefaultAgentEventBus, createAgentEventBus } from "./agent-event-bus.js";
+export { DefaultAgentEventBus, createAgentEventBus, isInterceptorTimedOut } from "./agent-event-bus.js";
 export { AGENT_EVENT_META } from "./meta.js";
 export type {
   AgentEvent,

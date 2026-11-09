@@ -252,6 +252,25 @@ export class FileSync {
     return syntheticDotLocks.has(uri);
   }
 
+  /**
+   * Stop the deferred-sync poller and drop its state — terminal, for extension teardown.
+   *
+   * `setManager` re-points the manager but leaves a scheduled timer alive (it then syncs against
+   * the new one, which is correct for a root swap). Teardown is different: a surviving timer
+   * re-enters `handleFileWrite → waitForClient` on a manager that will never be shut down again,
+   * and can spawn a language server after the session ended.
+   */
+  dispose(): void {
+    if (this.syntheticTimer) {
+      clearTimeout(this.syntheticTimer);
+      this.syntheticTimer = null;
+    }
+    this.syntheticPending.clear();
+    this.pendingSync.clear();
+    this.tracked.clear();
+    this.syntheticPolls = 0;
+  }
+
   /** Get the number of tracked documents. */
   get trackedCount(): number {
     return this.tracked.size;

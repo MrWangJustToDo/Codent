@@ -152,7 +152,10 @@ text ends with the exact \`offset\` to call again — use that number, do not ad
         const hasMore = start + page.length < messageWindow.total;
         const content = renderPage(sessionId, page, start, messageWindow.total, hasMore);
         // Spill the rendered page when large, so the model gets a head+tail preview plus a path.
-        const cached = await maybeCacheOutput(coreEnv, content, `${toolCallId}-session-read`);
+        // `pageOnly`: the spill holds just this page, so the preview must not claim the full
+        // output is on disk (a later page would contradict it). The tool's own offset/limit is
+        // the way to reach the rest.
+        const cached = await maybeCacheOutput(coreEnv, content, `${toolCallId}-session-read`, { pageOnly: true });
 
         return {
           sessionId,

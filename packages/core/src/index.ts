@@ -247,7 +247,7 @@ export {
   resolveModelConfig,
   resolveModelConnection,
   resolveModelConnectionFromEnv,
-} from "./models/config/model-config.js";
+} from "./models/config/model-connection.js";
 export {
   loadModelEntries,
   loadModels,
@@ -297,7 +297,11 @@ export type {
   ReasoningConfig,
   ReasoningEffort,
 } from "./models/types.js";
-export type { ModelConnection, ResolveModelConfigInput, ResolvedModelConfig } from "./models/config/model-config.js";
+export type {
+  ModelConnection,
+  ResolveModelConfigInput,
+  ResolvedModelConfig,
+} from "./models/config/model-connection.js";
 export type { ModelSelection, ModelSelectionRequest } from "./models/config/model-selection.js";
 export type { ProviderInfoResponse as ProviderInfo } from "./provider/remote-model-provider.js";
 export { mergeModelsConfigToolConfig, websearchToolConfigFromEnv } from "./agent/tools/tool-config.js";
@@ -350,7 +354,7 @@ export { describeToolPresentations, presentationFromInfo } from "./agent/tools/p
 export { getBuiltinToolPresentation } from "./agent/tools/presentation/builtin.js";
 export { keepsCompactRow } from "./agent/tools/presentation/row-rules.js";
 export { computeToolDisplay } from "./agent/tools/presentation/compute-display.js";
-export { formatDuration } from "./agent/tools/presentation/format/format.js";
+export { formatDuration } from "./agent/tools/presentation/format/duration.js";
 export { normalizeOutputNewlines, splitStreamingLines } from "./agent/tools/presentation/format/lines.js";
 export {
   buildLineWindow,

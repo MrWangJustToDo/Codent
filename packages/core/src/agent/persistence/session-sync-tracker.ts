@@ -181,10 +181,6 @@ export function isUIMessageStable(message: UIMessage): boolean {
   return true;
 }
 
-export function areAllUIMessagesStable(messages: UIMessage[]): boolean {
-  return messages.every(isUIMessageStable);
-}
-
 function snapshotsEqual(a: SessionSyncSnapshot | null, b: SessionSyncSnapshot): boolean {
   if (!a) return false;
   if (a.messageCount !== b.messageCount) return false;

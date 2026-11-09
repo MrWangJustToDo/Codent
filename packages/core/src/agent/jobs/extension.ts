@@ -40,7 +40,7 @@
  */
 
 import { BUILTIN_EXTENSION_ORDER } from "../dispatch-order.js";
-import { formatDuration } from "../tools/presentation/format/format.js";
+import { formatDuration } from "../tools/presentation/format/duration.js";
 
 import { COMMAND_JOB_KIND, TASK_JOB_KIND } from "./background-work.js";
 

@@ -118,17 +118,24 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
   let flushInFlight = false;
   /** Consecutive failed writes; the retry timer is re-armed only up to a small cap. */
   let consecutiveFailures = 0;
-  /** Last time a persistence failure was reported to the session (see the throttle constant). */
-  let lastPersistErrorAt = 0;
 
   /**
    * Surface a persistence failure to the owning session, throttled.
    *
    * `console.error` stays (it is the only channel before an agent exists), but it is not a failure
    * signal a host can observe — so the sink also reports through the injected callback, which the
-   * log extension turns into a `session:diagnostic`.
+   * manager turns into a `session:save-error` (channel-backed), not a diagnostic-only row.
    */
   let lastEntryErrorAt = 0;
+  /**
+   * Separate report throttles for entry-level (schema/serialize) and write-path failures.
+   *
+   * One shared timestamp let a schema rejection within 60s of a write error be dropped entirely —
+   * neither console nor session report — while the sink was already unhealthy: two different
+   * failures, each the first of its kind, hidden behind the other's interval.
+   */
+  let lastEntryReportAt = 0;
+  let lastWriteReportAt = 0;
   /** Throttle per-entry schema/serialize reports (write-path has its own interval). */
   const reportEntryError = (message: string, info: Omit<LogPersistErrorInfo, "consecutiveFailures">): void => {
     const now = Date.now();
@@ -136,13 +143,21 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
       lastEntryErrorAt = now;
       console.error(message);
     }
-    reportPersistError(info);
+    reportPersistError(info, "entry");
   };
 
-  const reportPersistError = (info: Omit<LogPersistErrorInfo, "consecutiveFailures">): void => {
+  const reportPersistError = (
+    info: Omit<LogPersistErrorInfo, "consecutiveFailures">,
+    channel: "entry" | "write" = "write"
+  ): void => {
     const now = Date.now();
-    if (now - lastPersistErrorAt < PERSIST_ERROR_REPORT_INTERVAL_MS) return;
-    lastPersistErrorAt = now;
+    if (channel === "entry") {
+      if (now - lastEntryReportAt < PERSIST_ERROR_REPORT_INTERVAL_MS) return;
+      lastEntryReportAt = now;
+    } else {
+      if (now - lastWriteReportAt < PERSIST_ERROR_REPORT_INTERVAL_MS) return;
+      lastWriteReportAt = now;
+    }
     try {
       options.onPersistError?.({ ...info, consecutiveFailures });
     } catch {

@@ -101,9 +101,9 @@ export interface LogExtensionOptions {
   /**
    * Report a sink persistence failure for `log`.
    *
-   * Wired by the manager to that agent's `session:diagnostic`: the seam has no route to the session
-   * (and must not gain one), so without this a failing disk looks like a healthy agent with an
-   * empty `agent.log`. The sink throttles the reports.
+   * Wired by the manager to that agent's `session:save-error` (the channel-backed shape): the seam
+   * has no route to the session (and must not gain one), so without this a failing disk looks like
+   * a healthy agent with an empty `agent.log`. The sink throttles the reports.
    */
   onPersistError?: (log: AgentLog, info: LogPersistErrorInfo) => void;
 }
@@ -219,7 +219,10 @@ export function createLogExtension(options: LogExtensionOptions): LogExtension {
                 onPersistError: (info: LogPersistErrorInfo) => {
                   // Resolve at failure time: the first attached log may already be detached.
                   const report = candidate.reporters.values().next().value;
-                  report?.(info);
+                  if (report) report(info);
+                  // No live reporter but the sink is still referenced (another manager's logs share
+                  // it and its extension had no reporter): the failure must not go dark entirely.
+                  else console.error(`[agent-log] persist failure (${info.stage}): ${info.error}`);
                 },
               }
             : {}),

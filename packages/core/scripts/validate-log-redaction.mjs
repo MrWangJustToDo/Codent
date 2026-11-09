@@ -48,6 +48,27 @@ assert.equal(data.items[0].secret, "[redacted]");
 assert.equal(data.items[0].name, "item");
 assert.equal(data.text, "Authorization: [redacted]");
 
+// An Error nested in `data` keeps its diagnostic fields, and its message is still redacted.
+{
+  const cause = new Error("provider said api_key=supersecret");
+  cause.name = "FileError";
+  cause.code = "permission_denied";
+  cause.path = "/workspace/secret";
+  const out = redactLogValue({ cause });
+  assert.equal(out.cause.name, "FileError");
+  assert.equal(out.cause.code, "permission_denied", "the failure code is the diagnostic value");
+  assert.equal(out.cause.path, "/workspace/secret");
+  assert.doesNotMatch(out.cause.message, /supersecret/, "the message goes through redaction");
+  assert.equal(out.cause.stack !== undefined, true, "the stack is preserved");
+
+  // Non-enumerable `cause` is the underlying failure; it is diagnostic and must survive redaction.
+  const inner = new Error("underlying EACCES");
+  const outer = new Error("write failed", { cause: inner });
+  const nested = redactLogValue({ err: outer });
+  assert.equal(nested.err.message, "write failed");
+  assert.equal(nested.err.cause.message, "underlying EACCES");
+}
+
 // The seam redacts regardless of which writer produced the entry.
 {
   let captured;

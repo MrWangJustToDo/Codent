@@ -84,6 +84,24 @@ function interceptorMatches(pattern: string, name: string): boolean {
  */
 const INTERCEPTOR_CHAIN_TIMEOUT_MS = EXTENSION_CALLBACK_TIMEOUT_MS;
 
+/**
+ * Events whose interceptor chain stopped on a timeout.
+ *
+ * A timed-out handler is still running: the contract has no cancellation, so it can resolve later
+ * and write `modifiedArgs` / `modifiedResult` into the shared event AFTER `intercept()` returned.
+ * The bus clears those fields when the timeout fires, but a write that lands in the same microtask
+ * turn as the caller's continuation would be read anyway. Consumers that trust a rewrite ask
+ * {@link isInterceptorTimedOut} — the event is marked here, synchronously, before the caller resumes.
+ *
+ * `WeakSet`, so a consumer that drops the event does not keep it alive.
+ */
+const timedOutEvents = new WeakSet<object>();
+
+/** Whether this event's interceptor chain stopped on a timeout (see {@link timedOutEvents}). */
+export function isInterceptorTimedOut(event: object): boolean {
+  return timedOutEvents.has(event);
+}
+
 // ============================================================================
 // DefaultAgentEventBus
 // ============================================================================
@@ -381,6 +399,20 @@ export class DefaultAgentEventBus implements AgentEventBus {
               error: new Error(`interceptor chain exceeded ${this.interceptorTimeoutMs}ms`),
             })
           );
+          // Same fail-closed verdict as a per-handler timeout: the chain stopped before later
+          // interceptors ran, so a `tool:before` deny that would have been the next handler is not
+          // evidence of approval. Without this the tool executed (fail OPEN) while the per-handler
+          // timeout path failed closed — two timeout paths, two opposite answers.
+          timedOutEvents.add(event);
+          const mutable = event as {
+            skip?: boolean;
+            skipDefault?: boolean;
+            modifiedArgs?: unknown;
+            modifiedResult?: unknown;
+          };
+          mutable.modifiedArgs = undefined;
+          mutable.modifiedResult = undefined;
+          mutable.skip = true;
           break outer;
         }
         let result: unknown;
@@ -407,6 +439,7 @@ export class DefaultAgentEventBus implements AgentEventBus {
           // `modifiedResult` before hanging, and those are read by the caller. Drop the rewrites and
           // fail CLOSED (`skip`) — a handler that could not complete is not evidence of approval.
           if (isCallbackTimeoutError(error)) {
+            timedOutEvents.add(event);
             const mutable = event as {
               skip?: boolean;
               skipDefault?: boolean;

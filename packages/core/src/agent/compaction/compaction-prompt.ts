@@ -249,8 +249,8 @@ export function buildCompactionPrompt(options?: {
   // If we have an existing summary, wrap it in <previous-summary> tags
   // and use the update prompt. The conversation history (initialMessages)
   // should NOT include this old summary message — it's passed here instead.
-  // Strip runtime-managed ## Compact archives so the summarizer does not
-  // restate path lists (runtime re-merges them after the update).
+  // Strip the retired `## Compact archives` section from summaries persisted before that feature
+  // was removed; there is no re-merge after the update (the archive writer is gone).
   if (existingSummary) {
     const summaryForUpdate = stripCompactArchiveSections(existingSummary);
     parts.push(`<previous-summary>\n${summaryForUpdate}\n</previous-summary>`);

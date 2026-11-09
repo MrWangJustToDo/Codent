@@ -25,8 +25,10 @@ const fileMutationQueues = new Map<string, Promise<void>>();
  * `resolve` is anchored to `env.rootPath`, never the process cwd: every fs operation resolves
  * against the workspace root, so on a host whose cwd differs (`--remote-env`, server `ROOT_PATH`,
  * `acp --cwd`) the same file reached as `src/a.ts` and `/srv/ws/src/a.ts` produced two keys and
- * concurrent `write_file`/`delete_file` stopped being serialized. It does NOT resolve symlinks —
- * the edit tool's re-read guard covers that.
+ * concurrent `write_file`/`delete_file` stopped being serialized. It does NOT resolve symlinks:
+ * a link and its target get two queue keys, so an edit through one and an edit through the other
+ * can race. (The write itself follows the link since `writeFileAtomic` resolves `realpath`; this
+ * key is a serialization detail, not a containment or correctness guarantee.)
  */
 function getQueueKey(env: ResolvedCoreEnv, filePath: string): string {
   try {

@@ -51,9 +51,19 @@ function statusRank(status: ToolApprovalStatus): number {
   return 1;
 }
 
-/** In-memory approval rows keyed by toolCallId (latest decision wins). */
+/**
+ * In-memory approval rows keyed by `approvalId` (`id`), first decision wins **per approval**.
+ *
+ * Not keyed by `toolCallId`: provider call ids are request-scoped and reused (`call_0`), so keying
+ * by one let an earlier answered row shadow a later, different request for the same call. The new
+ * request's `upsert({ status: "pending" })` returned the stale `approved` row, and the user's deny
+ * then hit the first-decision-wins refusal *before* `projectApproval`, leaving the part pending and
+ * the session unanswerable. `toolCallId` is still stored, and a row belonging to a DIFFERENT
+ * approval for the same call is dropped when the newer one arrives (the transcript keeps the older
+ * decision; the table is only the live decision store).
+ */
 export class ToolApprovalTable {
-  private readonly byToolCallId = new Map<string, ToolApprovalRecord>();
+  private readonly byApprovalId = new Map<string, ToolApprovalRecord>();
 
   /** Invoked once per actual resolution (pending → approved/denied); not on restore. */
   private readonly onResolved?: (resolution: ToolApprovalDecisionEvent) => void;
@@ -63,22 +73,29 @@ export class ToolApprovalTable {
   }
 
   restore(records: readonly ToolApprovalRecord[]): void {
-    this.byToolCallId.clear();
+    this.byApprovalId.clear();
     for (const record of records) {
-      this.byToolCallId.set(record.toolCallId, { ...record });
+      this.byApprovalId.set(record.id, { ...record });
     }
   }
 
   clear(): void {
-    this.byToolCallId.clear();
+    this.byApprovalId.clear();
   }
 
   toArray(): ToolApprovalRecord[] {
-    return [...this.byToolCallId.values()].map((record) => ({ ...record }));
+    return [...this.byApprovalId.values()].map((record) => ({ ...record }));
   }
 
   upsert(input: UpsertToolApprovalInput): ToolApprovalRecord {
-    const existing = this.byToolCallId.get(input.toolCallId);
+    const existing = this.byApprovalId.get(input.id);
+    // A new request may reuse a provider tool-call id. Its identity is the `approvalId`, so any row
+    // for the same call under a different approval is stale — the transcript carries that older
+    // decision, and keeping it here would (a) grow the table with every gated call and (b) let the
+    // resume map answer for the wrong request. Drop it before deciding.
+    for (const [id, row] of this.byApprovalId) {
+      if (row.toolCallId === input.toolCallId && id !== input.id) this.byApprovalId.delete(id);
+    }
     // A command-safety denial may replace an approval that raced it (see `overwrite`). Only
     // approved → denied, and only when the caller asks for it explicitly.
     const forcedDeny = input.overwrite === "deny" && existing?.status === "approved" && input.status === "denied";
@@ -100,7 +117,7 @@ export class ToolApprovalTable {
       updatedAt: input.updatedAt ?? Date.now(),
       ...(input.status === "denied" && input.reason ? { reason: input.reason } : {}),
     };
-    this.byToolCallId.set(input.toolCallId, record);
+    this.byApprovalId.set(input.id, record);
 
     // Resolution event: only on a real pending → approved/denied transition (or the forced
     // approval → denial above, which is a real change of verdict and must be visible).
@@ -203,6 +220,10 @@ export function approvalsToResumeMap(
     // no longer in the transcript (or belongs to a trimmed window); replaying it by id alone is
     // exactly the stale-approval bug this guard closes.
     if (!part || part.approval?.approved === undefined || isSettledToolCallPart(part)) continue;
+    // Identity, not just the reused call id: the decision belongs to the approval that was asked
+    // about. A later call reusing `call_0` has a different approval id, so an older row cannot
+    // answer it even when its part happens to carry a decision of its own.
+    if (part.approval.id !== record.id) continue;
 
     const resolution: ToolApprovalResolution =
       record.status === "approved"

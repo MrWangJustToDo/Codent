@@ -13,7 +13,7 @@ import {
   resolveModelConfig,
   type ResolveModelConfigInput,
   type ResolvedModelConfig,
-} from "../models/config/model-config.js";
+} from "../models/config/model-connection.js";
 import { selectModel, type ModelSelection } from "../models/config/model-selection.js";
 
 import { getModelProvider } from "./model-provider-registry.js";

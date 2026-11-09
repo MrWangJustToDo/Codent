@@ -9,7 +9,7 @@ import { assertAsyncIterable } from "../stream/assert-async-iterable.js";
 import { createToolRunContext, type ToolRunContext } from "./run-context.js";
 
 import type { ResolvedCoreEnv } from "../../env";
-import type { ModelStyle } from "../../models/config/model-config.js";
+import type { ModelStyle } from "../../models/config/model-connection.js";
 import type { ReasoningEffort } from "../../models/types.js";
 import type {
   AnyTextAdapter,

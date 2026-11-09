@@ -215,16 +215,19 @@ function logAgentStatus(log: AgentLog, event: AgentEvent): void {
   if (!NOTABLE_STATUSES.has(to)) {
     // A transition nobody explained is worth a row; the pump's bookkeeping is not.
     if (stateEvent) {
-      if (MECHANICAL_STATE_EVENTS.has(stateEvent)) return;
-      // An approval pause is bracketed by the request/resolve rows; a client question is not
-      // (ask_user emits neither), so its pause stays visible. The matching RESUME carries no
-      // `wait` (the event clears it), so it must be recognized by the state it leaves: only
-      // `awaiting_user` has a visible pause to close.
+      if (MECHANICAL_STATE_EVENTS.has(stateEvent)) {
+        // A client question has no request/resolve row (`ask_user` emits neither), so the
+        // `settle` that leaves `awaiting_user` is the only record that the answer landed.
+        if (!(stateEvent === "settle" && from === "awaiting_user")) return;
+      }
+      // An approval pause is bracketed by the request/resolve rows; a client question is not,
+      // so its pause stays visible. The matching RESUME carries no `wait` (the event clears it),
+      // so it must be recognized by the state it leaves: only `awaiting_user` has a visible pause
+      // to close.
       if (stateEvent === "pause" && wait !== "question") return;
       if (stateEvent === "resume" && from !== "awaiting_user") return;
-    } else if (!stateEvent) {
-      // An unexplained transition is worth a row (legacy `setStatus` without an event).
     }
+    // No `event`: a legacy `setStatus` transition is still worth a row.
   }
   entry(log, event, "info", "agent", `Status: ${from} → ${to}`, {
     from: d.from,

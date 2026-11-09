@@ -4,6 +4,7 @@ import { createJsonlFileSink } from "../log/jsonl-file-sink.js";
 import { MAX_LOG_MESSAGE_CHARS, MAX_LOG_STACK_CHARS } from "../log/payload.js";
 import { redactLogValue, redactSecrets } from "../log/redaction.js";
 
+import { registerActiveAgentLog, unregisterActiveAgentLog } from "./lifecycle-guards.js";
 import { configuredLogLevel } from "./log-level-env.js";
 
 import type { AgentLogFileSinkOptions, LogCategory, LogEntry, LogLevel, LogScope } from "./types.js";
@@ -456,9 +457,20 @@ export class AgentLog {
     // unbound seam keeps the entries buffered (bounded) so a later sink can still receive them.
     if (!sink) return () => {};
     this.attachSink(sink);
+    // The documented embedded-host fallback must join the crash/exit guards too. Production paths
+    // register through `AgentLogBinding`, but a host that calls this directly had its final batch
+    // (usually the fault that is killing the process) dropped on `process.on("exit")` because
+    // `flushActiveAgentLogsSync()` iterates that registry. The Set is idempotent, so the binding's
+    // own register is harmless.
+    registerActiveAgentLog(this);
     return () => {
       void sink.detach().catch(() => undefined);
+      // Unregister only while THIS sink is still the bound one: a host may attach a second sink
+      // (the superseded handle is then inert), and unconditionally dropping the log from the
+      // crash/exit registry made the live sink lose its final batch.
+      const wasBound = this.sinkEntry === sink.handleEntry;
       this.detachSink(sink.handleEntry);
+      if (wasBound) unregisterActiveAgentLog(this);
     };
   }
 

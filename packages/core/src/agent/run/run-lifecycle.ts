@@ -116,7 +116,11 @@ export async function prepareManagedAgentForRun(
   }
 }
 
-export function finalizeManagedAgentRun(host: RunLifecycleHost, reason: RunFinalizeReason): boolean {
+export function finalizeManagedAgentRun(
+  host: RunLifecycleHost,
+  reason: RunFinalizeReason,
+  options: { detached?: boolean } = {}
+): boolean {
   // Idempotent per turn — pump `stop()` and outcome paths may both attempt finalize.
   if (!host.beginTurnFinalize()) return false;
 
@@ -187,8 +191,12 @@ export function finalizeManagedAgentRun(host: RunLifecycleHost, reason: RunFinal
   // An `ask_user` is a question addressed to the USER: a terminal turn does not answer it, and
   // the session must keep naming that wait (WaitKind.question) or input is admitted against a
   // "failed" status and the next pump breaks on the question without calling the model.
+  //
+  // Detached (subagent) runs are exempt: `applyRunOutcome` already forced a terminal status, and
+  // re-asserting a question wait here put a finished child back into `awaiting_user` (a "ghost"
+  // active task row). A subagent has no user to answer it anyway.
   const messages = host.getUI?.()?.getMessages();
-  if (messages) host.syncPendingWait?.(messages);
+  if (messages && options.detached !== true) host.syncPendingWait?.(messages);
   return true;
 }
 

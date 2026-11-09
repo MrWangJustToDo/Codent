@@ -3,7 +3,7 @@ import { truncateText } from "../../../utils/text-truncation.js";
 import { isBuiltinToolName } from "../catalog/tool-names.js";
 
 import { getBuiltinToolPresentation } from "./builtin.js";
-import { formatDuration } from "./format/format.js";
+import { formatDuration } from "./format/duration.js";
 import { DURATION_THRESHOLD_MS, getDurationMs } from "./format/inline-summary.js";
 import { keepsCompactRow } from "./row-rules.js";
 import { getUiToolState, isCancelledToolCall } from "./state.js";

@@ -141,7 +141,7 @@ interface ToolCallOutputRecord {
   [key: string]: unknown;
 }
 
-function isRecord(value: unknown): value is ToolCallOutputRecord {
+function isToolCallOutputRecord(value: unknown): value is ToolCallOutputRecord {
   // One clause order, one definition (`utils/is-record.ts`); this wrapper only narrows the type.
   return isPlainRecord(value);
 }
@@ -159,7 +159,7 @@ function mimeForToolCallOutput(output: ToolCallOutputRecord): string {
 }
 
 async function dehydrateToolCallOutput(output: unknown, store: MediaStore): Promise<unknown> {
-  if (!isRecord(output)) return output;
+  if (!isToolCallOutputRecord(output)) return output;
 
   // `read_file` image / PDF: raw base64 in `base64`. Shape-check the media type too — a generic
   // extension output may carry a field named `base64` (a signature or id) that only looks like
@@ -206,7 +206,7 @@ async function hydrateToolCallOutput(
   store: MediaStore,
   onMissing?: (miss: MediaHydrationMiss) => void
 ): Promise<unknown> {
-  if (!isRecord(output) || !output.mediaRef) return output;
+  if (!isToolCallOutputRecord(output) || !output.mediaRef) return output;
   if (!isMediaHash(output.mediaRef.hash)) {
     // A malformed ref must be REPORTED, not silently left as `media://bad`: the miss counter drives
     // the wire-recovery substitution, and without it the provider receives an unfetchable value on

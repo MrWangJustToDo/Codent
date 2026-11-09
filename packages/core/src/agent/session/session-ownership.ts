@@ -28,11 +28,6 @@ const sharedLocalByRoot = new Map<string, SessionOwnership>();
  */
 const sharedRemoteByEnv = new WeakMap<object, SessionOwnership>();
 
-/** Scope key for the local table (exported for diagnostics/tests). */
-export function sessionOwnershipScope(env: Pick<ResolvedCoreEnv, "rootPath" | "remote">): string {
-  return `${env.rootPath}\0${env.remote === true ? "remote" : "local"}`;
-}
-
 /** The shared ownership table for one workspace. */
 export function sharedSessionOwnership(env: ResolvedCoreEnv, identity: object = env): SessionOwnership {
   if (env.remote === true) {

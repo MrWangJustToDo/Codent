@@ -731,13 +731,23 @@ assert.equal(taskOutputSchema.shape.cancelled, undefined, "task declares ONE mar
   // And a cancel must not be written through the error path, which synthesizes an Error
   // from the payload — for a cancelled subagent that text is a paragraph of narration.
   const bridgeSrc = readFileSync(join(SRC, "agent/log/event-log-bridge.ts"), "utf8");
-  // The flag is computed once, and the cancellation branch RETURNS before any `eventError(…)`
-  // synthesis. Asserting the structure (rather than one long distance-bounded regex) keeps this
-  // guard working when the bridge grows a new early filter.
   assert.ok(/const cancelled = payload\.cancelled === true/.test(bridgeSrc), "the cancelled flag is read once");
+  // The bridge's shape is the downgrade, not an early return: a cancelled payload's `error` level
+  // becomes `warn`, so it never enters the `level === "error"` branch that synthesizes `eventError`.
   assert.ok(
-    /if \(cancelled\) \{[\s\S]{0,300}return;[\s\S]{0,200}\}[\s\S]{0,900}eventError\(/.test(bridgeSrc),
-    "the bridge short-circuits a cancelled payload BEFORE synthesizing an Error from it"
+    /configured === "error" && cancelled \? "warn" : configured/.test(bridgeSrc),
+    "a cancelled payload's error level is downgraded"
+  );
+  // Assert the DOWNGRADE assignment is before the branch, not merely the flag read: moving the
+  // assignment below `if (level === "error")` would leave both the regex and the flag-read index
+  // passing while a cancelled payload reaches `eventError`.
+  const downgradeAt = bridgeSrc.indexOf('const level = configured === "error" && cancelled ? "warn" : configured;');
+  const errorBranchAt = bridgeSrc.indexOf('if (level === "error")');
+  assert.ok(downgradeAt >= 0, "the downgrade assignment exists");
+  assert.ok(errorBranchAt >= 0, "the error branch exists");
+  assert.ok(
+    downgradeAt < errorBranchAt,
+    "the bridge downgrades a cancelled payload BEFORE synthesizing an Error from it"
   );
 }
 

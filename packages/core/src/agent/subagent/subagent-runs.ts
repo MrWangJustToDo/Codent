@@ -321,8 +321,10 @@ export function beginTaskRun(parentManaged: SubagentRegistryHost, toolCallId: st
   // Assigned once: a re-entry (tool phase retry, background wake) must not move the attribution.
   // Optional: validators and hosts may drive the registry with a structural fake that has no run
   // identity. The row is still useful without attribution; do not fail the call for it.
+  // One-shot attribution of the parent run. The session id had no reader at all — both settle
+  // emits (`task-result.ts`) resolve their session from the live emitter — so a captured copy was
+  // bookkeeping that could only drift.
   state.spawnRunId ??= parentManaged.getCurrentRunId?.() ?? undefined;
-  state.spawnSessionId ??= parentManaged.getEventSessionId?.();
   return state;
 }
 
@@ -333,15 +335,6 @@ export function readTaskRunSpawnId(
 ): string | undefined {
   if (!toolCallId) return undefined;
   return subagentRuns(parentManaged).state(toolCallId)?.spawnRunId;
-}
-
-/** The disk session that spawned a task; settle-time rows compare against it. */
-export function readTaskRunSpawnSessionId(
-  parentManaged: SubagentRegistryHost,
-  toolCallId: string | undefined
-): string | undefined {
-  if (!toolCallId) return undefined;
-  return subagentRuns(parentManaged).state(toolCallId)?.spawnSessionId;
 }
 
 export function enterTaskPhase(

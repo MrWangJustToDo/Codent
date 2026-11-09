@@ -227,12 +227,15 @@ export class SessionService {
 
   private async generateSessionTitle(
     userMessage: string,
-    input: Pick<SessionPersistInput, "usage" | "resolveTextAdapter" | "emitSessionTitle" | "emitEvent" | "epoch"> & {
+    input: Pick<
+      SessionPersistInput,
+      "usage" | "resolveTextAdapter" | "emitSessionTitle" | "emitEvent" | "epoch" | "runId"
+    > & {
       /** The session this title belongs to; every event it emits names it explicitly. */
       sessionId?: string;
     }
   ): Promise<string> {
-    const { usage, resolveTextAdapter, emitSessionTitle, emitEvent, sessionId, epoch } = input;
+    const { usage, resolveTextAdapter, emitSessionTitle, emitEvent, sessionId, epoch, runId } = input;
     // Nothing to title. An empty prompt made the side LLM invent a title for a conversation
     // that does not exist yet; some providers answer with a plausible-looking name and some
     // reject the request outright (400 → the caller's fallback is also empty). The persist
@@ -255,9 +258,19 @@ export class SessionService {
         // (the structured-mode retry was invisible).
         onEvent: (event) => {
           const { type, ...payload } = event;
-          // The side query resolves after the session may have switched: name the session it was
-          // run FOR, or the default would file the row under the target.
-          emitEvent?.(type, payload as never, sessionId !== undefined ? { sessionId } : undefined);
+          // The side query resolves after the session may have switched, and after a later turn may
+          // have begun: name the session AND the run it was started for, or the default would file
+          // the row under whatever is live now.
+          emitEvent?.(
+            type,
+            payload as never,
+            sessionId !== undefined || runId !== undefined
+              ? {
+                  ...(sessionId !== undefined ? { sessionId } : {}),
+                  ...(runId !== undefined ? { runId } : {}),
+                }
+              : undefined
+          );
         },
       });
 
@@ -368,6 +381,9 @@ export class SessionService {
     }
 
     // Coalesced path: the newest admitted snapshot wins, and the whole burst awaits one drain.
+    // No caller-side session filter here: admission reads `this.data` at call time, so a thunk
+    // that is stale by the time it runs is refused by `persistSessionInner` (which compares the
+    // captured target). Replacing the pending slot is what guarantees the newest snapshot lands.
     this.pendingUiPersist = resolveInput;
     const existing = this.uiPersistDrain;
     if (existing) return existing;
@@ -552,6 +568,7 @@ export class SessionService {
           resolveTextAdapter,
           epoch: input.epoch,
           sessionId: target.id,
+          ...(input.runId ? { runId: input.runId } : {}),
           ...(emitSessionTitle ? { emitSessionTitle } : {}),
           ...(emitEvent ? { emitEvent } : {}),
         })
