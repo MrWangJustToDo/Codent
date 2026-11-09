@@ -2,7 +2,9 @@
  * Responsive plan for the workspace panel header bar (`WorkspaceModeHeader`).
  *
  * The bar is a single line holding up to five groups — agent activity, view mode (+ root path),
- * git branch (+ sha / ahead-behind), and the workspace diff summary. Every group is a `<Text>`,
+ * git branch (+ sha / ahead-behind), and the workspace diff summary. The activity group covers
+ * the working states AND the two waits (`waiting` / `awaiting_user`), so its label is called
+ * `activity` rather than `busy`. Every group is a `<Text>`,
  * and Ink boxes default to `flexShrink: 1`, so a narrow terminal does not drop anything: Yoga
  * shrinks **each** child to a fraction of its width and the renderer truncates inside every one
  * of them. The result reads as corruption rather than as a smaller header — `Workspace` becomes
@@ -34,7 +36,7 @@ export type WorkspacePathDetail = "full" | "basename" | "none";
 
 /** Which optional groups the bar may render at the given width. */
 export interface WorkspaceHeaderPlan {
-  busy: boolean;
+  activity: boolean;
   path: WorkspacePathDetail;
   sha: boolean;
   sync: boolean;
@@ -44,8 +46,13 @@ export interface WorkspaceHeaderPlan {
 
 /** Pre-formatted group contents; the component only decides colors. */
 export interface WorkspaceHeaderContent {
-  /** Agent activity label, e.g. `● running`; `null` when idle. */
-  busy: string | null;
+  /**
+   * Agent activity label, e.g. `● running` / `● awaiting approval`; `null` when idle.
+   *
+   * Named for the group, not for one of its states: the mark carries the two WAITS as well as the
+   * working states (see `agentActivity` in utils/agent-status).
+   */
+  activity: string | null;
   /** View mode, e.g. `preview` / `diff`. */
   mode: string;
   /** Workspace root path. */
@@ -80,7 +87,7 @@ const TITLE = "Workspace";
 /** Rendered width of the bar for a plan, mirroring the component's group order. */
 export function workspaceHeaderWidth(content: WorkspaceHeaderContent, plan: WorkspaceHeaderPlan): number {
   const groups: string[] = [TITLE];
-  if (plan.busy && content.busy) groups.push(content.busy);
+  if (plan.activity && content.activity) groups.push(content.activity);
 
   const pathDetail = content.path ? plan.path : "none";
   const pathText = pathDetail === "full" ? content.path : pathDetail === "basename" ? basename(content.path) : "";
@@ -114,14 +121,14 @@ export function planWorkspaceHeader(
   available: WorkspaceHeaderWidth
 ): WorkspaceHeaderPlan {
   const ladder: WorkspaceHeaderPlan[] = [
-    { busy: true, path: "full", sha: true, sync: true, files: true, diffs: true },
-    { busy: true, path: "full", sha: false, sync: true, files: true, diffs: true },
-    { busy: true, path: "full", sha: false, sync: false, files: true, diffs: true },
+    { activity: true, path: "full", sha: true, sync: true, files: true, diffs: true },
+    { activity: true, path: "full", sha: false, sync: true, files: true, diffs: true },
+    { activity: true, path: "full", sha: false, sync: false, files: true, diffs: true },
     // The path identifies the workspace; the file count is the first thing to give up for it.
-    { busy: true, path: "full", sha: false, sync: false, files: false, diffs: true },
-    { busy: true, path: "basename", sha: false, sync: false, files: false, diffs: true },
-    { busy: true, path: "basename", sha: false, sync: false, files: false, diffs: false },
-    { busy: true, path: "none", sha: false, sync: false, files: false, diffs: false },
+    { activity: true, path: "full", sha: false, sync: false, files: false, diffs: true },
+    { activity: true, path: "basename", sha: false, sync: false, files: false, diffs: true },
+    { activity: true, path: "basename", sha: false, sync: false, files: false, diffs: false },
+    { activity: true, path: "none", sha: false, sync: false, files: false, diffs: false },
   ];
 
   if (available <= 0) return ladder[0]!;

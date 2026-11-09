@@ -3,7 +3,7 @@ import { Box, Text } from "ink";
 import { useAgentStatus } from "../hooks/use-agent-status.js";
 import { useSize } from "../hooks/use-size.js";
 import { COLORS } from "../theme/colors.js";
-import { agentBusyLabel, isAgentBusyStatus } from "../utils/agent-status.js";
+import { agentActivity } from "../utils/agent-status.js";
 import { planWorkspaceHeader } from "../utils/workspace-header-layout.js";
 
 import type { WorkspaceMode } from "../hooks/use-workspace-panel.js";
@@ -50,12 +50,17 @@ export const WorkspaceModeHeader = ({
   diffStats: WorkspaceDiffStats | null;
 }) => {
   // The workspace panel covers the footer while it is open, so the agent's activity moves up here:
-  // a user browsing files can still see that the agent is working. Same busy set as the footer.
+  // a user browsing files can still see that the agent is working — or that it is parked on them
+  // (`waiting` = a tool call awaiting approve/deny, `awaiting_user` = an `ask_user` question).
   const status = useAgentStatus((s) => s.status);
-  const isWorking = isAgentBusyStatus(status);
+  const activity = agentActivity(status);
   const screenWidth = useSize((s) => s.state.screenWidth);
 
-  const busyLabel = isWorking ? `● ${agentBusyLabel(status)}` : null;
+  // Same tones as the footer's status row: work is green, an approval wait is warning-coloured and
+  // a question is the primary colour, so the mark's colour alone already says "this one is on you".
+  const activityColor =
+    activity?.kind === "approval" ? COLORS.warning : activity?.kind === "question" ? COLORS.primary : COLORS.success;
+  const activityLabel = activity ? `● ${activity.label}` : null;
   const branch = gitInfo ? `${gitInfo.branch}${gitInfo.dirty ? "*" : ""}` : null;
   // `…` stands in until the workspace root is known (it is read asynchronously), so the bar does
   // not read as "this workspace has no path".
@@ -69,7 +74,7 @@ export const WorkspaceModeHeader = ({
 
   const plan = planWorkspaceHeader(
     {
-      busy: busyLabel,
+      activity: activityLabel,
       mode,
       path: displayPath,
       branch,
@@ -95,10 +100,10 @@ export const WorkspaceModeHeader = ({
         <Text bold color={COLORS.primary}>
           Workspace
         </Text>
-        {busyLabel ? (
-          <Text color={COLORS.success}>
+        {activityLabel ? (
+          <Text color={activityColor}>
             {SEP}
-            {busyLabel}
+            {activityLabel}
           </Text>
         ) : null}
         <Text color={COLORS.muted} dimColor>

@@ -1823,6 +1823,51 @@ console.error = realConsoleError;
   headerInstance.unmount();
 }
 
+// ── the workspace title names a WAIT, not just work ──────────────────────────
+// The workspace panel is an alternate screen, so it COVERS the footer — which is the only other
+// place agent status is painted. The title therefore has to speak for the two states that need the
+// user: `waiting` (a tool call parked on approve/deny) and `awaiting_user` (an `ask_user`
+// question). It used to cover the busy set only, so an agent blocked on an approval read as idle
+// for as long as the run stayed parked.
+{
+  const Header = () =>
+    createElement(WorkspaceModeHeader, { mode: "preview", rootPath: "/workspace", gitInfo: null, diffStats: null });
+
+  const stdout = new FakeStdout();
+  stdout.columns = 100;
+  const instance = render(createElement(Header), {
+    stdout,
+    stdin: fakeStdin(),
+    exitOnCtrlC: false,
+    patchConsole: false,
+    maxFps: 30,
+  });
+  await settle(200);
+
+  const setStatus = useAgentStatus.getActions().setStatus;
+  const cases = [
+    ["running", "● running"],
+    ["waiting", "● awaiting approval"],
+    ["awaiting_user", "● awaiting answer"],
+    // The outcome of the last turn belongs to the footer/transcript: the bar answers "is anything
+    // happening now?".
+    ["completed", null],
+  ];
+  for (const [status, expected] of cases) {
+    setStatus(status);
+    await settle(150);
+    const row = frameLines(stdout)[0] ?? "";
+    if (expected) {
+      record(`the workspace title shows ${status} as "${expected}"`, row.includes(expected), { status, row });
+    } else {
+      record(`the workspace title stays quiet for ${status}`, !row.includes("●"), { status, row });
+    }
+  }
+
+  setStatus("idle");
+  instance.unmount();
+}
+
 // ── the loading splash names startup, not the sandbox ────────────────────────
 // The `loading` variant is what covers `initLoading`, and its copy is a claim about what the
 // user is waiting for. It used to read "Initializing sandbox…", but the OS sandbox is not on

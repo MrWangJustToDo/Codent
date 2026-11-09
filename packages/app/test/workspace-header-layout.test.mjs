@@ -6,9 +6,9 @@ const { planWorkspaceHeader, workspaceHeaderWidth, textDisplayWidth } = await im
   new URL("../dist/index.mjs", import.meta.url).href
 );
 
-/** A wide workspace: busy agent, full path, branch + sha + sync, files count and diff totals. */
+/** A wide workspace: active agent, full path, branch + sha + sync, files count and diff totals. */
 const full = {
-  busy: "● running",
+  activity: "● running",
   mode: "diff",
   path: "/Users/me/projects/translate",
   branch: "main*",
@@ -24,12 +24,24 @@ const FLOOR = "Workspace · ● running · diff · main*";
 
 test("a wide bar keeps every group", () => {
   const plan = planWorkspaceHeader(full, 200);
-  assert.deepEqual(plan, { busy: true, path: "full", sha: true, sync: true, files: true, diffs: true });
+  assert.deepEqual(plan, { activity: true, path: "full", sha: true, sync: true, files: true, diffs: true });
   assert.equal(
     workspaceHeaderWidth(full, plan),
     textDisplayWidth(
       "Workspace · ● running · diff · /Users/me/projects/translate · main* abc1234 ↑1 ↓2 · 3 files +12 −4"
     )
+  );
+});
+
+test("a wait label is measured like any other activity mark", () => {
+  // The group carries the two WAITS as well as the working states, so the width it costs must be
+  // whatever label the component supplies — not a fixed "● running" allowance.
+  const waiting = { ...full, activity: "● awaiting approval" };
+  const plan = planWorkspaceHeader(waiting, 200);
+  assert.equal(plan.activity, true);
+  assert.equal(
+    workspaceHeaderWidth(waiting, plan) - workspaceHeaderWidth(full, plan),
+    textDisplayWidth("● awaiting approval") - textDisplayWidth("● running")
   );
 });
 
@@ -68,7 +80,7 @@ test("the path collapses to its last segment, then disappears", () => {
 
 test("an unmeasured width never degrades the bar", () => {
   assert.deepEqual(planWorkspaceHeader(full, 0), {
-    busy: true,
+    activity: true,
     path: "full",
     sha: true,
     sync: true,
@@ -79,7 +91,7 @@ test("an unmeasured width never degrades the bar", () => {
 
 test("absent groups never widen the bar", () => {
   const idle = {
-    busy: null,
+    activity: null,
     mode: "preview",
     path: "",
     branch: null,
