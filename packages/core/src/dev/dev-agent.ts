@@ -96,6 +96,7 @@ export {
   PROGRESS_SUMMARY_MARKER,
   summarizeProgress,
 } from "../agent/subagent/progress-summary.js";
+export { SUBAGENT_NO_TRUNCATE } from "../agent/subagent/types.js";
 export { AGENT_PROFILE_IDS } from "../runtime-types/agent-profile.js";
 export { runManagedSpan } from "../agent/run/run-span.js";
 export {

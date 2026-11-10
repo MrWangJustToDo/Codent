@@ -31,6 +31,7 @@ import { resolveSummarizationInputBudget, splitMessagesByTokenBudget } from "../
 
 import { EMPTY_SUMMARY } from "./subagent-output.js";
 import { SUBAGENT_STOP_NOTICES } from "./subagent-stop-reason.js";
+import { SUBAGENT_NO_TRUNCATE } from "./types.js";
 
 import type { SubagentConfig, SubagentResult, SubagentRunDeps } from "./types.js";
 import type { AgentManager } from "../../runtime-types/hosts.js";
@@ -41,9 +42,6 @@ import type { AgentManager } from "../../runtime-types/hosts.js";
 
 /** Marker embedded in the fallback summary so consumers know it is a progress trace. */
 export const PROGRESS_SUMMARY_MARKER = "[progress summary from incomplete subagent]";
-
-/** Maximum characters for a single progress summary batch output. */
-const PROGRESS_BATCH_MAX_OUTPUT_LENGTH = 12_000;
 
 /**
  * Spawns one summarizer subagent and resolves with its terminal result.
@@ -210,7 +208,8 @@ export interface ProgressSummaryStream {
  * @param spawn - The runner used to spawn the summarizer (injected; see {@link SummarizerSpawn})
  * @param taskPrompt - Optional original task prompt, included for context
  * @param stream - Optional hooks to observe the report while it generates
- * @returns The progress summary (already truncated), or `null` if summarization failed
+ * @returns The progress summary (full; the task output path spills it to disk with a preview), or
+ *          `null` if summarization failed
  */
 export async function summarizeProgress(
   messages: UIMessage[],
@@ -339,7 +338,11 @@ async function runSummarizerSubagent(
       systemPrompt: PROGRESS_SUMMARY_SYSTEM_PROMPT,
       tools: {},
       maxIterations: 1,
-      maxOutputLength: PROGRESS_BATCH_MAX_OUTPUT_LENGTH,
+      // NOT a character cap: a hard 12k cut hid the tail of a long report behind
+      // `[Summary truncated at …]`. The progress summary is a TASK result, and that path already
+      // has the spill+preview mechanism (`buildTaskOutput` → `maybeCacheOutput`): the model gets a
+      // bounded head+tail preview plus the full text on disk, exactly like a normal task summary.
+      maxOutputLength: SUBAGENT_NO_TRUNCATE,
       autoDestroy: true,
       aggregateUsageToParent: true,
       description: "progress-summary",

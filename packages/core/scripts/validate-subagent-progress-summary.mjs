@@ -22,6 +22,7 @@ import {
   hasBeginSummaryCall,
   isProgressSummaryEligible,
   PROGRESS_SUMMARY_MARKER,
+  SUBAGENT_NO_TRUNCATE,
   summarizeProgress,
 } from "../dist/dev.mjs";
 
@@ -168,6 +169,34 @@ const failed = await summarizeProgress(
 );
 assert.equal(failed, null, "summarizeProgress must return null when the summarizer manager throws");
 console.log("(c) summarizeProgress silent failure returns null OK");
+
+// ============================================================================
+// (c2) The progress report is not CHARACTER-truncated
+//
+// The summarizer used to run with a 12k cap, so a long report ended in
+// `[Summary truncated at 12000 characters]`. A progress summary is a task result: the task path
+// already spills long output to disk with a head+tail preview (`buildTaskOutput` →
+// `maybeCacheOutput`), so the summarizer must produce the full report.
+// ============================================================================
+
+{
+  const longReport = `## Progress\n\n${"evidence ".repeat(2_500)}`;
+  const spawns = [];
+  const spawn = async (config) => {
+    spawns.push(config);
+    return { output: longReport, aborted: false, incomplete: false };
+  };
+  const manager = { getAgent: () => undefined };
+
+  const summary = await summarizeProgress(traceMessages, "agent-a", manager, spawn, "Find the testing framework");
+  assert.ok(summary, "a report is produced");
+  assert.ok(summary.length > 12_000, "the report is not cut at the old 12k cap");
+  assert.doesNotMatch(summary, /Summary truncated at/, "no hard-truncation marker");
+  assert.equal(spawns.length, 1, "one summarizer run for a single batch");
+  assert.equal(spawns[0].maxOutputLength, SUBAGENT_NO_TRUNCATE, "the summarizer runs without a char cap");
+  assert.equal(Number.isFinite(SUBAGENT_NO_TRUNCATE), false, "the sentinel means unbounded");
+}
+console.log("(c2) progress summary is not character-truncated OK");
 
 // ============================================================================
 // (d) run-stats integration — step-budget cutoff is the served scenario
