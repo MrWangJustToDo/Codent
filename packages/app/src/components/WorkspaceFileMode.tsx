@@ -88,6 +88,9 @@ export const WorkspaceFileMode = () => {
    * (a bigger step and a faster admission are exactly the sensitivity the thumb asks for), while
    * cursor panes move one *item* and would overshoot the list at that rate. See
    * `CURSOR_SCROLL_BURST_MS`.
+   *
+   * The one gesture this gate cannot see is the one still in flight when the panel closes: the mode
+   * goes off, but the bytes already in the pipe land on the chat. That boundary is `wheel-settle.ts`.
    */
   const contentStepper = useRef(createScrollStepper());
   /** Rows this event may move the preview / diff content (0 = momentum, drop it). */

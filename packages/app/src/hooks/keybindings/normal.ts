@@ -2,6 +2,7 @@
 
 import { isModifiedEnter } from "../../utils/keyboard-labels.js";
 import { cycleAgentMode } from "../../utils/plan-mode-toggle.js";
+import { consumeWheelTail } from "../../utils/wheel-settle.js";
 import { useMainInput } from "../input";
 import { usePlanPreview } from "../use-plan-preview.js";
 import { useUserInput } from "../use-user-input.js";
@@ -23,6 +24,12 @@ export function useNormalModeKeybindings(ctx: KeybindingContext): void {
 
   useMainInput(
     (inputChar, inputKey) => {
+      // The trackpad's momentum tail can still be in the pipe when the workspace panel closes and
+      // the wheel→arrow translation is switched off: those bytes land here as ordinary arrow
+      // presses and recalled history read like "the message list kept scrolling by itself". Mode
+      // 1007 carries no gesture marker, so the only separator left is time — `consumeWheelTail`
+      // owns that rule and is checked before every other branch, so the tail never reaches the input.
+      if (consumeWheelTail(inputKey)) return;
       if (inputKey.tab && inputKey.shift) {
         // Shift+Tab cycles agent mode: normal → auto → plan → normal → …
         // Still block during loading — toggling mode mid-run is not useful.
