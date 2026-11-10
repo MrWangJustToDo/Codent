@@ -102,7 +102,7 @@ export function createCodeActionsTool(deps: CodeActionsToolDeps) {
       const filePath = normalizeLspPath(params.path) ?? "";
 
       const pos = await resolvePosition(deps.manager, filePath, params, { signal: options?.abortSignal });
-      if (pos.error) return { text: pos.error, count: 0, preferredCount: 0 };
+      if (pos.error) return { text: pos.error, ok: false, count: 0, preferredCount: 0 };
       const { line, character, resolvedFrom } = pos;
 
       const client = await deps.manager.getClientForFile(filePath).catch(() => null);
@@ -199,7 +199,7 @@ export function createCodeActionsTool(deps: CodeActionsToolDeps) {
         return { text, count: totalCount, preferredCount };
       } catch (err) {
         const msg = errorMessage(err);
-        return { text: `LSP code action request failed: ${msg}`, count: 0, preferredCount: 0 };
+        return { text: `LSP code action request failed: ${msg}`, ok: false, count: 0, preferredCount: 0 };
       }
     },
   };

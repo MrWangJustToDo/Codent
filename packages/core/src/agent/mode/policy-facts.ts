@@ -6,6 +6,8 @@
  * from ad-hoc flags. Keeping it pure data lets a decision be replayed and asserted.
  */
 
+import { planExecutionAutoApproves } from "../plan/plan-mode-controller.js";
+
 import type { ModeState, ModeToolAvailability } from "./mode-state.js";
 import type { ModelCapability } from "../../models/types.js";
 import type { AgentProfileId } from "../../runtime-types/agent-profile.js";
@@ -64,8 +66,9 @@ export function resolveAgentPolicyFacts(mode: ModeState, input: AgentPolicyFacts
     planPhase: snapshot.planPhase,
     auto: snapshot.auto,
     todosSeeded: snapshot.todosSeeded,
-    planExecutionAutoApprove:
-      (snapshot.planPhase === "executing" || snapshot.planPhase === "retro") && snapshot.todosSeeded,
+    // One definition (`planExecutionAutoApproves`), so the snapshot and the tool-set/approval
+    // readers below cannot disagree about when plan execution is pre-approved.
+    planExecutionAutoApprove: planExecutionAutoApproves(snapshot.planPhase, snapshot.todosSeeded),
     toolAvailability: availability,
     profile: input.profile ?? "root",
     isSubagent: input.isSubagent ?? false,

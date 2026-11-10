@@ -84,9 +84,9 @@ and only extensions that declare one are reordered. Two rules to keep straight:
 
 - **\`order\` is a dispatch rule** (which position you run in). It is unrelated to the loader's
   **resolution rule** for a duplicated \`id\` above, where the *later* directory wins.
-- A cancelling interceptor (\`return false\`, or set \`skipDefault\`) stops **every** interceptor
-  after it. If you are a permission gate, declare a small \`order\` (e.g. \`-100\`) so nothing can
-  pre-empt you — and know that your own denial suppresses later extensions.
+- A cancelling interceptor (\`return false\`, \`event.skip = true\`, or the deprecated \`skipDefault\`)
+  stops **every** interceptor after it. If you are a permission gate, declare a small \`order\` (e.g.
+  \`-100\`) so nothing can pre-empt you — and know that your own denial suppresses later extensions.
 
 \`\`\`js
 export default {
@@ -225,9 +225,11 @@ const off = ctx.registerInterceptor("tool:after:edit_file", async (event, ctx) =
 // off() unregisters just this handler.
 \`\`\`
 
-\`handler\` may be sync or async; returning \`false\` (or setting \`event.skipDefault = true\`) stops
-the REMAINING handlers only. To deny a tool call, set \`event.skip = true\` — that is the tool gate;
-a \`return false\` that relies on stopping the default action silently lets the tool run.
+\`handler\` may be sync or async; returning \`false\`, setting \`event.skip = true\`, or the deprecated
+\`event.skipDefault = true\` are the same verdict: the rest of the chain stops and (for
+\`tool:before:*\`) the call is denied. A handler that throws also denies the tool gate — the bus marks
+\`event.handlerError\` and an unknown verdict is not an approval, so contain your own errors when you
+only meant to observe.
 
 Hook names support a \`prefix:*\` wildcard: \`tool:before:*\` observes **every** tool call.
 Match is on the literal prefix, so \`tool:before:run_*\` works too.

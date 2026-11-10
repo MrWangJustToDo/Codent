@@ -24,6 +24,7 @@
  */
 import { createCodeMode } from "@tanstack/ai-code-mode";
 
+import { abortError } from "../../runtime-types/abort.js";
 import { errorMessage } from "../../utils/errors.js";
 import { resolveApprovalRequirement } from "../approval/approval-requirement.js";
 import { BUILTIN_EXTENSION_ORDER } from "../dispatch-order.js";
@@ -137,17 +138,17 @@ function toExtensionTool(tool: AnyServerTool): ExtensionToolDefinition {
       try {
         const aborted = new Promise<never>((_, reject) => {
           onAbort = () => {
-            // Keep the ABORT SHAPE, not the signal's raw reason (a string like "user-cancelled"):
-            // the settled tool part only keeps `{ error: message }`, and the UI's cancel predicate
-            // recognises `AbortError`/`aborted` — a bare string was classified as a failure.
-            // Copy rather than renaming `signal.reason`: that object is shared with every other
-            // abort observer, and mutating its name would make a real failure look like a cancel.
+            // Keep the ABORT SHAPE through the one constructor: the settled tool part only keeps
+            // `{ error: message }`, and the UI's cancel predicate recognises `AbortError`/`aborted`
+            // — a bare string was classified as a failure. `cause` copies the reason rather than
+            // renaming it: that object is shared with every other abort observer, and mutating its
+            // name would make a real failure look like a cancel.
             const reason = signal.reason;
-            const error = new Error(reason instanceof Error ? reason.message : "Aborted", {
-              cause: reason instanceof Error ? reason : undefined,
-            });
-            error.name = "AbortError";
-            reject(error);
+            reject(
+              abortError(reason instanceof Error ? reason.message : "Aborted", {
+                cause: reason instanceof Error ? reason : undefined,
+              })
+            );
           };
           signal.addEventListener("abort", onAbort, { once: true });
         });

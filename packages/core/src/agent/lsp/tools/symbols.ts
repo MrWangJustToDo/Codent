@@ -114,7 +114,7 @@ export function createSymbolsTool(deps: SymbolsToolDeps) {
             return { text, count: lines.length };
           } catch (err) {
             const msg = errorMessage(err);
-            return { text: `LSP document symbols request failed: ${msg}`, count: 0 };
+            return { text: `LSP document symbols request failed: ${msg}`, ok: false, count: 0 };
           }
         }
 
@@ -154,7 +154,7 @@ export function createSymbolsTool(deps: SymbolsToolDeps) {
             return { text, count: result.length };
           } catch (err) {
             const msg = errorMessage(err);
-            return { text: `LSP workspace symbols request failed: ${msg}`, count: 0 };
+            return { text: `LSP workspace symbols request failed: ${msg}`, ok: false, count: 0 };
           }
         }
       }

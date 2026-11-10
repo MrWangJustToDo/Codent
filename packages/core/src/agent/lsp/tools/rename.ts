@@ -83,7 +83,7 @@ export function createRenameTool(deps: RenameToolDeps) {
       const filePath = normalizeLspPath(params.path) ?? "";
 
       const pos = await resolvePosition(deps.manager, filePath, params, { signal: options?.abortSignal });
-      if (pos.error) return { text: pos.error, fileCount: 0, editCount: 0 };
+      if (pos.error) return { text: pos.error, ok: false, fileCount: 0, editCount: 0 };
       const { line, character, resolvedFrom } = pos;
 
       const client = await deps.manager.getClientForFile(filePath).catch(() => null);
@@ -127,7 +127,7 @@ export function createRenameTool(deps: RenameToolDeps) {
         return { text, fileCount, editCount };
       } catch (err) {
         const msg = errorMessage(err);
-        return { text: `LSP rename request failed: ${msg}`, fileCount: 0, editCount: 0 };
+        return { text: `LSP rename request failed: ${msg}`, ok: false, fileCount: 0, editCount: 0 };
       }
     },
   };

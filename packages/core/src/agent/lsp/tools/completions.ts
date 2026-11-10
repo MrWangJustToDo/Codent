@@ -119,12 +119,12 @@ export function createCompletionsTool(deps: CompletionsToolDeps) {
           character = resolved.character;
           resolvedFrom = `Resolved "${params.query}" → ${resolved.symbolName} at ${line}:${character} [${resolved.source}]`;
         } else {
-          return { text: `Could not find symbol "${params.query}" in ${filePath}`, count: 0, total: 0 };
+          return { text: `Could not find symbol "${params.query}" in ${filePath}`, ok: false, count: 0, total: 0 };
         }
       }
 
       if (line === undefined || character === undefined) {
-        return { text: "Either line/character or query is required.", count: 0, total: 0 };
+        return { text: "Either line/character or query is required.", ok: false, count: 0, total: 0 };
       }
 
       const client = await deps.manager.getClientForFile(filePath).catch(() => null);
@@ -259,7 +259,7 @@ export function createCompletionsTool(deps: CompletionsToolDeps) {
         return { text, count: resolvedItems.length, total };
       } catch (err) {
         const msg = errorMessage(err);
-        return { text: `LSP completion request failed: ${msg}`, count: 0, total: 0 };
+        return { text: `LSP completion request failed: ${msg}`, ok: false, count: 0, total: 0 };
       }
     },
   };

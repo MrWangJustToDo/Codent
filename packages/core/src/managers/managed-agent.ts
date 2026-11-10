@@ -445,6 +445,14 @@ export class ManagedAgent {
   /** The status the batch started from; the net move is emitted once at the end. */
   private stateBatchStartStatus: AgentStatus | null = null;
   private stateBatchStatusPending = false;
+  /**
+   * The last transition event that moved the status inside the batch.
+   *
+   * `endStateBatch` publishes ONE merged row, so it has to say *what* moved: reporting every batch as
+   * `reset` labelled a `reset → interrupt` (status `aborted`) and a session unload as "reset", and
+   * consumers that classify by `event` counted cancels and failures as resets.
+   */
+  private stateBatchLastEvent: AgentStateEventType | null = null;
 
   // ============================================================================
   // Composed services / controllers
@@ -1131,6 +1139,9 @@ export class ManagedAgent {
         // One NET status row is emitted by `endStateBatch`: intermediate transitions describe the
         // session being left and would be delivered after that session was replaced.
         this.stateBatchStatusPending = true;
+        // `null`, not "keep the previous value": a later status move with no event must not label
+        // the merged row with an older transition's cause.
+        this.stateBatchLastEvent = stateEvent ?? null;
       }
     }
     this.emitStateChange();
@@ -1359,6 +1370,7 @@ export class ManagedAgent {
     if (this.stateBatchDepth === 0) {
       this.stateBatchStartStatus = this.currentStatus;
       this.stateBatchStatusPending = false;
+      this.stateBatchLastEvent = null;
     }
     this.stateBatchDepth += 1;
   }
@@ -1370,12 +1382,21 @@ export class ManagedAgent {
     if (this.stateBatchDepth > 0) return;
     const start = this.stateBatchStartStatus;
     const statusChanged = this.stateBatchStatusPending;
+    // Attribution for the merged row: the last transition that moved the status (a `reset` when the
+    // batch moved it without naming an event). Absent rather than a fabricated `reset` when we cannot
+    // say — the field is optional and "we do not know" is not evidence of a reset.
+    const stateEvent = this.stateBatchLastEvent ?? undefined;
     this.stateBatchStartStatus = null;
     this.stateBatchStatusPending = false;
+    this.stateBatchLastEvent = null;
     // A net status move is still a timeline fact (`error`/`aborted` are NOTABLE_STATUSES even when
-    // the switch's own row exists). One merged row, attributed to the reset that produced it.
+    // the switch's own row exists). One merged row, attributed to the transition that produced it.
     if (statusChanged && start !== null && start !== this.currentStatus) {
-      this.emitEvent("agent:status", { from: start, to: this.currentStatus, event: "reset" });
+      this.emitEvent("agent:status", {
+        from: start,
+        to: this.currentStatus,
+        ...(stateEvent ? { event: stateEvent } : {}),
+      });
     }
     if (!this.stateBatchPending) return;
     this.stateBatchPending = false;

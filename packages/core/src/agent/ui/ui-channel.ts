@@ -63,6 +63,16 @@ export interface ConsumeRunOptions {
    */
   summaryGeneration?: number;
   onUpdate?: (messages: TanStackUIMessage[]) => void;
+  /**
+   * Extra staleness check for the run that produced this stream, evaluated per chunk alongside the
+   * session generation.
+   *
+   * The generation only moves on a session switch COMMIT, so a run that was aborted (`Esc`) while a
+   * tool was still resolving kept writing chunks into the channel AFTER the finalize + persist —
+   * in-memory rows the disk never got, and a UI that disagreed with the session file. The caller
+   * that owns the run token answers "is this run still current?".
+   */
+  isStale?: () => boolean;
 }
 
 type ApprovalListener = (request: UIApprovalRequest) => void;
@@ -485,14 +495,25 @@ export class AgentUIChannel {
     // the active message are never mistaken for late/replayed chunks.
     this.historicalMessageIds = new Set(this.getMessages().map((message) => message.id));
 
+    // One staleness predicate for the whole method: the generation alone let a run that was aborted
+    // mid-tool keep writing chunks after its turn had been finalized and persisted.
+    const isStale = (): boolean => generation !== this.sessionGeneration || options.isStale?.() === true;
+    const finishStale = (): TanStackUIMessage[] => {
+      // A run-token stale (an abort) with the SAME session generation still owns this transcript:
+      // run the terminal cleanup, or an empty assistant shell from a first-chunk abort is persisted
+      // and the row spins. A generation change means the transcript was replaced — never touch it.
+      if (generation === this.sessionGeneration) this.finalizeStream();
+      return this.getMessages();
+    };
+
     try {
       for await (const chunk of throwOnRunError(options.stream)) {
-        if (generation !== this.sessionGeneration) return this.getMessages();
+        if (isStale()) return finishStale();
         this.processChunk(chunk, generation);
       }
       // A clear/restore during the stream invalidates finalization too: finalizeStream
       // would strip/attach rows on the transcript that has just replaced this run's.
-      if (generation !== this.sessionGeneration) return this.getMessages();
+      if (isStale()) return finishStale();
       this.finalizeStream();
       return this.getMessages();
     } finally {

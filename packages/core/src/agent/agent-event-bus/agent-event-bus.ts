@@ -355,11 +355,18 @@ export class DefaultAgentEventBus implements AgentEventBus {
   /**
    * Run an interceptable event through the interceptor chain, nearest scope first.
    *
-   * **Cancel semantics:** `return false` / `event.skipDefault` short-circuits the WHOLE chain —
-   * this scope's remaining interceptors AND every ancestor scope's. That is the intended shape for
-   * `tool:before` ("already denied, do not ask anyone else"), but it means a subagent-scoped
-   * interceptor can suppress a parent-scoped one. A handler that only wants to observe must return
-   * `undefined`.
+   * **Cancel semantics:** `return false` / `event.skip = true` (and the deprecated
+   * `event.skipDefault`) short-circuit the WHOLE chain — this scope's remaining interceptors AND
+   * every ancestor scope's — and are normalized into `event.skip`, which is the single field a
+   * consumer reads. That is the intended shape for `tool:before` ("already denied, do not ask
+   * anyone else"), but it means a subagent-scoped interceptor can suppress a parent-scoped one. A
+   * handler that only wants to observe must return `undefined`.
+   *
+   * **Failure semantics:** a handler that throws (or exceeds the budget) is reported and marked with
+   * `event.handlerError`; the chain continues for non-timeout errors so one broken extension cannot
+   * fail every call it touches. It is NOT an approval: gates that must fail closed read the flag
+   * (see `emitToolBeforeHook`). A timeout additionally sets `skip`, because a half-executed handler
+   * may still be running and cannot be asked again.
    *
    * The WHOLE chain is bounded (see `INTERCEPTOR_CHAIN_TIMEOUT_MS`): a hang is reported and the
    * chain stops, so a broken extension cannot freeze the tool call it wraps.
@@ -407,12 +414,14 @@ export class DefaultAgentEventBus implements AgentEventBus {
           const mutable = event as {
             skip?: boolean;
             skipDefault?: boolean;
+            handlerError?: boolean;
             modifiedArgs?: unknown;
             modifiedResult?: unknown;
           };
           mutable.modifiedArgs = undefined;
           mutable.modifiedResult = undefined;
           mutable.skip = true;
+          mutable.handlerError = true;
           break outer;
         }
         let result: unknown;
@@ -443,20 +452,29 @@ export class DefaultAgentEventBus implements AgentEventBus {
             const mutable = event as {
               skip?: boolean;
               skipDefault?: boolean;
+              handlerError?: boolean;
               modifiedArgs?: unknown;
               modifiedResult?: unknown;
             };
             mutable.modifiedArgs = undefined;
             mutable.modifiedResult = undefined;
             mutable.skip = true;
+            mutable.handlerError = true;
             break outer;
           }
+          // Any other throw: the handler that threw produced no verdict. Mark the event so a
+          // fail-closed gate can deny, and keep going — one broken extension must not fail every
+          // call it touches.
+          (event as { handlerError?: boolean }).handlerError = true;
           continue;
         }
-        // `cancel` = return false or set `skipDefault`; stop the chain.
+        // `cancel` = return false, or set `skip` / the deprecated `skipDefault`; stop the chain and
+        // normalize the verdict onto `skip` so consumers read one field.
         if (result === false || (event as { skipDefault?: boolean }).skipDefault) {
+          event.skip = true;
           return undefined;
         }
+        if (event.skip === true) return undefined;
       }
     }
     return (event as { defaultReturn?: T["defaultReturn"] }).defaultReturn;

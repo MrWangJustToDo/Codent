@@ -1620,9 +1620,14 @@ export class ExtensionRunner {
       } catch (err) {
         // Contained here rather than only at the bus: the bus isolates the throw but cannot say
         // *which* extension owns the handler, so the log row would name a pattern instead of the
-        // extension a user can disable. Returning `undefined` keeps the chain going (a throwing
-        // interceptor is not a veto).
+        // extension a user can disable.
+        //
+        // Returning `undefined` keeps the chain going, but it is NOT an approval: the handler's
+        // verdict is unknown, so the event carries `handlerError` and a fail-closed gate (the
+        // `tool:before:*` tool gate) reads it as a deny. Without the flag a throwing gate silently
+        // allowed every tool it matched.
         this.reportInterceptorFailure(extensionId, pattern, event.type, err);
+        event.handlerError = true;
         return undefined;
       }
     };

@@ -29,7 +29,11 @@ export {
 // stage order, deny precedence and fail-closed default against the real composer.
 export { authorizeToolCall } from "./agent/approval/authorize-tool-call.js";
 // `tool:before:*` runs once per call across the pipeline and the execution middleware.
-export { emitToolBeforeHook, ToolBeforeHookLedger } from "./agent/extension/tool-before-hook.js";
+export {
+  emitToolBeforeHook,
+  TOOL_GATE_FAILED_REASON,
+  ToolBeforeHookLedger,
+} from "./agent/extension/tool-before-hook.js";
 export { classifyShell, isShellParsable } from "./agent/tools/builtin/shell/safety/command-parser.js";
 export { tokenizeCommandString } from "./agent/tools/builtin/shell/safety/command-tokenizer.js";
 export { walkTree, formatAsTree } from "./agent/tools/builtin/fs/tree-tool.js";

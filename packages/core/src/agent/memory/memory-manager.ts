@@ -310,6 +310,18 @@ export class MemoryManager {
   }
 
   /**
+   * Flush a pending debounced index refresh, if one is queued. A no-op otherwise.
+   *
+   * {@link dispose} CANCELS the timer, so a write made in the debounce window never reached
+   * MEMORY.md when teardown simply disposed the manager. The async teardown awaits this first —
+   * while it is still safe to await — and only then disposes.
+   */
+  async flushPendingIndex(): Promise<void> {
+    if (!this.refreshTimeout) return;
+    await this.flushIndex();
+  }
+
+  /**
    * Immediately refresh the index, cancelling any pending debounced refresh.
    * Use after batch operations (extraction, consolidation) to ensure
    * `getIndexContent()` reflects the latest state before reading.

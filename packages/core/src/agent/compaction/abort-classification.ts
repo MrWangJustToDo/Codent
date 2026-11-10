@@ -11,14 +11,13 @@
  * summarizer boundary raises (which it does when the subagent reports `aborted`).
  */
 
+import { abortError } from "../../runtime-types/abort.js";
+
 const COMPACTION_CANCEL_CODE = "compaction_cancel";
 
 /** Build the tagged cancel error raised by the summarizer boundary. */
 export function compactionAbortError(): Error {
-  const error = new Error("Compaction summarization aborted");
-  error.name = "AbortError";
-  (error as { code?: string }).code = COMPACTION_CANCEL_CODE;
-  return error;
+  return abortError("Compaction summarization aborted", { code: COMPACTION_CANCEL_CODE });
 }
 
 /** Whether a compaction throw is a user/session cancel rather than a failure. */

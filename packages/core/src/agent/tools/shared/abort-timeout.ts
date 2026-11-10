@@ -12,6 +12,7 @@
  */
 
 import { ExecutionError } from "../../../env/types";
+import { abortError } from "../../../runtime-types/abort.js";
 import { TOOL_CANCELLED_MESSAGE } from "../../stream/incomplete-tool-calls.js";
 
 export function createTimeoutAbort(options: { timeoutMs: number; signal?: AbortSignal }): {
@@ -83,11 +84,8 @@ export async function withTimeoutAbort<T>(
   const asAbortError = (): Error => {
     // The shared message, not a copy: after TanStack wraps the throw as `{ error: message }`,
     // message equality is the only signal left (name/code are lost), so the literal and
-    // `isCancelledToolCall` must not be able to drift.
-    const error = new Error(TOOL_CANCELLED_MESSAGE);
-    error.name = "AbortError";
-    (error as Error & { code?: string }).code = "aborted";
-    return error;
+    // `isCancelledToolCall` must not be able to drift. The shape comes from the one constructor.
+    return abortError(TOOL_CANCELLED_MESSAGE);
   };
 
   const reasonFor = (): Error => {

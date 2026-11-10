@@ -65,7 +65,7 @@ export function createCodeRewriteTool(deps: CodeRewriteToolDeps) {
         compiled = await compilePattern(params.pattern ?? "", params.language ?? "", deps.treeSitter);
       } catch (err) {
         const msg = errorMessage(err);
-        return { text: `Error: ${msg}`, matchCount: 0, filesModified: 0, dryRun: isDryRun };
+        return { text: `Error: ${msg}`, ok: false, matchCount: 0, filesModified: 0, dryRun: isDryRun };
       }
 
       if (!deps.treeSitter.available()) {
@@ -77,7 +77,7 @@ export function createCodeRewriteTool(deps: CodeRewriteToolDeps) {
         };
       }
       if (!compiled) {
-        return { text: "Failed to compile pattern.", matchCount: 0, filesModified: 0, dryRun: isDryRun };
+        return { text: "Failed to compile pattern.", ok: false, matchCount: 0, filesModified: 0, dryRun: isDryRun };
       }
 
       // Validate that replacement references only known metavars

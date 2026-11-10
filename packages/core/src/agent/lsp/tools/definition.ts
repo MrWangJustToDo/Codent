@@ -101,7 +101,7 @@ export function createDefinitionTool(deps: DefinitionToolDeps) {
       const filePath = normalizeLspPath(params.path) ?? "";
 
       const pos = await resolvePosition(deps.manager, filePath, params, { signal: options?.abortSignal });
-      if (pos.error) return { text: pos.error, count: 0 };
+      if (pos.error) return { text: pos.error, ok: false, count: 0 };
       const { line, character, resolvedFrom } = pos;
 
       const client = await deps.manager.getClientForFile(filePath).catch(() => null);
@@ -142,7 +142,7 @@ export function createDefinitionTool(deps: DefinitionToolDeps) {
           return { text: withResolved(resolvedFrom, text), count: locations.length };
         } catch (err) {
           const msg = errorMessage(err);
-          return { text: `LSP definition request failed: ${msg}`, count: 0 };
+          return { text: `LSP definition request failed: ${msg}`, ok: false, count: 0 };
         }
       }
 

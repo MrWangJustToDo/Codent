@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { emitToolBeforeHook, ToolBeforeHookLedger } from "../dist/dev.mjs";
+import { emitToolBeforeHook, TOOL_GATE_FAILED_REASON, ToolBeforeHookLedger } from "../dist/dev.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const srcRoot = resolve(here, "../src");
@@ -62,6 +62,55 @@ const srcRoot = resolve(here, "../src");
   });
   assert.equal(emitted, 1);
   assert.deepEqual(outcome, { skip: true, reason: "no writes", modifiedArgs: { path: "/tmp/x" } });
+}
+
+// --- a gate that FAILED is a refusal, not an approval -----------------------
+{
+  // `handlerError` is what the bus (and the runner's wrapper) sets when an interceptor threw: the
+  // verdict is unknown. Reading only `skip` approved every call a broken gate matched.
+  const runner = {
+    getEventBus: () => ({
+      intercept: async (event) => {
+        event.handlerError = true;
+      },
+    }),
+  };
+  const outcome = await emitToolBeforeHook(runner, { toolCallId: "call-3", toolName: "write_file", args: {} });
+  assert.equal(outcome.skip, true, "a failed gate denies");
+  assert.equal(outcome.reason, TOOL_GATE_FAILED_REASON, "and says why, so the denial row is not empty");
+}
+
+// --- an explicit skip keeps the handler's own reason ------------------------
+{
+  const runner = {
+    getEventBus: () => ({
+      intercept: async (event) => {
+        event.skip = true;
+        event.handlerError = true;
+        event.reason = "handler verdict wins";
+      },
+    }),
+  };
+  const outcome = await emitToolBeforeHook(runner, { toolCallId: "call-4", toolName: "write_file", args: {} });
+  assert.equal(outcome.skip, true);
+  assert.equal(outcome.reason, "handler verdict wins", "an explicit reason is not replaced by the failure text");
+}
+
+// --- a TIMEOUT (skip + handlerError, no reason) still names the failure ------
+{
+  // The bus sets both flags on a chain timeout and clears the rewrites. Reading only `skip` made
+  // this look like a deliberate extension veto, so the denial row never said the gate failed.
+  const runner = {
+    getEventBus: () => ({
+      intercept: async (event) => {
+        event.skip = true;
+        event.handlerError = true;
+      },
+    }),
+  };
+  const outcome = await emitToolBeforeHook(runner, { toolCallId: "call-5", toolName: "write_file", args: {} });
+  assert.equal(outcome.skip, true, "a timed-out gate denies");
+  assert.equal(outcome.reason, TOOL_GATE_FAILED_REASON, "the timeout is reported as a gate failure, not a veto");
 }
 
 // --- production wiring: one ledger, both seams use it -----------------------

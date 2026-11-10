@@ -45,6 +45,8 @@ export interface ConsumeAgentStreamOptions {
   compactEpoch?: string;
   summaryGeneration?: number;
   onUpdate?: (messages: UIMessage[]) => void;
+  /** Run-ownership check forwarded to the channel (see `ConsumeRunOptions.isStale`). */
+  isStale?: () => boolean;
 }
 
 /**
@@ -61,6 +63,7 @@ export async function consumeAgentStream(options: ConsumeAgentStreamOptions): Pr
     compactEpoch,
     summaryGeneration,
     onUpdate,
+    isStale,
   } = options;
 
   if (!channel) {
@@ -76,6 +79,7 @@ export async function consumeAgentStream(options: ConsumeAgentStreamOptions): Pr
     compactEpoch,
     summaryGeneration,
     onUpdate,
+    isStale,
   })) as UIMessage[];
 }
 
@@ -105,6 +109,11 @@ export interface RunAgentOnceOptions {
   compactEpoch?: string;
   summaryGeneration?: number;
   onUpdate?: (messages: UIMessage[]) => void;
+  /**
+   * "Is the run that produced this stream still the current one?" Checked per chunk, so an aborted
+   * run whose stream resolves late cannot keep writing into the transcript.
+   */
+  isStale?: () => boolean;
   /** Optional wrapper (e.g. finish-reason capture). Applied before consume. */
   transformStream?: (stream: AsyncIterable<StreamChunk>) => AsyncIterable<StreamChunk>;
   /**
@@ -139,6 +148,7 @@ export async function runAgentOnce(options: RunAgentOnceOptions): Promise<RunAge
     compactEpoch,
     summaryGeneration,
     onUpdate,
+    isStale,
     transformStream,
     outcome,
   } = options;
@@ -170,6 +180,7 @@ export async function runAgentOnce(options: RunAgentOnceOptions): Promise<RunAge
     compactEpoch,
     summaryGeneration,
     onUpdate,
+    isStale,
   });
 
   if (outcome) {

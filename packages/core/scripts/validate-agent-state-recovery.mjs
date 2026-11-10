@@ -427,6 +427,30 @@ const CHUNK = { type: "REASONING_MESSAGE_CONTENT", delta: "hmm" };
   assert.equal(statuses.length, before, "an empty batch emits nothing");
 }
 
+// The merged row is attributed to the transition that produced it — and a later move with NO
+// event must not inherit an older one.
+{
+  const agent = await makeAgent("state-batch-attribution");
+  const rows = [];
+  agent
+    .getEventBus()
+    .on(
+      "agent:status",
+      (event) => rows.push({ from: event.payload.from, to: event.payload.to, event: event.payload.event }),
+      {
+        replay: false,
+      }
+    );
+
+  agent.beginStateBatch();
+  agent.transitionStatus({ type: "prepare" }); // names `prepare`
+  agent.setStatus("completed"); //               legacy writer: moves the status with NO event
+  agent.endStateBatch();
+
+  assert.equal(rows.length, 1, "one net row");
+  assert.deepEqual(rows[0], { from: "idle", to: "completed", event: undefined }, "no stale event attribution");
+}
+
 for (const manager of managers) {
   await manager.dispose().catch(() => {});
 }

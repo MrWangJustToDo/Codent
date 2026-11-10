@@ -68,7 +68,7 @@ import { AGENT_EVENT_META, createAgentEventBus } from "../dist/dev.mjs";
 }
 
 // ============================================================================
-// 4. Interceptor: cancel short-circuits and returns undefined
+// 4. Interceptor: cancel short-circuits, is normalized onto `skip`, returns undefined
 // ============================================================================
 {
   const bus = createAgentEventBus();
@@ -78,13 +78,62 @@ import { AGENT_EVENT_META, createAgentEventBus } from "../dist/dev.mjs";
     secondRan = true;
   });
 
-  const result = await bus.intercept({
+  const event = {
     type: "tool:before:run_command",
     payload: { args: {} },
     defaultReturn: "default",
-  });
+  };
+  const result = await bus.intercept(event);
   assert.equal(secondRan, false, "cancel stops the chain");
   assert.equal(result, undefined, "cancel returns undefined");
+  // The gate reads `skip`, and `emitToolBeforeHook` is the gate. `return false` used to stop the
+  // chain while leaving `skip` false, so a documented denial executed the tool and reported success.
+  assert.equal(event.skip, true, "`return false` is the same verdict as `event.skip = true`");
+}
+
+// ============================================================================
+// 4b. Interceptor: an explicit `skip` also stops the chain
+// ============================================================================
+{
+  const bus = createAgentEventBus();
+  let secondRan = false;
+  bus.onIntercept("tool:before:*", (event) => {
+    event.skip = true;
+    event.reason = "no writes";
+    return undefined;
+  });
+  bus.onIntercept("tool:before:*", () => {
+    secondRan = true;
+  });
+
+  const event = { type: "tool:before:write_file", payload: { args: {} }, defaultReturn: undefined };
+  await bus.intercept(event);
+  assert.equal(secondRan, false, "a handler that set `skip` stops the chain like `return false`");
+  assert.equal(event.reason, "no writes", "the reason survives for the denial row");
+}
+
+// ============================================================================
+// 4c. Interceptor: a throw is reported, does NOT stop the chain, and marks the event
+// ============================================================================
+{
+  const reported = [];
+  const bus = createAgentEventBus("root", (info) => reported.push(info));
+  let secondRan = false;
+  bus.onIntercept("tool:before:*", () => {
+    throw new Error("gate boom");
+  });
+  bus.onIntercept("tool:before:*", () => {
+    secondRan = true;
+  });
+
+  const event = { type: "tool:before:run_command", payload: { args: {} }, defaultReturn: undefined };
+  await bus.intercept(event);
+  assert.equal(secondRan, true, "one broken gate must not starve the rest of the chain");
+  assert.equal(reported.length, 1, "the failure is reported");
+  // The verdict is UNKNOWN, not an approval: the gate denies on this flag. Without it a throwing
+  // deny-hook silently allowed every tool it matched.
+  assert.equal(event.handlerError, true, "a throwing interceptor marks `handlerError`");
+  assert.notEqual(event.skip, true, "the bus does not invent a veto the handler never gave");
 }
 
 // ============================================================================

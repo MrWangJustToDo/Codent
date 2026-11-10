@@ -52,7 +52,7 @@ export function createHoverTool(deps: HoverToolDeps) {
       const filePath = normalizeLspPath(params.path) ?? "";
 
       const pos = await resolvePosition(deps.manager, filePath, params, { signal: options?.abortSignal });
-      if (pos.error) return { text: pos.error, hasResult: false };
+      if (pos.error) return { text: pos.error, ok: false, hasResult: false };
       const { line, character, resolvedFrom } = pos;
 
       const client = await deps.manager.getClientForFile(filePath).catch(() => null);
@@ -75,7 +75,7 @@ export function createHoverTool(deps: HoverToolDeps) {
           return { text: withResolved(resolvedFrom, formatHoverContent(hover)), hasResult: true };
         } catch (err) {
           const msg = errorMessage(err);
-          return { text: `LSP hover request failed: ${msg}`, hasResult: false };
+          return { text: `LSP hover request failed: ${msg}`, ok: false, hasResult: false };
         }
       }
 

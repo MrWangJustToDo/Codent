@@ -51,7 +51,7 @@ export function createCodeSearchTool(deps: CodeSearchToolDeps) {
         compiled = await compilePattern(params.pattern ?? "", params.language ?? "", deps.treeSitter);
       } catch (err) {
         const msg = errorMessage(err);
-        return { text: `Error: ${msg}`, matchCount: 0, filesSearched: 0 };
+        return { text: `Error: ${msg}`, ok: false, matchCount: 0, filesSearched: 0 };
       }
 
       if (!deps.treeSitter.available()) {
@@ -62,7 +62,7 @@ export function createCodeSearchTool(deps: CodeSearchToolDeps) {
         };
       }
       if (!compiled) {
-        return { text: "Failed to compile pattern.", matchCount: 0, filesSearched: 0 };
+        return { text: "Failed to compile pattern.", ok: false, matchCount: 0, filesSearched: 0 };
       }
 
       const matches = await searchFiles(compiled, rootDir, deps.treeSitter, deps.env, {

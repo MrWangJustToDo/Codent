@@ -13,7 +13,7 @@ import { clearTaskRuns } from "../agent/subagent/subagent-runs.js";
 import { SUBAGENT_ABORT_REASONS } from "../agent/subagent/subagent-stop-reason.js";
 import { errorMessage } from "../utils/errors.js";
 
-import { releaseAgentResources } from "./teardown-resources.js";
+import { forceKillMcpChildren, releaseAgentResources } from "./teardown-resources.js";
 
 import type { AgentRegistry } from "./agent-registry.js";
 import type { AgentLog } from "../agent/agent-log/agent-log.js";
@@ -74,9 +74,13 @@ export class LifecycleCoordinator {
     // (transcript, runner, tool registry, log sink) until the next connect, because nothing ever
     // passed `undefined` to `setUIChannel`.
     attempt(() => managedAgent.setUIChannel(undefined));
-    // The process-level resources (MCP children, memory index debounce, todo auto-clear) — the same
-    // list the bootstrap-failure path releases. Best-effort inside.
-    releaseAgentResources(managedAgent);
+    // The MCP children are killed SYNCHRONOUSLY here — a host that exits without settling the async
+    // teardown must not orphan them (`validate:lifecycle-coordinator` asserts the kill is already
+    // recorded when `destroy` returns). The rest of the resource list (memory index debounce, todo
+    // auto-clear) is released in the async teardown, AFTER the extensions: `session:shutdown` and
+    // every `deactivate` is where an extension lands final work, and disposing those managers first
+    // left every hook reading a dead manager.
+    attempt(() => forceKillMcpChildren(managedAgent));
 
     // Before the abort: the compaction `finally` and any queued pump unwind asynchronously and must
     // see "destroyed", not "stopped", or they resume a run on an agent that is being removed.
@@ -169,19 +173,30 @@ export class LifecycleCoordinator {
         if (runner) {
           // Awaited: the shutdown hook is how an extension lands final work, and the teardown
           // below unregisters its interceptor — so it must not still be running.
-          await runner.emitSessionShutdown(id);
-          await runner.destroyAll();
+          //
+          // TWO bounded steps, not one: the shutdown callback is itself bounded at
+          // `EXTENSION_CALLBACK_TIMEOUT_MS`, equal to this wrapper's budget, so a single outer
+          // `settleStep` could time out first and skip `destroyAll()` entirely — leaking every
+          // extension's tools, interceptors and lease for the life of the process.
+          await settleStep("extension shutdown", () => runner.emitSessionShutdown(id));
+          await settleStep("extension teardown", () => runner.destroyAll());
         }
       } catch {
         // Teardown failures are reported per phase on the bus; continue to cleanup.
       }
 
-      try {
-        // Kill this agent's background work so a disposed runtime does not leak child processes.
-        await managedAgent.destroyBackgroundWork();
-      } catch {
-        // A failed job teardown must not skip the log flush below.
-      }
+      // Land a debounced memory-index refresh before the manager is disposed: `dispose()` cancels
+      // the timer, so without this a write made in the last 100ms before teardown never reached
+      // MEMORY.md. A no-op when nothing is pending.
+      await settleStep("memory index flush", () => managedAgent.getMemoryManager?.()?.flushPendingIndex?.());
+      // Extensions are gone (their `session:shutdown` / `deactivate` already ran), so the debounced
+      // index and the todo auto-clear can be cancelled without cutting off a hook.
+      releaseAgentResources(managedAgent);
+
+      // Kill this agent's background work so a disposed runtime does not leak child processes.
+      // Bounded like every other external step: a job that ignores its kill used to make
+      // `settleTeardowns()` — and therefore `dispose()` — never resolve.
+      await settleStep("background work teardown", () => managedAgent.destroyBackgroundWork());
 
       // Close first: it waits both the serialized queue and direct pendingSaves (e.g. the async
       // title write) and refuses new writes. `awaitPersistIdle` alone only covers the queue.
@@ -192,11 +207,9 @@ export class LifecycleCoordinator {
       await settleStep("session persist drain", () => managedAgent.session?.awaitPersistIdle?.());
 
       try {
-        // Land buffered teardown/abort entries before the sink is dropped. Awaited: on a
-        // remote CoreEnv the final batch can only be written asynchronously.
-        await managedAgent.flushLogOnDestroy();
-      } catch {
-        // The process is going away; a failed flush cannot be retried here.
+        // Land buffered teardown/abort entries before the sink is dropped. Bounded: on a remote
+        // CoreEnv the final batch is a real HTTP call, and an unbounded flush hung `dispose()`.
+        await settleStep("log flush", () => managedAgent.flushLogOnDestroy());
       } finally {
         // Release ownership only after producers stopped, writes drained, and the log
         // flushed. Releasing at the top let a new resume claim the id while this
@@ -209,6 +222,14 @@ export class LifecycleCoordinator {
         }
         this.deps.ownership.releaseAllFor(id);
         this.deps.releaseLog?.(id);
+        // Idempotent backstop: the synchronous kill at the top of `destroy` already covered a host
+        // that exits before teardowns settle. This second pass covers a child registered by a late
+        // async producer during the teardown window, and is a no-op when the maps are empty.
+        try {
+          managedAgent.getMcpManager()?.forceKill();
+        } catch {
+          // Best-effort: the process may already be going away.
+        }
       }
     })();
     this.trackTeardown(teardown);

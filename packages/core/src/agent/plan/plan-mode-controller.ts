@@ -15,6 +15,20 @@ export type PlanModePhase = "off" | "planning" | "ready" | "executing" | "retro"
 /** Todo set title used when plan steps are seeded into {@link TodoManager}. */
 export const PLAN_TODO_TITLE = "Plan";
 
+/**
+ * The ONLY plan-execution auto-approval rule.
+ *
+ * `phase ∈ {executing, retro}` AND a seeded todo list — both halves are required: a phase stuck
+ * without the seeded list must not bypass approval, and a review (`ready`) phase must never inherit
+ * an earlier execution's approval. Every reader derives from here (the authorization snapshot, the
+ * `ModeState` projection, this controller's own accessor), because three independent copies of the
+ * condition meant a change had to be found in all three or the tool set and the approval verdict
+ * disagreed.
+ */
+export function planExecutionAutoApproves(phase: PlanModePhase, todosSeeded: boolean): boolean {
+  return (phase === "executing" || phase === "retro") && todosSeeded;
+}
+
 export interface PlanModeState {
   phase: PlanModePhase;
   planMarkdown: string | null;
@@ -149,7 +163,7 @@ export class PlanModeController {
    * approval (see `validate:plan-session`).
    */
   shouldAutoApproveTools(): boolean {
-    return (this.phase === "executing" || this.phase === "retro") && this.todosSeeded;
+    return planExecutionAutoApproves(this.phase, this.todosSeeded);
   }
 
   /**

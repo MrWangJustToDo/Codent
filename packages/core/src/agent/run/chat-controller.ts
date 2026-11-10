@@ -947,21 +947,6 @@ export class AgentChatController {
   }
 
   private async pumpToolPhases(options: { startsNewTurn?: boolean } = {}): Promise<void> {
-    // Admission. A pump queued while another one was live can arrive AFTER that pump finished the
-    // turn — an approval answered during `applyCommandSafetyPolicy` (an awaited CoreEnv call), or
-    // an auto-mode batch landing late. Starting it anyway flips `completed` back to `running` and
-    // spends a whole model call re-asking a transcript that already has its answer.
-    //
-    // Skip only a SETTLED transcript: one that ends in the model's reply. Everything that
-    // legitimately continues passes — a new user message (the transcript ends with it), a settled
-    // tool turn with no reply or a deferred/answered tool (`shouldKeepPumping`), any queued input
-    // (`hasQueuedMessages`), and a wake (no prompt, so it passes by flag).
-    const transcript = this.channel.getMessages();
-    const settled = transcript.at(-1)?.role === "assistant";
-    if (!options.startsNewTurn && settled && !this.shouldKeepPumping(transcript)) return;
-    const epoch = this.lifecycleEpoch;
-    const token = this.managed.run.beginRun();
-    this.currentToken = token;
     const turnStart = Date.now();
 
     // Defaults, because the baselines below now live inside the guard: if one throws before it
@@ -977,13 +962,36 @@ export class AgentChatController {
     let hasError = false;
     let toolPhases = 0;
     let finalized = false;
+    // Owned by the guard: admission is failable too, and it used to sit OUTSIDE the try — a throw
+    // there reached only `enqueueRunOnce`'s catch, which sets an error and finalizes nothing. The
+    // user message was already persisted, so the transcript kept half a run with no `agent:stop` and
+    // no `turn:summary`. `null` means "no run began", which the catch still finalizes.
+    let token: RunToken | null = null;
 
-    // Everything that can throw belongs INSIDE the guard — including the depth bookkeeping and the
-    // `turn:summary` baselines, not just the phases. A throw from the setup below used to skip the
-    // `finally` entirely — `pumpDepth` stuck above 0, the token still valid, every later message
-    // queued with nothing to drain it — and surfaced as an unhandled rejection from
+    // Everything that can throw belongs INSIDE the guard — including admission, the depth
+    // bookkeeping and the `turn:summary` baselines, not just the phases. A throw from the setup below
+    // used to skip the `finally` entirely — `pumpDepth` stuck above 0, the token still valid, every
+    // later message queued with nothing to drain it — and surfaced as an unhandled rejection from
     // `enqueueRunOnce` (which callers fire with `void`). The catch then finalizes as `error`.
     try {
+      // Admission. A pump queued while another one was live can arrive AFTER that pump finished the
+      // turn — an approval answered during `applyCommandSafetyPolicy` (an awaited CoreEnv call), or
+      // an auto-mode batch landing late. Starting it anyway flips `completed` back to `running` and
+      // spends a whole model call re-asking a transcript that already has its answer.
+      //
+      // Skip only a SETTLED transcript: one that ends in the model's reply. Everything that
+      // legitimately continues passes — a new user message (the transcript ends with it), a settled
+      // tool turn with no reply or a deferred/answered tool (`shouldKeepPumping`), any queued input
+      // (`hasQueuedMessages`), and a wake (no prompt, so it passes by flag).
+      const transcript = this.channel.getMessages();
+      const settled = transcript.at(-1)?.role === "assistant";
+      if (!options.startsNewTurn && settled && !this.shouldKeepPumping(transcript)) return;
+      const epoch = this.lifecycleEpoch;
+      // Local const for the body: keeps TS narrowing across the awaits, while the outer `token`
+      // stays nullable for the catch/finally.
+      const runToken = this.managed.run.beginRun();
+      token = runToken;
+      this.currentToken = runToken;
       this.pumpDepth += 1;
       // Baselines for `turn:summary`: the summary reports THIS pump's work, not the session totals.
       usageAtStart = this.managed.usage.snapshotTotal();
@@ -1008,7 +1016,7 @@ export class AgentChatController {
 
       for (let toolPhase = 0; toolPhase < MAX_TOOL_PHASES; toolPhase++) {
         if (hasError) break;
-        if (!token.isCurrent || epoch !== this.lifecycleEpoch) return;
+        if (!runToken.isCurrent || epoch !== this.lifecycleEpoch) return;
 
         // Repair a settled background task whose part the previous phase's batched tool result
         // overwrote. This is the one boundary that is always after that write and always before the
@@ -1047,7 +1055,7 @@ export class AgentChatController {
           this.managed.markNextPrepareAsNewTurn();
         }
 
-        await this.executeStream(currentMessages, token);
+        await this.executeStream(currentMessages, runToken);
         toolPhases = toolPhase + 1;
         if (this.pumpBaselines) this.pumpBaselines.phases = toolPhases;
         if (epoch !== this.lifecycleEpoch) return;
@@ -1055,7 +1063,7 @@ export class AgentChatController {
         if (this.managed.getStatus() === "error") {
           hasError = true;
         }
-        if (!token.isCurrent) {
+        if (!runToken.isCurrent) {
           // Stream may have finalized truncated tool args after Esc — cancel again, but keep a
           // pending `ask_user` answerable (same rule as `interruptCurrentRun`).
           this.applyCancelledIncompleteTools(true, { cause: "abort" });
@@ -1074,7 +1082,7 @@ export class AgentChatController {
         if (!this.shouldKeepPumping(after)) break;
       }
 
-      if (token.isCurrent) {
+      if (runToken.isCurrent) {
         this.syncPlanModeFromMessages();
         let messages = this.channel.getMessages();
         let waitingForUser = hasPendingInteraction(messages);
@@ -1140,31 +1148,37 @@ export class AgentChatController {
       // an error instead; a broken auxiliary step must not take the process with it.
       const normalized = toError(error);
       const message = normalized.message;
-      if (!finalized && token.isCurrent) {
+      // `token === null` = admission threw before any run began. There is no turn to close: a
+      // `finalizeChat` here would report the session-lifetime baselines (usage/cost/toolCalls are
+      // still zero) as this turn's summary, and emit a turn boundary that never opened. Surface the
+      // failure as a status/error row only; the user message is already persisted.
+      if (!finalized && (token === null || token.isCurrent)) {
         try {
           this.managed.setError(message);
           // One row: `onRunError` already emits `agent:stream-error`. The separate emit above it
           // produced two identical "Stream error: …" entries for one failure.
           this.managed.statusController.onRunError(message, normalized.stack);
-          // Same terminal rule as the normal path: an error is not a wait.
-          this.approvalDecisions.denyPendingApprovals(TOOL_CANCELLED_MESSAGE);
-          // …and it owes no tool result either. Without this the catch path finalized with a held
-          // `input-complete` call still on the wire, so the next turn executed it. A pending
-          // `ask_user` is the exception, exactly as on the normal path: the failure did not answer
-          // the user's question, and cancelling it would make the session unanswerable.
-          const stillWaiting = hasPendingInteraction(this.channel.getMessages());
-          if (!stillWaiting) this.applyCancelledIncompleteTools(true, { cause: "stream-error" });
-          this.managed.runFinalizer.finalizeChat({
-            kind: "error",
-            messages: this.channel.getMessages(),
-            waitingForUser: stillWaiting,
-            phases: toolPhases,
-            turnStartedAt: turnStart,
-            usageBefore: usageAtStart,
-            costBefore: costAtStart,
-            toolCallsBefore: toolCallsAtStart,
-            persist: () => this.persistMessages("pump-complete"),
-          });
+          if (token !== null) {
+            // Same terminal rule as the normal path: an error is not a wait.
+            this.approvalDecisions.denyPendingApprovals(TOOL_CANCELLED_MESSAGE);
+            // …and it owes no tool result either. Without this the catch path finalized with a held
+            // `input-complete` call still on the wire, so the next turn executed it. A pending
+            // `ask_user` is the exception, exactly as on the normal path: the failure did not answer
+            // the user's question, and cancelling it would make the session unanswerable.
+            const stillWaiting = hasPendingInteraction(this.channel.getMessages());
+            if (!stillWaiting) this.applyCancelledIncompleteTools(true, { cause: "stream-error" });
+            this.managed.runFinalizer.finalizeChat({
+              kind: "error",
+              messages: this.channel.getMessages(),
+              waitingForUser: stillWaiting,
+              phases: toolPhases,
+              turnStartedAt: turnStart,
+              usageBefore: usageAtStart,
+              costBefore: costAtStart,
+              toolCallsBefore: toolCallsAtStart,
+              persist: () => this.persistMessages("pump-complete"),
+            });
+          }
         } catch {
           // Teardown is already failing; one more failure must not escape the pump.
         }
@@ -1173,7 +1187,7 @@ export class AgentChatController {
       // A non-current (interrupted/superseded) pump must not decrement: the
       // interrupt owner already reset depth to 0, and the decrement would
       // otherwise steal depth from a newer pump. No Math.max guard needed.
-      if (token.isCurrent) {
+      if (token !== null && token.isCurrent) {
         // Only the CURRENT pump may release the baselines: an interrupted pump already handed them
         // to `finalizeChat` (or cleared them), and a superseded one must not clear a newer pump's.
         this.pumpBaselines = null;
@@ -1232,6 +1246,10 @@ export class AgentChatController {
       channel: this.channel,
       flagEmptyStream: true,
       abortErrorAsCancel: false,
+      // Stop writing the moment this run stops being the current one. Without it an abort that
+      // landed while a tool was still resolving let the stream keep appending to the channel AFTER
+      // `finalizeChat` persisted the turn — rows the session file never received.
+      isStale: () => !token.isCurrent,
       onAbort: applyAbortFallback,
       onAbortError: (message) => {
         if (isStaleSession() || !token.isCurrent || this.managed.getStatus() === "aborted") return;

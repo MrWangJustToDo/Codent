@@ -33,6 +33,31 @@ export function isAbortError(err: unknown, signal?: AbortSignal | null): boolean
 }
 
 /**
+ * The ONE way to construct an abort-shaped `Error`.
+ *
+ * Four modules used to build this by hand (`abort-timeout`, `compaction/abort-classification`,
+ * `extension-completion`, `code-mode`), and two of them set only `name` — so `isAbortError` (which
+ * matches name, code, or the word in the message) classified a tool deadline as a user cancel
+ * depending on which producer threw. Keeping the constructor beside the predicate means the shape
+ * that is written and the shape that is recognized cannot drift.
+ *
+ * `code` defaults to `"aborted"`; a caller with a stricter vocabulary (compaction's
+ * `isCompactionCancel`) passes its own and keeps it.
+ */
+export function abortError(message: string, options: AbortErrorOptions = {}): Error {
+  const error = new Error(message, options.cause === undefined ? undefined : { cause: options.cause });
+  error.name = "AbortError";
+  (error as Error & { code?: string }).code = options.code ?? "aborted";
+  return error;
+}
+
+export interface AbortErrorOptions {
+  /** Structured code for consumers that branch on it (default `"aborted"`). */
+  code?: string;
+  cause?: unknown;
+}
+
+/**
  * Is this error a deadline expiry rather than a user abort or a plain failure?
  *
  * The counterpart to {@link isAbortError}, kept beside it because they answer the same question

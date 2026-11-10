@@ -40,6 +40,13 @@ const ALLOWED = new Map([
   ["managers/services/agent-tool-service.ts", "registration passes the declaration through"],
   ["agent/approval/tool-approval-table.ts", "transcript part → approval row projection"],
   ["agent/approval/tool-authorization.ts", "transcript approval state (gated? denied?), not the tool declaration"],
+  // Transcript projections, not policy reads: each one looks at `part.approval.needsApproval` (or a
+  // tool PRESENTATION record already derived from it) to render or resume a call. They cannot
+  // disagree with the gate because they never decide it — the same reason
+  // `agent/approval/tool-authorization.ts` is allowed.
+  ["agent/run/chat-controller.ts", "transcript part → parked-approval set (which calls are gated)"],
+  ["managers/middleware/approval-resume-middleware.ts", "transcript part → resume the gated calls"],
+  ["agent/log/event-log-rules.ts", "tool-presentation record → log summary text"],
   ["agent/tools/presentation/state.ts", "UI projection"],
   ["agent/stream/apply-tool-denial-reason.ts", "message projection equality"],
   ["agent/stream/incomplete-tool-calls.ts", "transcript projection"],

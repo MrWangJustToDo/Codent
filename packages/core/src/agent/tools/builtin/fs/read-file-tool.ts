@@ -135,6 +135,11 @@ export const createReadFileTool = ({ usage }: { usage?: UsageTracker } = {}) => 
   return defineServerTool({
     name: "read_file",
     present: { category: "reads" },
+    // Declared, not just described: this is the only content tool that returned an unshaped object,
+    // so the "every tool has `cachedOutputPath`" contract and the host-side output shape had nothing
+    // to check against. The variants below match the four shapes `execute` returns (duration and
+    // `cachedOutputPath` come from `withDuration`).
+    outputSchema: readFileOutputSchema,
     description: `Read the contents of a file or directory.
 
 Supports multiple file types:

@@ -134,6 +134,29 @@ export interface InterceptableEvent<TPayload = unknown, TReturn = unknown> {
   type: string;
   payload: TPayload;
   defaultReturn?: TReturn;
+  /**
+   * Cancellation verdict: the action this event guards must not happen.
+   *
+   * Set it explicitly (`event.skip = true`) or by returning `false` from the interceptor — the bus
+   * normalizes both into this field, so there is ONE way to read a veto. The chain stops on it for
+   * EVERY event type; only `tool:before:*` turns it into a denied tool call, so an observe-only
+   * hook must not set it.
+   */
+  skip?: boolean;
+  /** Why, when `skip` is set. Surfaces in the tool result the model sees and in the log row. */
+  reason?: string;
+  /**
+   * Set by the bus when an interceptor threw or exceeded the chain budget: that handler's verdict is
+   * **unknown**, which is not an approval. Gates that must fail closed (the `tool:before:*` tool
+   * gate) read this; observe-only hooks can ignore it.
+   *
+   * Sticky for the event: there is no "clear" path, because a later handler cannot prove the failed
+   * one would have allowed the call. A `tool:before:*` observer that throws therefore denies every
+   * call it matches — intentional fail-closed behaviour, and the reason a hook should contain its
+   * own errors when it is only observing.
+   */
+  handlerError?: boolean;
+  /** @deprecated use {@link skip}. Kept so existing extensions keep compiling; normalized by the bus. */
   skipDefault?: boolean;
 }
 

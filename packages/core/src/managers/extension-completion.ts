@@ -12,6 +12,7 @@ import { createTextAdapter } from "../models/adapter/adapter-factory.js";
 import { runSideTextQuery } from "../models/adapter/side-text-query.js";
 import { DEFAULT_BASE_URLS, trimBaseURL } from "../models/config/model-connection.js";
 import { resolveModelInfoFromModelsDev } from "../models/config/models-config.js";
+import { abortError } from "../runtime-types/abort.js";
 import { errorMessage } from "../utils/errors.js";
 
 import type { UsageTracker } from "./telemetry/usage-tracker.js";
@@ -202,9 +203,7 @@ async function withTypedAdapterError(
 function abortReason(signal: AbortSignal): Error {
   const reason = signal.reason;
   if (reason instanceof Error) return reason;
-  const error = new Error(reason === undefined ? "The extension completion was aborted." : String(reason));
-  error.name = "AbortError";
-  return error;
+  return abortError(reason === undefined ? "The extension completion was aborted." : String(reason));
 }
 
 function normalizeMessages(request: ExtensionLlmRequest): Array<{ role: "user" | "assistant"; content: string }> {

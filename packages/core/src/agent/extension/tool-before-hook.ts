@@ -25,6 +25,9 @@ export interface ToolBeforeHookInput {
   sessionId?: string;
 }
 
+/** Reason attached when a gate cannot produce a verdict (threw, or the chain timed out). */
+export const TOOL_GATE_FAILED_REASON = "A tool:before hook failed, so the call was refused rather than approved.";
+
 /** Emit the interceptable event once and return its verdict. */
 export async function emitToolBeforeHook(
   runner: ExtensionRunner,
@@ -40,9 +43,18 @@ export async function emitToolBeforeHook(
     defaultReturn: undefined,
   };
   await runner.getEventBus().intercept(event);
+  // Two ways to be refused: an interceptor said so (`skip`, whether it set the field or returned
+  // `false` — the bus normalizes both), or a gate failed and left no verdict (`handlerError`).
+  // Failing closed is the same rule the timeout path already applied; reading only `skip` let a
+  // throwing deny-hook approve every call it matched.
+  //
+  // `failed` is checked independently of `skip`: the timeout path sets BOTH, and it must still name
+  // the failure reason rather than look like a deliberate extension veto.
+  const failed = event.handlerError === true;
+  const reason = event.reason ?? (failed ? TOOL_GATE_FAILED_REASON : undefined);
   return {
-    skip: event.skip === true,
-    ...(event.reason !== undefined ? { reason: event.reason } : {}),
+    skip: event.skip === true || failed,
+    ...(reason !== undefined ? { reason } : {}),
     ...(event.modifiedArgs !== undefined ? { modifiedArgs: event.modifiedArgs } : {}),
   };
 }

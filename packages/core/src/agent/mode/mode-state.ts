@@ -8,6 +8,7 @@
  * `shouldAutoApproveTools()` hides which half is missing.
  */
 
+import { planExecutionAutoApproves } from "../plan/plan-mode-controller.js";
 import { PLAN_AUTHORING_TOOL_NAMES, PLAN_COMPLETION_TOOL_NAMES } from "../plan/plan-tools.js";
 
 import type { AutoModeController } from "../approval/auto-mode-controller.js";
@@ -78,10 +79,8 @@ export class ModeStateReader implements ModeState {
     if (snapshot.auto) return "auto";
     // Plan execution and its forced retro are one approved plan; the seeded todo list is the
     // second, independent condition (a phase stuck without it must not bypass approval).
-    if (snapshot.planPhase === "executing" || snapshot.planPhase === "retro") {
-      return snapshot.todosSeeded ? "auto" : "ask";
-    }
-    return "ask";
+    // Derived from the single rule, not a second copy of it.
+    return planExecutionAutoApproves(snapshot.planPhase, snapshot.todosSeeded) ? "auto" : "ask";
   }
 
   toolAvailability(): ModeToolAvailability {

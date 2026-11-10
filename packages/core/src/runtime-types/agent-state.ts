@@ -124,6 +124,22 @@ export interface TransitionOptions {
 
 class IllegalTransition extends Error {}
 
+/**
+ * A settled run's verdict is final.
+ *
+ * `settle` / `stream-end` also arrive from RECONCILE paths (`clearUnbackedWait`,
+ * `forceDetachedTerminal`, `reconcileFromUIMessages`), which pick `completed` from "is there an error
+ * string?" rather than from the axes. Letting that overwrite an `error`/`aborted` outcome produced a
+ * `completed` status carrying a stale `errorMessage` — one run, two conclusions, and the failure
+ * unrecoverable. A fault may still be REPORTED over an abort (`aborted` → `error`); every other
+ * combination keeps the verdict already recorded, and the rest of the event (clearing the wait,
+ * leaving the phase) still applies, so reconcile keeps its escape hatch.
+ */
+function coerceSettledOutcome(state: AgentState, next: RunOutcome): RunOutcome {
+  if (state.outcome !== "error" && state.outcome !== "aborted") return next;
+  return next === "error" ? "error" : state.outcome;
+}
+
 function reject(reason: string, event: AgentTransitionEvent, options: TransitionOptions): never {
   if (options.strict !== false) throw new IllegalTransition(`${reason} (event: ${event.type})`);
   options.onReject?.(reason, event);
@@ -183,7 +199,7 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
       if (state.run === "compacting") {
         return {
           ...state,
-          outcome: event.result,
+          outcome: coerceSettledOutcome(state, event.result),
           stream: "none",
           ...(event.error !== undefined ? { errorMessage: event.error } : {}),
         };
@@ -196,7 +212,7 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
         // reading the axes (not the projection) rendered as a spinner.
         lifecycle: "ready",
         run: "finalizing",
-        outcome: event.result,
+        outcome: coerceSettledOutcome(state, event.result),
         stream: "none",
         ...(event.error !== undefined ? { errorMessage: event.error } : {}),
       };
@@ -207,7 +223,7 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
       if (state.run === "compacting") {
         return {
           ...state,
-          outcome: event.result,
+          outcome: coerceSettledOutcome(state, event.result),
           stream: "none",
           ...(event.clearWait ? { wait: "none" } : {}),
           ...(event.error !== undefined ? { errorMessage: event.error } : {}),
@@ -217,7 +233,7 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
         ...state,
         lifecycle: "ready",
         run: "finalizing",
-        outcome: event.result,
+        outcome: coerceSettledOutcome(state, event.result),
         stream: "none",
         ...(event.clearWait ? { wait: "none" } : {}),
         ...(event.error !== undefined ? { errorMessage: event.error } : {}),
