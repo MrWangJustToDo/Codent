@@ -36,6 +36,7 @@ import {
   selectChangedSections,
 } from "../../agent/turn-context/synthetic-injection.js";
 import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
+import { utf8ByteLength } from "../../utils/bytes.js";
 import { errorMessage } from "../../utils/errors.js";
 
 import type { BackgroundWorkCompletion } from "../../agent/jobs/background-work.js";
@@ -43,6 +44,7 @@ import type { TurnContextSection } from "../../agent/turn-context";
 import type { AgentUIChannel } from "../../agent/ui/ui-channel.js";
 import type { AgentCommandService } from "../services/agent-command-service.js";
 import type { BackgroundWorkService } from "../services/background-work-service.js";
+import type { EmitAgentTelemetryFn } from "../telemetry/emit-agent-telemetry.js";
 import type { ChatMiddleware, ModelMessage, UIMessage } from "@tanstack/ai";
 
 export interface BackgroundMiddlewareDeps {
@@ -81,6 +83,8 @@ export interface BackgroundMiddlewareDeps {
     message: string,
     options?: { level?: "debug" | "info" | "warn" | "error"; error?: string }
   ) => void;
+  /** Timeline sink for the `context:inject` diagnostic row. */
+  emitEvent?: EmitAgentTelemetryFn;
 }
 
 const NOTIFICATION_KIND = TURN_CONTEXT_KINDS.backgroundNotification;
@@ -110,21 +114,37 @@ export function createBackgroundMiddleware(deps: BackgroundMiddlewareDeps): Chat
           // pointer either). Marking here is the deliberate best-effort for a channel-less caller;
           // callers that can lose a turn should provide a channel.
           await work.markDelivered(completed);
-          messages = [...messages, { role: "user", content: formatNotifications(completed) }];
+          const content = formatNotifications(completed);
+          messages = [...messages, { role: "user", content }];
+          deps.emitEvent?.("context:inject", {
+            source: "background",
+            kinds: [NOTIFICATION_KIND],
+            bytes: utf8ByteLength(content),
+            reason: "completion",
+          });
         } else {
           // Units the wire ALREADY announces are filtered out before rendering the block: their
           // paragraph is on the channel, and re-rendering the whole set when one new unit arrives
           // changes the content hash — a new id — so the older paragraphs appeared twice.
           const announced = collectAnnouncedJobIds(messages);
           const fresh = completed.filter((unit) => !announced.has(unit.id));
+          const notificationContent = fresh.length > 0 ? formatNotifications(fresh) : "";
           const injected =
             fresh.length > 0
-              ? injectSyntheticMessages(messages, [{ kind: NOTIFICATION_KIND, content: formatNotifications(fresh) }], {
+              ? injectSyntheticMessages(messages, [{ kind: NOTIFICATION_KIND, content: notificationContent }], {
                   ui,
                   persist: deps.persistMessages,
                 })
               : { injected: [] as string[], messages, persistResult: undefined };
           messages = injected.messages;
+          if (injected.injected.length > 0) {
+            deps.emitEvent?.("context:inject", {
+              source: "background",
+              kinds: [NOTIFICATION_KIND],
+              bytes: utf8ByteLength(notificationContent),
+              reason: "completion",
+            });
+          }
           // Mark AFTER the row is durable, not merely queued. A retry with nothing new to add
           // still forces one write: the previous attempt may be the one that failed.
           let persisted = true;
@@ -162,6 +182,12 @@ export function createBackgroundMiddleware(deps: BackgroundMiddlewareDeps): Chat
             { ui, persist: deps.persistMessages }
           );
           messages = injected.messages;
+          deps.emitEvent?.("context:inject", {
+            source: "background",
+            kinds: [JOBS_KIND],
+            bytes: utf8ByteLength(content),
+            reason: "changed",
+          });
         }
       }
 

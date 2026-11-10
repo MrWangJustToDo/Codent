@@ -299,6 +299,18 @@ const sideQueries = sideQueryCostInWindow(billedState.state);
 // `turn:summary` deltas were produced by a different finalizer. Report the contract failure and
 // skip cost instead of printing a misleading "unexplained gap" on top of it.
 const preChangeBuild = noise.legacyStatus.length > 0 || noise.status.length > 0;
+// A log written before the diagnostic events existed has none of them — that is "could not check",
+// not "checked and fine", and not a failure of a healthy session. Presence of ANY of the three
+// means the build that wrote it can emit them, so an empty one is a real gap.
+const diagnosticEvents = ["tool:phase", "context:inject", "session:persist"];
+const diagnosticsUnavailable = diagnosticEvents.every((event) => countEvent(event) === 0);
+// "Could not check" is not "checked and fine": a build that predates the diagnostic events writes
+// none of them, and a failed check there would blame a healthy session for an old log.
+const diagnosticsSkipReason = preChangeBuild
+  ? "pre-change build"
+  : diagnosticsUnavailable
+    ? "this log has no tool:phase / context:inject / session:persist rows (pre-diagnostics build)"
+    : null;
 const residual = billed != null && billed > 0 ? billed - cost : null;
 const unexplained = residual != null && residual > 0 ? Math.max(0, residual - Math.max(0, sideQueries.value)) : 0;
 const costGap = billed && billed > 0 ? Math.abs(billed - cost) / billed : null;
@@ -356,6 +368,11 @@ for (const [event, why] of [
   ["agent:client-tool-result", "client tool answer (ask_user)"],
   ["job:changed", "background job transition"],
   ["session:deleted", "session deletion"],
+  ["tool:phase", "tool-phase decision set"],
+  ["tool:resume", "held sibling resumed after approval"],
+  ["tool:settle", "engine could not run a call"],
+  ["context:inject", "synthetic context admitted"],
+  ["session:persist", "transcript write decision"],
 ]) {
   const n = countEvent(event);
   if (n > 0) console.log(`  ok    ${event.padEnd(24)} ${String(n).padStart(5)}  ${why}`);
@@ -393,6 +410,40 @@ console.log(
 console.log(`  mechanical status    ${noise.status.length} row(s) ${pct(noise.status.length, total)}`);
 console.log(`  auto approvals       ${noise.autoApprovals.length} row(s) ${pct(noise.autoApprovals.length, total)}`);
 console.log(`  empty thinking       ${noise.emptyThinking.length} row(s) ${pct(noise.emptyThinking.length, total)}`);
+
+// The log sink summarizes every object/array payload into `<key>Bytes` + `<key>Preview`, so the
+// persisted row carries SCALAR counts, never the arrays themselves. Reading `data.held` here made
+// every counter print 0 while the rows were present — a metric that read as "nothing happened".
+const scalar = (value) => (typeof value === "number" ? value : 0);
+
+console.log("\n-- decisions (engine diagnostics) ------------------------");
+{
+  const phases = root.entries.filter((entry) => entry.event === "tool:phase");
+  const held = phases.reduce((n, entry) => n + scalar(entry.data?.heldCount), 0);
+  const approvals = phases.reduce((n, entry) => n + scalar(entry.data?.needsApprovalCount), 0);
+  const resumed = root.entries.filter((entry) => entry.event === "tool:resume");
+  const resumedCalls = resumed.reduce((n, entry) => n + scalar(entry.data?.count), 0);
+  const settled = root.entries.filter((entry) => entry.event === "tool:settle");
+  const settledCalls = settled.reduce((n, entry) => n + scalar(entry.data?.count), 0);
+  console.log(`  tool phases          ${phases.length} row(s), ${held} held, ${approvals} awaiting approval`);
+  console.log(`  resumed after gate   ${resumed.length} row(s), ${resumedCalls} call(s)`);
+  console.log(`  settled unrun        ${settled.length} row(s), ${settledCalls} call(s)`);
+  const ctx = root.entries.filter((entry) => entry.event === "context:inject");
+  const ctxSources = new Map();
+  for (const entry of ctx) {
+    const source = typeof entry.data?.source === "string" ? entry.data.source : "?";
+    ctxSources.set(source, (ctxSources.get(source) ?? 0) + 1);
+  }
+  const ctxBreakdown = ctxSources.size > 0 ? ` (${[...ctxSources].map(([k, v]) => `${k} ${v}`).join(", ")})` : "";
+  console.log(`  context inject       ${ctx.length} row(s)${ctxBreakdown}`);
+  const persist = root.entries.filter((entry) => entry.event === "session:persist");
+  const written = persist.filter((entry) => entry.data?.written === true).length;
+  const skipped = persist.filter((entry) => entry.data?.skipped === true).length;
+  const refused = persist.length - written - skipped;
+  console.log(
+    `  session persist      ${persist.length} row(s): written ${written}, skipped ${skipped}, not written ${refused}`
+  );
+}
 
 console.log("\n-- delegation --------------------------------------------");
 if (childLogs.length === 0) {
@@ -451,6 +502,12 @@ if (check) {
   if (noise.structuredPrompt.length > 0) failures.push(`${noise.structuredPrompt.length} '(structured)' prompt row(s)`);
   if (countEvent("session:start") === 0) failures.push("no session:start row");
   if (countEvent("prompt:submit") === 0) failures.push("no prompt:submit row");
+  if (diagnosticsSkipReason == null && countEvent("agent:tool-start") > 0 && countEvent("tool:phase") === 0) {
+    failures.push("no tool:phase rows — the tool phase's held/approval decision set is invisible");
+  }
+  if (diagnosticsSkipReason == null && countEvent("prompt:submit") > 0 && countEvent("session:persist") === 0) {
+    failures.push("no session:persist rows — transcript durability is invisible");
+  }
   if (unscopedChildRows() > 0) failures.push(`${unscopedChildRows()} unscoped child row(s)`);
   if (!preChangeBuild && billed != null && billed > 0) {
     if (pump.pumps === 0) {
@@ -475,14 +532,18 @@ if (check) {
   }
 
   console.log("\n-- check -------------------------------------------------");
+  if (diagnosticsSkipReason != null) {
+    console.log(`  SKIP  engine diagnostics — ${diagnosticsSkipReason}; restart and record a session`);
+  }
   if (costSkipped && !requireCost) {
     console.log(`  SKIP  cost reconciliation — ${costSkipReason} (pass --require-cost to fail instead)`);
   }
   if (failures.length === 0) {
+    const skipped = [diagnosticsSkipReason != null, costSkipped && !requireCost].filter(Boolean).length;
     console.log(
-      costSkipped && !requireCost
-        ? "  PASS (1 check skipped) — every applicable check holds"
-        : "  PASS — this session's log satisfies the timeline contract"
+      skipped === 0
+        ? "  PASS — this session's log satisfies the timeline contract"
+        : `  PASS (${skipped} check${skipped === 1 ? "" : "s"} skipped) — every applicable check holds`
     );
     process.exit(0);
   }

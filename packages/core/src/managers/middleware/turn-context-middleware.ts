@@ -12,10 +12,12 @@ import {
   isContextUIMessage,
 } from "../../agent/turn-context/turn-context-message.js";
 import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
+import { utf8ByteLength } from "../../utils/bytes.js";
 
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
 import type { TurnContextSection } from "../../agent/turn-context/turn-context-message.js";
 import type { AgentUIChannel } from "../../agent/ui/ui-channel.js";
+import type { EmitAgentTelemetryFn } from "../telemetry/emit-agent-telemetry.js";
 import type { ChatMiddleware, ModelMessage, UIMessage } from "@tanstack/ai";
 
 /**
@@ -41,6 +43,8 @@ export interface TurnContextMiddlewareDeps {
   getManagedAgent: () => { parentId?: string; isSessionSwitching?: () => boolean } | undefined;
   /** Agent-doc content for subagents (their own agentDocContent is empty). */
   getProjectInstructions?: () => string | undefined;
+  /** Timeline sink for the `context:inject` diagnostic row. */
+  emitEvent?: EmitAgentTelemetryFn;
 }
 
 /**
@@ -123,10 +127,18 @@ export function createTurnContextMiddleware(deps: TurnContextMiddlewareDeps): Ch
         content: formatContextSectionUserContent(section, { isUpdate }),
         nonce: nonces.get(section.key)!,
       }));
-      const { messages: wireMessages } = injectSyntheticMessages(wire, entries, {
+      const { messages: wireMessages, injected } = injectSyntheticMessages(wire, entries, {
         ui,
         persist: deps.persistMessages,
       });
+      if (injected.length > 0) {
+        deps.emitEvent?.("context:inject", {
+          source: "turn-context",
+          kinds: entries.map((entry) => entry.kind),
+          bytes: entries.reduce((total, entry) => total + utf8ByteLength(entry.content), 0),
+          reason: changed.every(({ isUpdate }) => isUpdate) ? "changed" : "missing",
+        });
+      }
       // Synthetic ctx always APPENDS (see injectSyntheticMessages): keeps injected
       // ctx in time order and never rewrites already-streamed content. Inserting
       // after the last real user message would put new ctx ahead of previously

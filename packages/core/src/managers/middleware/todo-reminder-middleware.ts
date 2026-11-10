@@ -13,9 +13,11 @@ import { resolveTodoReminder } from "../../agent/turn-context/reminder";
 import { injectSyntheticMessages, nextSyntheticNonce } from "../../agent/turn-context/synthetic-injection.js";
 import { TURN_CONTEXT_KINDS, formatContextSectionUserContent } from "../../agent/turn-context/turn-context-message.js";
 import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
+import { utf8ByteLength } from "../../utils/bytes.js";
 
 import type { TodoManager } from "../../agent/todo";
 import type { AgentUIChannel } from "../../agent/ui/ui-channel.js";
+import type { EmitAgentTelemetryFn } from "../telemetry/emit-agent-telemetry.js";
 import type { ChatMiddleware, ModelMessage, UIMessage } from "@tanstack/ai";
 
 export interface TodoReminderMiddlewareDeps {
@@ -25,6 +27,8 @@ export interface TodoReminderMiddlewareDeps {
   getUIChannel: () => AgentUIChannel | undefined;
   /** Persist the updated UI messages (no-op for subagents without a session store). */
   persistMessages: (next: UIMessage[]) => void;
+  /** Timeline sink for the `context:inject` diagnostic row. */
+  emitEvent?: EmitAgentTelemetryFn;
 }
 
 /**
@@ -43,15 +47,31 @@ export function createTodoReminderMiddleware(deps: TodoReminderMiddlewareDeps): 
       if (!section) return {};
 
       const content = formatContextSectionUserContent(section);
-      const ui = deps.getUIChannel();
-      if (!ui) return { messages: [...messages, { role: "user", content }] };
-
       const kind = TURN_CONTEXT_KINDS.reminder;
-      const { messages: next } = injectSyntheticMessages(
+      const ui = deps.getUIChannel();
+      if (!ui) {
+        deps.emitEvent?.("context:inject", {
+          source: "todo-reminder",
+          kinds: [kind],
+          bytes: utf8ByteLength(content),
+          reason: "counter",
+        });
+        return { messages: [...messages, { role: "user", content }] };
+      }
+
+      const { messages: next, injected } = injectSyntheticMessages(
         messages,
         [{ kind, content, nonce: nextSyntheticNonce(ui.getMessages(), kind) }],
         { ui, persist: deps.persistMessages }
       );
+      if (injected.length > 0) {
+        deps.emitEvent?.("context:inject", {
+          source: "todo-reminder",
+          kinds: [kind],
+          bytes: utf8ByteLength(content),
+          reason: "counter",
+        });
+      }
       return { messages: next };
     },
   });

@@ -28,6 +28,7 @@ export type {
   SessionSwitchReason,
   ToolApprovalSource,
 } from "./event-payloads/payload-primitives.js";
+export type { ToolCallRef } from "./event-payloads/tools.js";
 
 export type AgentEventPayloadMap = SessionEventPayloads &
   AgentEventPayloads &

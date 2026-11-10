@@ -230,6 +230,13 @@ managed.setTextAdapter({
 
 const agentChat = managed.initChat(manager);
 
+// Engine-diagnostic rows: a pump must record what it decided (tool:phase) and what it settled
+// without running (tool:settle), or a "row spins forever" report has no timeline evidence.
+const diagnosticEvents = [];
+const unsubscribeDiagnostics = managed.getEventBus()?.on("*", (event) => {
+  if (event.type === "tool:phase" || event.type === "tool:settle") diagnosticEvents.push(event);
+});
+
 // The shape the engine leaves behind when it holds a batch's plain call: args complete, no result.
 const stuckId = "call_read_file_stuck";
 agentChat.setMessages([
@@ -271,6 +278,16 @@ assert.ok(
   "the wire gets a paired result, so the model is not left with an unanswered tool call"
 );
 assert.equal(managed.getStatus(), "completed", "the turn itself finished normally");
+assert.ok(
+  diagnosticEvents.some((event) => event.type === "tool:phase"),
+  "the pump records a tool:phase decision set"
+);
+assert.ok(
+  diagnosticEvents.some(
+    (event) => event.type === "tool:settle" && event.payload.calls?.some((call) => call.id === stuckId)
+  ),
+  "the tool:settle row names the call it cancelled (it has no tool-end/tool-error)"
+);
 
 // A still-pending approval is NOT settled by that pass — it is a legitimate resume state.
 {
@@ -371,12 +388,12 @@ assert.equal(managed.getStatus(), "completed", "the turn itself finished normall
   );
   assert.match(
     controllerSrc,
-    /if \(outcomeKind !== "waiting" && !waitingForUser\) \{\s*this\.applyCancelledIncompleteTools\(true\)/,
+    /if \(outcomeKind !== "waiting" && !waitingForUser\) \{\s*this\.applyCancelledIncompleteTools\(true, \{ cause: "turn-end" \}\)/,
     "every non-waiting terminal (error/aborted too) settles the calls the engine could not run"
   );
   assert.match(
     controllerSrc,
-    /const stillWaiting = hasPendingInteraction\([\s\S]{0,120}if \(!stillWaiting\) this\.applyCancelledIncompleteTools\(true\)/,
+    /const stillWaiting = hasPendingInteraction\([\s\S]{0,120}if \(!stillWaiting\) this\.applyCancelledIncompleteTools\(true, \{ cause: "stream-error" \}\)/,
     "the pump's catch path settles them too, but preserves a pending ask_user"
   );
   // A preserved question must also be named in the status on the abort path. That sync lives in
@@ -511,6 +528,7 @@ assert.equal(managed.getStatus(), "completed", "the turn itself finished normall
 // pass, no pre-approval seam needed.
 {
   const ran = [];
+  const resumedEvents = [];
   const tools = [
     {
       ...createReadFileTool(),
@@ -588,22 +606,45 @@ assert.equal(managed.getStatus(), "completed", "the turn itself finished normall
         };
       }),
     },
+    // A synthetic turn-context block injected after the assistant. TanStack's pending scan only
+    // treats a call as active until the next non-tool message, so this is what used to hide the
+    // held plain sibling; the resume middleware now re-adds it.
+    { id: "ctx-date", role: "user", parts: [{ type: "text", content: "<ctx kind=current_date>today</ctx>" }] },
   ];
 
-  const drain = async (approvals) => {
+  const parkedWithContext = [
+    ...parked,
+    { id: "ctx-date", role: "user", content: "<ctx kind=current_date>today</ctx>" },
+  ];
+
+  const drain = async (approvals, options = {}) => {
     ran.length = 0;
+    resumedEvents.length = 0;
+    const resume =
+      options.legacyResume === true
+        ? {
+            name: "legacy-approval-resume",
+            onConfig: async (_ctx, config) => ({
+              resumeToolState: {
+                ...config.resumeToolState,
+                approvals: approvalsToResumeMap(approvals, toUiMessages(approvals)),
+              },
+            }),
+          }
+        : createApprovalResumeMiddleware({
+            getApprovals: () => approvals,
+            getMessages: () => toUiMessages(approvals),
+            emitEvent: (type, payload) => {
+              if (type === "tool:resume") resumedEvents.push(payload);
+            },
+          });
     const stream = chat({
       adapter,
-      messages: parked,
+      messages: parkedWithContext,
       threadId: "approval-batch",
       promptCache: "none",
       tools,
-      middleware: [
-        createApprovalResumeMiddleware({
-          getApprovals: () => approvals,
-          getMessages: () => toUiMessages(approvals),
-        }),
-      ],
+      middleware: [resume],
       agentLoopStrategy: (() => {
         let i = 0;
         return () => ++i <= 2;
@@ -623,8 +664,22 @@ assert.equal(managed.getStatus(), "completed", "the turn itself finished normall
     ["read_file", "run_command"],
     "an ANSWERED gate releases the whole batch in one pass"
   );
+  const resumedIds = resumedEvents.flatMap((payload) => payload.calls.map((call) => call.id));
+  assert.ok(
+    resumedIds.includes("call_A"),
+    `the resumed plain sibling is reported (tool:resume), got ${JSON.stringify(resumedIds)}`
+  );
+  assert.equal(resumedIds.includes("call_B"), false, "the answered gate itself is not reported as a resumed sibling");
+  assert.deepEqual(
+    await drain([{ id: "approval_call_B", toolCallId: "call_B", status: "approved", updatedAt: 1 }], {
+      legacyResume: true,
+    }),
+    ["run_command"],
+    "control: the raw resume map alone drops the held sibling behind a synthetic ctx message"
+  );
 }
 
+unsubscribeDiagnostics?.();
 manager.destroyAgent(managed.id);
 await manager.settleTeardowns();
 clearCoreEnv();

@@ -17,7 +17,9 @@ import {
   settleToolCalls,
   hasCancellableIncompleteToolCalls,
   hasInFlightToolCalls,
+  hasValidToolArguments,
 } from "../stream/incomplete-tool-calls.js";
+import { isSettledToolCallPart, isToolCallPart } from "../stream/message-parts.js";
 import { findToolCallPart } from "../stream/suppress-replayed-tool-chunks.js";
 import {
   countPendingToolApprovals,
@@ -37,6 +39,7 @@ import { countToolCalls } from "./tool-call-count.js";
 
 import type { AgentEventBus } from "../agent-event-bus";
 import type { RunToken } from "./run-coordinator.js";
+import type { ToolCallRef } from "../../runtime-types/agent-event-payloads.js";
 import type { AgentStatus } from "../../runtime-types/agent-status.js";
 import type { AgentChatHost } from "../../runtime-types/chat-host.js";
 import type { AgentManager } from "../../runtime-types/hosts.js";
@@ -45,6 +48,9 @@ import type { BackgroundWakeCause } from "../jobs/background-work.js";
 import type { ContentPart, UIMessage } from "@tanstack/ai";
 
 const MAX_TOOL_PHASES = 40;
+
+/** Boundary that ran a settle pass (mirrors the `tool:settle` payload). */
+type ToolSettleCause = "pump-start" | "pre-send" | "turn-end" | "abort" | "stream-error" | "engine";
 
 /** Statuses a background completion may wake (see {@link AgentChatController.wakeForBackgroundCompletion}). */
 const WAKEABLE_STATUSES: ReadonlySet<AgentStatus> = new Set<AgentStatus>(["idle", "completed"]);
@@ -103,6 +109,8 @@ export class AgentChatController {
     toolCalls: number;
     phases: number;
   } | null = null;
+  /** Signature of the last `tool:phase` decision set, so a text-only follow-up phase adds no row. */
+  private lastToolPhaseSignature: string | null = null;
   /**
    * Epoch of the single pump queued on {@link runChain} but not yet started. A stale
    * callback must not clear a newer epoch's slot; `null` means no current-epoch pump
@@ -346,7 +354,7 @@ export class AgentChatController {
     // Immediately clear loading tool rows; stream teardown may still finalize later. A pending
     // `ask_user` is preserved: it is a question addressed to the user, not work this abort owns,
     // and cancelling it here would make the park below a no-op (and discard the question).
-    this.applyCancelledIncompleteTools(true);
+    this.applyCancelledIncompleteTools(true, { cause: "abort" });
     // An approval prompt is a question the interrupted turn no longer has. Leaving it pending
     // kept the part in `interactions.approvals` while the run was over: the next input was
     // admitted against a status that said `aborted`, then parked on the old question forever.
@@ -610,7 +618,7 @@ export class AgentChatController {
     // Only strips truncated/invalid leftover tools — never approval-responded / valid queues.
     // Settle them BEFORE releasing queued user text, or the message lands ahead of the tool result
     // it was written after.
-    this.applyCancelledIncompleteTools();
+    this.applyCancelledIncompleteTools(false, { cause: "pre-send" });
     // A turn can end with input still queued: a stream error skips the continuation drain, and the
     // next `send` used to append its own message first. Deliver the older queue before this new
     // message so the model sees the user's messages in the order they were written (and so nothing
@@ -995,7 +1003,7 @@ export class AgentChatController {
       this.managed.clearPrepareAsNewTurn();
       this.managed.setError("");
       // Safe: skips approval-responded and valid input-complete (needed for `y` / tool-phase).
-      this.applyCancelledIncompleteTools();
+      this.applyCancelledIncompleteTools(false, { cause: "pump-start" });
       this.managed.statusController.prepareRunPhase(this.channel.getMessages());
 
       for (let toolPhase = 0; toolPhase < MAX_TOOL_PHASES; toolPhase++) {
@@ -1043,13 +1051,14 @@ export class AgentChatController {
         toolPhases = toolPhase + 1;
         if (this.pumpBaselines) this.pumpBaselines.phases = toolPhases;
         if (epoch !== this.lifecycleEpoch) return;
+        this.emitToolPhase(toolPhase + 1);
         if (this.managed.getStatus() === "error") {
           hasError = true;
         }
         if (!token.isCurrent) {
           // Stream may have finalized truncated tool args after Esc — cancel again, but keep a
           // pending `ask_user` answerable (same rule as `interruptCurrentRun`).
-          this.applyCancelledIncompleteTools(true);
+          this.applyCancelledIncompleteTools(true, { cause: "abort" });
           this.persistMessages("pump-complete");
           return;
         }
@@ -1105,7 +1114,7 @@ export class AgentChatController {
         // and leaving a valid `input-complete` call behind meant the NEXT user turn continued that
         // tool phase — executing the failed turn's arguments (possibly a write).
         if (outcomeKind !== "waiting" && !waitingForUser) {
-          this.applyCancelledIncompleteTools(true);
+          this.applyCancelledIncompleteTools(true, { cause: "turn-end" });
           messages = this.channel.getMessages();
         }
 
@@ -1144,7 +1153,7 @@ export class AgentChatController {
           // `ask_user` is the exception, exactly as on the normal path: the failure did not answer
           // the user's question, and cancelling it would make the session unanswerable.
           const stillWaiting = hasPendingInteraction(this.channel.getMessages());
-          if (!stillWaiting) this.applyCancelledIncompleteTools(true);
+          if (!stillWaiting) this.applyCancelledIncompleteTools(true, { cause: "stream-error" });
           this.managed.runFinalizer.finalizeChat({
             kind: "error",
             messages: this.channel.getMessages(),
@@ -1210,7 +1219,7 @@ export class AgentChatController {
       // rule. This fallback used to pass no option and consequently undid the park the Esc path had
       // just established (status `awaiting_user` with no pending interaction, so every later
       // message was deferred to a pump that never started and Esc became a no-op).
-      this.applyCancelledIncompleteTools(true);
+      this.applyCancelledIncompleteTools(true, { cause: "abort" });
     };
     // AbortController is created inside prepareForRun (via runAgentStream) and wired
     // directly into TanStack chat. Do not create a second controller here — that used
@@ -1284,19 +1293,113 @@ export class AgentChatController {
     // this cleanup owns. The option existed because the abort fallback and `interruptCurrentRun`
     // disagreed, and the fallback silently undid the park the Esc path had just established. A
     // caller that genuinely wants to withdraw the question must say so explicitly.
-    options: { preservePendingAskUser?: boolean } = {}
+    options: { preservePendingAskUser?: boolean; cause?: ToolSettleCause } = {}
   ): void {
     const current = this.channel.getMessages();
     const hasCancellable =
       hasCancellableIncompleteToolCalls(current) || (includeInFlight && hasInFlightToolCalls(current));
     if (!hasCancellable) return;
+    // The settle itself reports which calls it changed: a second predicate copy here would decide
+    // against the pre-mutation snapshot and drift from `settleToolCalls` (it already had — the
+    // abort path settled truncated calls the collector filtered out). These calls never produce
+    // `agent:tool-end`/`agent:tool-error`, so this is the only timeline row that can explain a row
+    // that stopped loading as "cancelled" with no tool event.
+    const settled: ToolCallRef[] = [];
     const cancelled = settleToolCalls(current, {
       reason: TOOL_CANCELLED_MESSAGE,
       includeInFlight,
       ...((options.preservePendingAskUser ?? true) ? { preservePendingAskUser: true } : {}),
+      onSettled: (part) => settled.push(part.name ? { id: part.id, name: part.name } : { id: part.id }),
     });
     const cleaned = stripEmptyAssistantShells(cancelled);
     this.channel.setMessages(cleaned);
+    if (settled.length > 0) {
+      this.managed.emitEvent("tool:settle", {
+        cause: options.cause ?? "engine",
+        includeInFlight,
+        calls: settled,
+        count: settled.length,
+      });
+    }
+  }
+
+  /**
+   * Record one model tool phase's decision set.
+   *
+   * The log used to prove a call did NOT run (no `agent:tool-start`) but never say why. `held` is
+   * TanStack's parked-sibling set (the plain calls beside an approval gate), `needsApproval` the
+   * gate itself, `needsClient` a host-executed tool. Emitted only for phases that actually carried
+   * calls, so a text-only turn adds no row.
+   */
+  private emitToolPhase(phase: number): void {
+    // The LAST tool-bearing assistant, not simply the last assistant: a `chat()` that executes
+    // pending tools and then asks the model for the reply ends with a text-only assistant message,
+    // so "last assistant" would describe the wrong (empty) phase. Walk backward without copying the
+    // transcript (`[...].reverse()` is O(n) on every phase).
+    const messages = this.channel.getMessages();
+    let assistant: UIMessage | undefined;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]!;
+      if (message.role === "assistant" && message.parts.some(isToolCallPart)) {
+        assistant = message;
+        break;
+      }
+    }
+    if (!assistant) return;
+    const pending: ToolCallRef[] = [];
+    const executed: ToolCallRef[] = [];
+    const held: ToolCallRef[] = [];
+    const approved: ToolCallRef[] = [];
+    const needsApproval: ToolCallRef[] = [];
+    const needsClient: ToolCallRef[] = [];
+    for (const part of assistant.parts) {
+      if (!isToolCallPart(part)) continue;
+      const ref: ToolCallRef = part.name ? { id: part.id, name: part.name } : { id: part.id };
+      if (part.output !== undefined || isSettledToolCallPart(part)) {
+        executed.push(ref);
+        continue;
+      }
+      pending.push(ref);
+      if (part.approval?.needsApproval === true) {
+        if (part.approval.approved === undefined) needsApproval.push(ref);
+        else if (part.approval.approved === true) approved.push(ref);
+        // A denied gate stays in `pending` only; the approval-resolved row carries the refusal.
+        continue;
+      }
+      if (CLIENT_TOOL_NAMES.has(part.name) && part.state === "input-complete" && hasValidToolArguments(part)) {
+        needsClient.push(ref);
+        continue;
+      }
+      // A plain server call with complete args and no result is what the engine parks in its
+      // `held` list while a sibling waits for approval. (A `task` here may already be running via
+      // the eager pre-fork; it is still "no result yet", which is what this bucket names.)
+      if (part.state === "input-complete" && hasValidToolArguments(part)) held.push(ref);
+    }
+    if (pending.length + executed.length === 0) return;
+    // Assistant identity prefixes the signature: provider tool-call ids are request-scoped and
+    // reused (`call_0`), so ids alone would suppress a LATER turn's identical-looking phase.
+    const signature = [assistant.id, pending, executed, held, approved, needsApproval, needsClient]
+      .map((value) => (typeof value === "string" ? value : value.map((ref) => ref.id).join(",")))
+      .join("|");
+    // A phase that executed pending tools and then produced the final text reports the SAME
+    // assistant/call set; emitting again would print a duplicate row, not a second decision.
+    if (signature === this.lastToolPhaseSignature) return;
+    this.lastToolPhaseSignature = signature;
+    this.managed.emitEvent("tool:phase", {
+      phase,
+      pending,
+      pendingCount: pending.length,
+      executed,
+      executedCount: executed.length,
+      held,
+      heldCount: held.length,
+      approved,
+      approvedCount: approved.length,
+      needsApproval,
+      needsApprovalCount: needsApproval.length,
+      needsClient,
+      needsClientCount: needsClient.length,
+    });
   }
 
   private persistMessages(reason: "user-message" | "pump-complete"): void {

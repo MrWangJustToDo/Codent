@@ -21,6 +21,9 @@ export const AGENT_EVENT_META = {
   "session:restore": { mode: "emit", visibility: "observable" },
   "session:switch": { mode: "emit", visibility: "observable" },
   "session:save-error": { mode: "emit", channel: "lifecycle", visibility: "observable" },
+  // Per-model-call context admission + transcript write outcomes: timeline diagnostics, no channel.
+  "context:inject": { mode: "emit", visibility: "observable" },
+  "session:persist": { mode: "emit", visibility: "observable" },
   // Bootstrap diagnostics: recorded by the policy table, not published on a session channel (the
   // pre-registration window has no subscriber yet, and hosts do not render them).
   "session:diagnostic": { mode: "emit", visibility: "observable" },
@@ -49,6 +52,11 @@ export const AGENT_EVENT_META = {
   "agent:client-tool-result": { mode: "emit", channel: "lifecycle", visibility: "observable" },
   "agent:tool-error": { mode: "emit", channel: "lifecycle", visibility: "observable" },
   "tool:projection-error": { mode: "emit", visibility: "observable" },
+  // Tool-phase diagnostics: the decision set behind one model tool phase, plus the settle/resume
+  // passes. No session channel — these are timeline facts for the log/observers, not UI state.
+  "tool:phase": { mode: "emit", visibility: "observable" },
+  "tool:settle": { mode: "emit", visibility: "observable" },
+  "tool:resume": { mode: "emit", visibility: "observable" },
   "agent:abort": { mode: "emit", channel: "lifecycle", visibility: "observable" },
   "agent:retry": { mode: "emit", channel: "lifecycle", visibility: "observable" },
   "agent:stream-error": { mode: "emit", channel: "lifecycle", visibility: "observable" },

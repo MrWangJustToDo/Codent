@@ -7,6 +7,17 @@
 
 import type { ToolApprovalSource } from "./payload-primitives.js";
 
+/**
+ * A tool call identity for the diagnostic events.
+ *
+ * Ids are what correlate with `agent:tool-*` rows; the name is carried so a phase summary reads
+ * without a join. Deliberately tiny — these events are emitted per tool phase / settle pass.
+ */
+export interface ToolCallRef {
+  id: string;
+  name?: string;
+}
+
 export type ToolEventPayloads = {
   "agent:tool-start": {
     tool_name?: string;
@@ -101,5 +112,53 @@ export type ToolEventPayloads = {
   "tool:projection-error": {
     tool_name?: string;
     error: string;
+  };
+  /**
+   * One tool phase's decision, for diagnosing "the call never ran".
+   *
+   * `held` is the set TanStack parked beside an approval-gated call; `needsApproval` is the gate
+   * itself; `needsClient` is a host-executed call. Emitted once per model tool phase (debug), so a
+   * reader can reconstruct what the engine did without joining four other event families.
+   */
+  "tool:phase": {
+    /** 1-based phase index within the pump. */
+    phase?: number;
+    pending: ToolCallRef[];
+    /** Scalar counts so the persisted log (which summarizes arrays to bytes+preview) can report them. */
+    pendingCount: number;
+    executed: ToolCallRef[];
+    executedCount: number;
+    held: ToolCallRef[];
+    heldCount: number;
+    /**
+     * Answered-and-approved gates that have not produced a result yet (the resumed call is about to
+     * run). A DENIED gate stays in `pending` only; its refusal is already in the approval events.
+     */
+    approved: ToolCallRef[];
+    approvedCount: number;
+    needsApproval: ToolCallRef[];
+    needsApprovalCount: number;
+    needsClient: ToolCallRef[];
+    needsClientCount: number;
+  };
+  /**
+   * The pump settled calls it could not run (truncated args, a held sibling at turn end, abort).
+   *
+   * These calls never produce `agent:tool-end`/`agent:tool-error`; without this row the only
+   * evidence was a synthetic `{ cancelled: true }` result in the session file.
+   */
+  "tool:settle": {
+    /** The boundary that ran the settle pass — NOT necessarily a user cancel. */
+    cause: "pump-start" | "pre-send" | "turn-end" | "abort" | "stream-error" | "engine";
+    includeInFlight: boolean;
+    calls: ToolCallRef[];
+    /** Scalar count for the persisted report (arrays are summarized in `data`). */
+    count: number;
+  };
+  /** A parked batch's held siblings were added to the approval resume map and will run. */
+  "tool:resume": {
+    calls: ToolCallRef[];
+    /** Scalar count for the persisted report (arrays are summarized in `data`). */
+    count: number;
   };
 };

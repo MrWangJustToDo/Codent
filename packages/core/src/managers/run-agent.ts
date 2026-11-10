@@ -149,6 +149,7 @@ export function buildAgentRunner(
     createApprovalResumeMiddleware({
       getApprovals: () => approvals.toArray(),
       getMessages: () => deps.getUIChannel()?.getMessages() ?? [],
+      emitEvent,
     }),
     createLifecycleMiddleware({
       usage: usage,
@@ -212,6 +213,7 @@ export function buildAgentRunner(
       getUIChannel: () => deps.getUIChannel() ?? undefined,
       persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
       getManagedAgent: () => managed,
+      emitEvent,
       // Subagents get the parent's agent doc (their own is not loaded).
       getProjectInstructions: () => {
         if (!parentId) return undefined;
@@ -277,11 +279,13 @@ export function buildAgentRunner(
       getTodoManager: deps.getTodoManager,
       getUIChannel: () => deps.getUIChannel() ?? undefined,
       persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
+      emitEvent,
     }),
     // Condition + counter reminder: identical tool-call loops. Same scan model as the todo nag.
     createRepeatReminderMiddleware({
       getUIChannel: () => deps.getUIChannel() ?? undefined,
       persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
+      emitEvent,
     }),
     // Background class: one trunk for both kinds — the `<background_jobs>` pointer (hash-admitted
     // against the wire, commands only) and one-shot completion pushes, both persisted so they
@@ -295,6 +299,7 @@ export function buildAgentRunner(
       getParentId: () => parentId,
       isAgentDestroyed: () => deps.isDestroyed(),
       isSessionSwitching: () => deps.isSessionSwitching(),
+      emitEvent,
       emitDiagnostic: (area, message, options) =>
         emitEvent("session:diagnostic", {
           area,

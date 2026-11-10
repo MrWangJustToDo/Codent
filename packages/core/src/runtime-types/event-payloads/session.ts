@@ -180,4 +180,35 @@ export type SessionEventPayloads = {
     prompt?: string;
     hasTurnContext?: boolean;
   };
+  /**
+   * One synthetic context block was injected into the wire for this model call.
+   *
+   * The block itself is persisted as a `<ctx kind=…>` message; this row records the ADMISSION
+   * decision (source + kinds), which is what explains a model call whose wire differs from the
+   * transcript. Emitted only when something is actually injected (debug).
+   */
+  "context:inject": {
+    source: "turn-context" | "todo-reminder" | "repeat-reminder" | "background";
+    /** `<ctx kind=…>` values (section keys, or the shared `reminder` / background kinds). */
+    kinds: string[];
+    /** Characters injected into the wire, a cheap size signal (not a token count). */
+    bytes?: number;
+    /** `changed`/`missing` for hash admission; `counter` for reminders; `completion` for a push. */
+    reason?: "changed" | "missing" | "counter" | "completion";
+  };
+  /**
+   * A transcript write was requested (and, unless skipped, attempted).
+   *
+   * Long turns were unobservable: a session file could sit unchanged for 25 minutes while the run
+   * was clearly alive. `written:false` with `skipped:true` means the fingerprint said "unchanged";
+   * `written:false` without it means the write was refused (switch/closed) or failed.
+   */
+  "session:persist": {
+    reason: "user-message" | "pump-complete" | "force";
+    messages: number;
+    written: boolean;
+    /** The fingerprint short-circuit: no write was attempted. */
+    skipped?: boolean;
+    durationMs?: number;
+  };
 };

@@ -23,6 +23,21 @@ function taskBindingSuffix(payload: Record<string, unknown>): string {
   return typeof id === "string" && id.length > 0 ? ` [task ${id}]` : "";
 }
 
+/** Compact `name (id)` list for a diagnostic tool-call set; ids only when the name is absent. */
+function toolRefNames(value: unknown): string {
+  if (!Array.isArray(value)) return "";
+  return value
+    .map((ref) => {
+      if (!ref || typeof ref !== "object") return "";
+      const record = ref as { id?: unknown; name?: unknown };
+      const name = typeof record.name === "string" && record.name ? record.name : undefined;
+      const id = typeof record.id === "string" && record.id ? record.id : undefined;
+      return name ?? id ?? "";
+    })
+    .filter(Boolean)
+    .join(", ");
+}
+
 /**
  * One row per (agent, pattern, event, kind) per window for contained handler failures.
  *
@@ -192,6 +207,27 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
     level: "warn",
     category: "system",
     formatMessage: (event) => `Failed to save session ${p(event).target ?? "data"}: ${p(event).error ?? "unknown"}`,
+  },
+  "session:persist": {
+    level: "debug",
+    category: "system",
+    formatMessage: (event) => {
+      const d = p(event);
+      const outcome = d.written === true ? "written" : d.skipped === true ? "skipped (unchanged)" : "not written";
+      const ms = typeof d.durationMs === "number" ? `, ${d.durationMs}ms` : "";
+      return `Session persist (${d.reason ?? "?"}): ${d.messages ?? 0} msgs, ${outcome}${ms}`;
+    },
+  },
+  "context:inject": {
+    level: "debug",
+    category: "system",
+    formatMessage: (event) => {
+      const d = p(event);
+      const kinds = Array.isArray(d.kinds) && d.kinds.length > 0 ? d.kinds.join(", ") : "?";
+      const reason = d.reason ? ` (${d.reason})` : "";
+      const bytes = typeof d.bytes === "number" ? `, ${d.bytes} bytes` : "";
+      return `Context injected (${d.source ?? "?"})${reason}: ${kinds}${bytes}`;
+    },
   },
   "session:diagnostic": SPECIALIZED_EVENT_LOG,
   "session:bootstrap-summary": {
@@ -458,6 +494,45 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
       const duration = p(event).duration_ms;
       const suffix = duration != null ? ` (${duration}ms)` : "";
       return p(event).cancelled === true ? `Tool cancelled: ${name}${suffix}` : `Tool end: ${name}${suffix}`;
+    },
+  },
+  "tool:phase": {
+    level: "debug",
+    category: "tool",
+    formatMessage: (event) => {
+      const d = p(event);
+      const phase = d.phase != null ? ` ${d.phase}` : "";
+      const pending = typeof d.pendingCount === "number" ? d.pendingCount : 0;
+      const executed = typeof d.executedCount === "number" ? d.executedCount : 0;
+      const held = toolRefNames(d.held);
+      const approved = toolRefNames(d.approved);
+      const approval = toolRefNames(d.needsApproval);
+      const client = toolRefNames(d.needsClient);
+      const extra = [
+        held ? `${d.heldCount ?? 0} held (${held})` : "",
+        approved ? `${d.approvedCount ?? 0} approved pending (${approved})` : "",
+        approval ? `${d.needsApprovalCount ?? 0} awaiting approval (${approval})` : "",
+        client ? `${d.needsClientCount ?? 0} client (${client})` : "",
+      ].filter(Boolean);
+      return `Tool phase${phase}: ${pending} pending, ${executed} executed${extra.length ? `, ${extra.join(", ")}` : ""}`;
+    },
+  },
+  "tool:settle": {
+    level: "info",
+    category: "tool",
+    formatMessage: (event) => {
+      const d = p(event);
+      const calls = toolRefNames(d.calls);
+      const scope = d.includeInFlight === true ? "in-flight" : "incomplete";
+      return `Tool settle (${d.cause ?? "engine"}, ${scope}): ${calls || "no calls"}`;
+    },
+  },
+  "tool:resume": {
+    level: "debug",
+    category: "tool",
+    formatMessage: (event) => {
+      const d = p(event);
+      return `Tool resume after approval: ${toolRefNames(d.calls) || "no calls"}`;
     },
   },
   "agent:client-tool-result": {

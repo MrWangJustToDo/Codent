@@ -518,6 +518,110 @@ console.log("approval request + resolution bridged: OK");
       category: "system",
       match: /^Extension disk failed: import failed$/,
     },
+    {
+      label: "tool:phase (held sibling)",
+      emit: () =>
+        bus.emit(
+          "tool:phase",
+          {
+            phase: 1,
+            pending: [
+              { id: "call_tree", name: "tree" },
+              { id: "call_run", name: "run_command" },
+            ],
+            pendingCount: 2,
+            executed: [],
+            executedCount: 0,
+            held: [{ id: "call_tree", name: "tree" }],
+            heldCount: 1,
+            approved: [],
+            approvedCount: 0,
+            needsApproval: [{ id: "call_run", name: "run_command" }],
+            needsApprovalCount: 1,
+            needsClient: [],
+            needsClientCount: 0,
+          },
+          { agentId: "agent-1" }
+        ),
+      event: "tool:phase",
+      level: "debug",
+      category: "tool",
+      match: /^Tool phase 1: 2 pending, 0 executed, 1 held \(tree\), 1 awaiting approval \(run_command\)$/,
+    },
+    {
+      label: "tool:settle",
+      emit: () =>
+        bus.emit(
+          "tool:settle",
+          { cause: "turn-end", includeInFlight: true, calls: [{ id: "call_tree", name: "tree" }], count: 1 },
+          { agentId: "agent-1" }
+        ),
+      event: "tool:settle",
+      level: "info",
+      category: "tool",
+      match: /^Tool settle \(turn-end, in-flight\): tree$/,
+    },
+    {
+      label: "tool:resume",
+      emit: () =>
+        bus.emit("tool:resume", { calls: [{ id: "call_tree", name: "tree" }], count: 1 }, { agentId: "agent-1" }),
+      event: "tool:resume",
+      level: "debug",
+      category: "tool",
+      match: /^Tool resume after approval: tree$/,
+    },
+    {
+      label: "context:inject",
+      emit: () =>
+        bus.emit(
+          "context:inject",
+          { source: "turn-context", kinds: ["current_date"], bytes: 123, reason: "changed" },
+          { agentId: "agent-1" }
+        ),
+      event: "context:inject",
+      level: "debug",
+      category: "system",
+      match: /^Context injected \(turn-context\) \(changed\): current_date, 123 bytes$/,
+    },
+    {
+      label: "session:persist",
+      emit: () =>
+        bus.emit(
+          "session:persist",
+          { reason: "pump-complete", messages: 42, written: true, durationMs: 3 },
+          { agentId: "agent-1" }
+        ),
+      event: "session:persist",
+      level: "debug",
+      category: "system",
+      match: /^Session persist \(pump-complete\): 42 msgs, written, 3ms$/,
+    },
+    {
+      label: "session:persist (skipped)",
+      emit: () =>
+        bus.emit(
+          "session:persist",
+          { reason: "user-message", messages: 7, written: false, skipped: true, durationMs: 0 },
+          { agentId: "agent-1" }
+        ),
+      event: "session:persist",
+      level: "debug",
+      category: "system",
+      match: /^Session persist \(user-message\): 7 msgs, skipped \(unchanged\), 0ms$/,
+    },
+    {
+      label: "session:persist (not written)",
+      emit: () =>
+        bus.emit(
+          "session:persist",
+          { reason: "force", messages: 9, written: false, durationMs: 12 },
+          { agentId: "agent-1" }
+        ),
+      event: "session:persist",
+      level: "debug",
+      category: "system",
+      match: /^Session persist \(force\): 9 msgs, not written, 12ms$/,
+    },
   ];
   for (const testCase of cases) {
     const before = (await readEntries()).length;

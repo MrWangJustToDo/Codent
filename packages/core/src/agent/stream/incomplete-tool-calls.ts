@@ -80,6 +80,15 @@ interface CancelToolCallOptions {
   outputFor?: (part: ToolCallPart, message: string) => unknown;
   /** Drop the host-facing display payload, which describes the output being replaced. */
   clearDisplay?: boolean;
+  /**
+   * Called once per call this pass settles, with the part as it was found.
+   *
+   * A caller that must REPORT the settle (the `tool:settle` timeline row) cannot re-derive its
+   * candidate set from a second predicate copy: that copy decides against the pre-mutation
+   * snapshot and drifts the moment a pass is added or narrowed. The apply loop is the only place
+   * that knows exactly which parts it changed.
+   */
+  onSettled?: (part: ToolCallPart) => void;
 }
 
 const DEFAULT_CANCEL_OPTIONS: CancelToolCallOptions = { state: "error", cancelled: true };
@@ -104,6 +113,7 @@ function applyToolCallCancellation(
       if (!isToolCallPart(part) || !isCancellable(part)) continue;
 
       partsChanged = true;
+      options.onSettled?.(part);
       const synthetic = options.outputFor
         ? options.outputFor(part, message)
         : // `reason` preserves the attribution (user cancel vs crash recovery) for BOTH the UI and
@@ -164,8 +174,15 @@ function applyToolCallCancellation(
  * - UI stops showing a loading spinner
  * - TanStack `checkForPendingToolCalls` will not try to execute truncated args
  */
-export function cancelIncompleteToolCalls(messages: UIMessage[], reason: string = TOOL_CANCELLED_MESSAGE): UIMessage[] {
-  return applyToolCallCancellation(messages, isCancellableIncompleteToolCall, reason, DEFAULT_CANCEL_OPTIONS);
+export function cancelIncompleteToolCalls(
+  messages: UIMessage[],
+  reason: string = TOOL_CANCELLED_MESSAGE,
+  onSettled?: (part: ToolCallPart) => void
+): UIMessage[] {
+  return applyToolCallCancellation(messages, isCancellableIncompleteToolCall, reason, {
+    ...DEFAULT_CANCEL_OPTIONS,
+    ...(onSettled ? { onSettled } : {}),
+  });
 }
 
 /** Reason written for a tool call recovered after a crash/interruption. */
@@ -179,6 +196,12 @@ export interface SettleToolCallsOptions {
   includeInFlight?: boolean;
   /** Keep a fully-asked `ask_user` interaction answerable (restore only). */
   preservePendingAskUser?: boolean;
+  /**
+   * Called once per call this settle pass actually settles, in pass order, with the part as it was
+   * found. This is the ONLY correct way to report what was settled — see
+   * {@link CancelToolCallOptions.onSettled}.
+   */
+  onSettled?: (part: ToolCallPart) => void;
 }
 
 /**
@@ -189,7 +212,7 @@ export interface SettleToolCallsOptions {
  */
 export function settleToolCalls(messages: UIMessage[], options: SettleToolCallsOptions = {}): UIMessage[] {
   const reason = options.reason ?? TOOL_CANCELLED_MESSAGE;
-  let next = cancelIncompleteToolCalls(messages, reason);
+  let next = cancelIncompleteToolCalls(messages, reason, options.onSettled);
   if (options.includeInFlight !== false) {
     next = cancelInFlightToolCalls(
       next,
@@ -197,7 +220,8 @@ export function settleToolCalls(messages: UIMessage[], options: SettleToolCallsO
       options.preservePendingAskUser
         ? (part) =>
             isInFlightToolCall(part) && !(part.name === BUILTIN_TOOL_NAMES.askUser && hasValidToolArguments(part))
-        : undefined
+        : undefined,
+      options.onSettled
     );
   }
   return next;
@@ -259,11 +283,13 @@ export function hasInFlightToolCalls(messages: UIMessage[]): boolean {
 export function cancelInFlightToolCalls(
   messages: UIMessage[],
   reason: string = TOOL_CANCELLED_MESSAGE,
-  shouldCancel: (part: ToolCallPart) => boolean = isInFlightToolCall
+  shouldCancel: (part: ToolCallPart) => boolean = isInFlightToolCall,
+  onSettled?: (part: ToolCallPart) => void
 ): UIMessage[] {
   return applyToolCallCancellation(messages, shouldCancel, reason, {
     state: "complete",
     cancelled: true,
+    ...(onSettled ? { onSettled } : {}),
   });
 }
 

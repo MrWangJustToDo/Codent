@@ -43,19 +43,37 @@ export class SessionPersistence {
    */
   maybeSave(uiMessages: UIMessage[], reason: SessionSaveReason): Promise<boolean> | undefined {
     if (uiMessages.length === 0) return undefined;
-    if (!this.tracker.shouldPersist(uiMessages, { reason })) return undefined;
     const sessionId = this.host.session.getSessionData()?.id;
-    return saveSessionUIMessages(this.host, uiMessages, this.tracker, sessionId).catch((err) => {
-      this.reportBackgroundPersistError(err, sessionId);
-      return false;
-    });
+    if (!this.tracker.shouldPersist(uiMessages, { reason })) {
+      // The fingerprint short-circuit is a write DECISION worth seeing: "nothing was written" and
+      // "the write failed" were indistinguishable in the timeline.
+      this.emitPersist(reason, uiMessages.length, Date.now(), false, sessionId, true);
+      return undefined;
+    }
+    const startedAt = Date.now();
+    return saveSessionUIMessages(this.host, uiMessages, this.tracker, sessionId).then(
+      (saved) => {
+        this.emitPersist(reason, uiMessages.length, startedAt, saved, sessionId);
+        return saved;
+      },
+      (err) => {
+        this.emitPersist(reason, uiMessages.length, startedAt, false, sessionId);
+        this.reportBackgroundPersistError(err, sessionId);
+        return false;
+      }
+    );
   }
 
   /** Force-persist `uiMessages` (explicit slash-command flushes). */
   save(uiMessages: UIMessage[]): void {
     const sessionId = this.host.session.getSessionData()?.id;
-    void saveSessionUIMessages(this.host, uiMessages, this.tracker, sessionId).catch((err) =>
-      this.reportBackgroundPersistError(err, sessionId)
+    const startedAt = Date.now();
+    void saveSessionUIMessages(this.host, uiMessages, this.tracker, sessionId).then(
+      (saved) => this.emitPersist("force", uiMessages.length, startedAt, saved, sessionId),
+      (err) => {
+        this.emitPersist("force", uiMessages.length, startedAt, false, sessionId);
+        this.reportBackgroundPersistError(err, sessionId);
+      }
     );
   }
 
@@ -67,10 +85,50 @@ export class SessionPersistence {
    */
   persistUiMessagesNow(uiMessages: UIMessage[]): Promise<boolean> {
     const sessionId = this.host.session.getSessionData()?.id;
-    return saveSessionUIMessages(this.host, uiMessages, this.tracker, sessionId).catch((err) => {
-      this.reportBackgroundPersistError(err, sessionId);
-      return false;
-    });
+    const startedAt = Date.now();
+    return saveSessionUIMessages(this.host, uiMessages, this.tracker, sessionId).then(
+      (saved) => {
+        this.emitPersist("force", uiMessages.length, startedAt, saved, sessionId);
+        return saved;
+      },
+      (err) => {
+        this.emitPersist("force", uiMessages.length, startedAt, false, sessionId);
+        this.reportBackgroundPersistError(err, sessionId);
+        return false;
+      }
+    );
+  }
+
+  /**
+   * File the transcript write outcome as a bus event (the log policy decides the row).
+   *
+   * `written:false, skipped:true` is the fingerprint no-op; `written:false` without `skipped` is a
+   * refusal (switch/closed) or a failed write. This is what makes a turn that sits unpersisted for
+   * a long `task` batch visible without watching the file's mtime.
+   *
+   * The session id is the one CAPTURED before the write, not re-read here: a write for session A
+   * that completes after `/resume` adopted B must not be filed under B (the same reason the error
+   * reporter receives the captured id).
+   */
+  private emitPersist(
+    reason: SessionSaveReason,
+    messages: number,
+    startedAt: number,
+    written: boolean,
+    sessionId: string | undefined,
+    skipped = false
+  ): void {
+    this.host.emitEvent(
+      "session:persist",
+      {
+        reason,
+        messages,
+        written,
+        ...(skipped ? { skipped: true } : {}),
+        durationMs: Date.now() - startedAt,
+      },
+      ...(sessionId ? [{ sessionId }] : [])
+    );
   }
 
   /** Awaitable state-only persist (rename/title need the write to land before returning). */

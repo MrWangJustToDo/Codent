@@ -12,6 +12,7 @@ import {
   cancelIncompleteToolCalls,
   cancelInFlightToolCalls,
   settleInterruptedToolCalls,
+  settleToolCalls,
   hasCancellableIncompleteToolCalls,
   hasInFlightToolCalls,
   hasValidToolArguments,
@@ -195,5 +196,61 @@ assert.equal(restoredMessages[2].parts[0].output, undefined);
 assert.equal(restoredMessages[3].parts[0].state, "input-complete");
 assert.equal(restoredMessages[3].parts[0].output, undefined, "pending ask_user survives restore");
 assert.equal(settleInterruptedToolCalls(restoredMessages), restoredMessages, "a second settle pass is a no-op");
+
+// ===== the settle reports exactly what it changed =====
+// The `tool:settle` timeline row is built from this callback, not from a second predicate copy:
+// a copy decided against the pre-mutation snapshot and drifted from `settleToolCalls` (the abort
+// path settled truncated calls the copy had filtered out).
+{
+  const mixed = [
+    { ...messages[0] },
+    { ...inFlightMessages[0] },
+    {
+      id: "a5",
+      role: "assistant",
+      parts: [
+        {
+          ...inFlight,
+          id: "call_approval",
+          state: "approval-requested",
+          approval: { id: "approval-1", needsApproval: true },
+        },
+        { ...inFlight, id: "call_ask", name: "ask_user", arguments: '{"question":"which file?"}' },
+      ],
+    },
+  ];
+
+  const reportedIncompleteOnly = [];
+  settleToolCalls(mixed, {
+    includeInFlight: false,
+    onSettled: (part) => reportedIncompleteOnly.push(part.id),
+  });
+  assert.deepEqual(
+    reportedIncompleteOnly,
+    ["call_1"],
+    "includeInFlight:false reports the truncated call only — not the in-flight one it leaves alone"
+  );
+
+  const reportedAll = [];
+  settleToolCalls(mixed, {
+    includeInFlight: true,
+    preservePendingAskUser: true,
+    onSettled: (part) => reportedAll.push(part.id),
+  });
+  assert.deepEqual(
+    reportedAll,
+    ["call_1", "call_run"],
+    "the full pass reports both shapes and neither the pending approval nor the answerable ask_user"
+  );
+
+  const settledOnce = settleToolCalls(mixed, { includeInFlight: true, preservePendingAskUser: true });
+  const reportedAgain = [];
+  settleToolCalls(settledOnce, {
+    includeInFlight: true,
+    preservePendingAskUser: true,
+    onSettled: (part) => reportedAgain.push(part.id),
+  });
+  assert.deepEqual(reportedAgain, [], "a second pass over the same snapshot has nothing to settle and reports nothing");
+}
 
 console.log("incomplete-tool-calls validation passed");

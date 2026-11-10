@@ -35,6 +35,7 @@
 import assert from "node:assert/strict";
 
 import {
+  SessionPersistence,
   SessionService,
   SessionStore,
   UsageTracker,
@@ -478,7 +479,7 @@ function newService() {
 }
 
 // ---------------------------------------------------------------------------
-// 6. A resume keeps the EXACT lifetime cache-hit ratio (per-sample billed prompt)
+// 8. A resume keeps the EXACT lifetime cache-hit ratio (per-sample billed prompt)
 //
 // `billedInputTotal` is summed per sample. Re-deriving it from the aggregate at restore time
 // applies the convention heuristic to totals, which only agrees while every sample used the same
@@ -524,7 +525,7 @@ function newService() {
 }
 
 // ---------------------------------------------------------------------------
-// 8. A restore freezes writes until adoption, and adoption releases ONE level
+// 9. A restore freezes writes until adoption, and adoption releases ONE level
 // ---------------------------------------------------------------------------
 //
 // The target's model/effort are applied to the host BEFORE the target transcript is adopted. At
@@ -555,6 +556,60 @@ function newService() {
 
   service.resumePersist();
   assert.equal(await service.persistSession(input()), true, "after the outer release writes land again");
+}
+
+// ---------------------------------------------------------------------------
+// 10. Every transcript write decision is a bus event (debuggability)
+//
+// The timeline used to be silent about persistence: a long `task` batch could leave the session
+// file untouched for ~25 minutes and only `stat` revealed it. `SessionPersistence` now emits
+// `session:persist` for BOTH outcomes — a landed write and the fingerprint short-circuit — so the
+// log answers "was the transcript on disk at this point" without watching mtime.
+// ---------------------------------------------------------------------------
+{
+  setupEnv();
+  const store = new SessionStore();
+  const service = new SessionService();
+  service.setStore(store, { modelStyle: "openai", model: "test-model" });
+  const data = service.ensureSessionData();
+  data.name = "persist-row";
+
+  const events = [];
+  const host = {
+    usage: new UsageTracker(),
+    getTodoManager: () => null,
+    planMode: { getPhase: () => "off", getState: () => null },
+    getModeState: () => fakeModeState(),
+    isAutoModeEnabled: () => false,
+    setAutoModeEnabled: () => {},
+    getReasoningEffort: () => undefined,
+    session: service,
+    emitEvent: (type, payload, options) => events.push({ type, payload, options }),
+    clearQueuedMessages: () => {},
+    syncInteractionStateFromUIMessages: () => {},
+  };
+  const persistence = new SessionPersistence(host);
+  const messages = [textMessage("m1", "hello")];
+
+  assert.equal(await persistence.maybeSave(messages, "pump-complete"), true, "the first save lands");
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === "session:persist" &&
+        event.payload?.reason === "pump-complete" &&
+        event.payload?.written === true &&
+        typeof event.payload?.durationMs === "number"
+    ),
+    "a landed write emits session:persist { reason, written, durationMs }"
+  );
+
+  assert.equal(persistence.maybeSave(messages, "pump-complete"), undefined, "same content is a no-op");
+  assert.ok(
+    events.some(
+      (event) => event.type === "session:persist" && event.payload?.written === false && event.payload?.skipped === true
+    ),
+    "the fingerprint short-circuit is recorded as skipped, not as a silent success"
+  );
 }
 
 console.log("session-persist-integrity validation passed");
