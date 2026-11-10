@@ -32,6 +32,8 @@ import {
   useSize,
   useWorkspaceInfo,
   isAlternateScreenActive,
+  resetWheelAsArrows,
+  wheelModeReleaseSequence,
   beginRuntimeSuspend,
   useEditorHandoff,
 } from "@codent/app";
@@ -526,15 +528,18 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
   // Last-resort restore for a path that exits without unmounting (fatal bootstrap error, a
   // signal, an external `process.exit`). Ink's own unmount already writes the leave-alt-screen
   // sequence; the sequences are idempotent, and they matter when the workspace panel owns the
-  // alternate screen at exit. `1007h` re-arms the wheel→arrow translation the panel switched on
-  // (it is the terminal default, so this only matters for a terminal that starts with it off).
+  // alternate screen at exit. The wheel mode is handed back only if the panel claimed it — this
+  // used to write `1007h`, i.e. arm the very mode the panel was supposed to give up, which left a
+  // terminal that started with it off holding it on afterwards.
   process.once("exit", () => {
     if (!process.stdout.isTTY) return;
     // The explicit exit path already released the renderer and printed the report there; adding
     // this sequence after it would clear the screen the report was just written to.
     if (terminalRestored) return;
     try {
-      process.stdout.write("\x1b[?1007h\x1b[?1049l\x1b[?25h");
+      process.stdout.write(`${wheelModeReleaseSequence()}\x1b[?1049l\x1b[?25h`);
+      // Nothing is left to hand back after this write.
+      resetWheelAsArrows();
     } catch {
       // stdout already closed
     }

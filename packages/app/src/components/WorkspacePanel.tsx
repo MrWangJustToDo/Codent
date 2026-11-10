@@ -2,7 +2,7 @@ import { useApp } from "ink";
 import { useEffect } from "react";
 
 import { useWorkspacePanel } from "../hooks/use-workspace-panel.js";
-import { enableWheelAsArrows, setAlternateScreenActive } from "../utils/alternate-screen.js";
+import { claimWheelAsArrows, setAlternateScreenActive } from "../utils/alternate-screen.js";
 import { isRuntimeSuspended } from "../utils/runtime-suspend.js";
 
 import { PanelOverlay } from "./PanelOverlay.js";
@@ -22,12 +22,19 @@ export const WorkspacePanel = () => {
   //
   // The wheel rides along: inside the alternate screen the terminal can translate it into the Up/Down
   // keys the browser already handles (tree cursor / preview scroll), which is the whole scrolling
-  // story here — no mouse protocol, and native click-drag selection keeps working.
+  // story here — no mouse protocol, and native click-drag selection keeps working. `claimWheelAsArrows`
+  // hands back a release rather than leaving two calls to keep in sync: a switch that is only half
+  // wired (enable with no disable) is exactly the bug this replaced.
   useEffect(() => {
     setOptions({ isAlternateBufferEnabled: true });
     setAlternateScreenActive(true);
-    enableWheelAsArrows();
+    const releaseWheel = claimWheelAsArrows();
     return () => {
+      // Give the wheel mode back before anything can bail out of this cleanup: the tail of the last
+      // gesture is still in the pipe, and the release opens the window that swallows it
+      // (`wheel-settle.ts`). A plain stdout write, so it is safe on the handoff path below — the
+      // renderer's own teardown is what made switching buffers throw EPIPE there, not this.
+      releaseWheel();
       setAlternateScreenActive(false);
       // A handoff unmounts the app on purpose: the renderer is torn down and rebuilt, and asking the
       // dying renderer to switch buffers throws EPIPE out of its render worker. The screen was

@@ -26,7 +26,7 @@ export { WorkspaceImagePreview } from "./components/WorkspaceImagePreview.js";
 // `boundAnsiText` is the sanitize + bound + reset triple every foreign text passes through, so the
 // extension surface test can drive it directly instead of mounting the component.
 export { ANSI_RESET, boundAnsiText, sanitizeAnsi } from "./utils/ansi.js";
-export { isAlternateScreenActive } from "./utils/alternate-screen.js";
+export { isAlternateScreenActive, resetWheelAsArrows, wheelModeReleaseSequence } from "./utils/alternate-screen.js";
 // Host-initiated suspend: the one seam that lets a host unmount the UI without ending the session.
 export {
   beginRuntimeSuspend,

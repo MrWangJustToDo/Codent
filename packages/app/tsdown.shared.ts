@@ -150,7 +150,9 @@ export const ENTRIES = [
   "src/hooks/use-config-editor.ts",
   "src/hooks/use-subagent-panel.ts",
   "src/hooks/use-extension-panel.ts",
-  // Emitted for `test/alternate-screen.test.mjs`: this helper is the browser-vs-TTY boundary, so
-  // its platform guard is asserted against a stand-in `process` instead of a copy of the condition.
+  // Emitted for `test/alternate-screen.test.mjs` / `test/wheel-settle.test.mjs`: both are policy
+  // modules whose behaviour is a handshake with the terminal (a paired mode, a window measured in
+  // frames), so they are asserted directly instead of through a copy of their conditions.
   "src/utils/alternate-screen.ts",
+  "src/utils/wheel-settle.ts",
 ];
