@@ -587,8 +587,21 @@ export const WorkspaceFileMode = () => {
             if (cursorAdmits()) panImage(0, 1);
             return;
           }
-          if (key.leftArrow) return guardDiscreteKey(() => panImage(-1, 0));
-          if (key.rightArrow) return guardDiscreteKey(() => panImage(1, 0));
+          // ←/→ deliberately skip `guardDiscreteKey`: panning is the one horizontal binding where a
+          // key press and a trackpad swipe mean the same thing (one step vs. a stream of steps, and
+          // a stream is exactly what panning wants). The guard exists to tell "one decision" from "a
+          // gesture it must not act on", and here there is no decision to protect — sending it
+          // through the guard is what made a swipe over a zoomed image pan NOTHING at all, because
+          // the burst was swallowed as a swipe. The pace gate still applies, so a fast swipe pans at
+          // the panel's scroll rate instead of one step per notch.
+          if (key.leftArrow) {
+            if (cursorAdmits()) panImage(-1, 0);
+            return;
+          }
+          if (key.rightArrow) {
+            if (cursorAdmits()) panImage(1, 0);
+            return;
+          }
         }
         if (key.leftArrow) {
           guardDiscreteKey(() => setPaneFocus("tree"));

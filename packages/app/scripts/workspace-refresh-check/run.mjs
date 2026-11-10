@@ -19,6 +19,10 @@
  * read back by pressing `Enter`, which selects `items[cursorIndex]`. No frame scraping, so this is
  * headless — unlike `validate:render-smoke`, which needs the renderer's erase/repaint path.
  *
+ * Section 6 is not a refresh behaviour but needs the same fixture: it is the one horizontal binding
+ * that must NOT go through the panel's swipe guard (panning a zoomed image), asserted by pressing
+ * ← and reading the store's `imagePanX`.
+ *
  * Driven by `validate-workspace-refresh-check.mjs`, which bundles this file's imports into one graph
  * and gates the ~40s run behind `WATCH_WORKSPACE_REFRESH=1`.
  */
@@ -118,6 +122,14 @@ const env = {
   getArch: async () => "arm64",
   getEnv: async () => ({}),
   homedir: async () => "/home",
+  // Only the existence of the capability matters to the panel's key routing (`imageViewActive`);
+  // section 6 drives the pan step from `setImageGeometry` instead of decoding a real picture.
+  imageToText: async (_bytes, options) => ({
+    rows: [],
+    imageWidth: 800,
+    imageHeight: 600,
+    region: options.region ?? { x: 0, y: 0, width: 800, height: 600 },
+  }),
   runCommand,
   exec: async () => ({ stdout: "", stderr: "", code: 0 }),
   fetch: async () => new Response(""),
@@ -376,6 +388,78 @@ record(
     entries: secondRead.gitStatus.size,
   }
 );
+
+// ── 6. a horizontal swipe pans a zoomed image ─────────────────────
+//
+// ←/→ are the only bytes a trackpad's horizontal swipe produces, so this panel's DISCRETE bindings
+// (expand a directory, move focus between the panes, `←` back to the tree) sit behind
+// `createWheelGestureGuard`: the first press is held for 25ms and a second one inside that window
+// cancels it and swallows the rest of the gesture.
+//
+// Panning a zoomed image is the one horizontal binding where a press and a swipe are the same
+// command — one step, or a stream of steps, which is exactly what panning wants. It used to go
+// through the guard anyway, and the result was that a swipe over a zoomed picture panned NOTHING at
+// all. These two assertions fail if the pan binding is routed back through the guard.
+
+files.set("shot.png", "\u0089PNG\r\n\u001a\n");
+
+const panStdin = fakeStdin();
+const panInstance = render(
+  createElement(
+    CoreEnvProvider,
+    { value: env },
+    createElement(InputScopeProvider, { value: "workspace" }, createElement(WorkspaceFileMode, null))
+  ),
+  {
+    stdout: new FakeStdout(),
+    stdin: panStdin,
+    exitOnCtrlC: false,
+    patchConsole: false,
+    maxFps: 30,
+  }
+);
+await settle(600);
+
+const panX = () => useWorkspacePanel.getReadonlyState().imagePanX;
+const panZoom = () => useWorkspacePanel.getReadonlyState().imageZoom;
+const pressPan = async (seq, wait = 120) => {
+  panStdin.push(seq);
+  await settle(wait);
+};
+
+useWorkspacePanel.getActions().open();
+useWorkspacePanel.getActions().selectFile(path.posix.join(ROOT, "shot.png"));
+useWorkspacePanel.getActions().setPaneFocus("preview");
+// The preview normally publishes this; pinning it keeps the step size from depending on when the
+// (stubbed) decoder answers. `zoom` is asked for directly so the step stays small: at 8x one press
+// moves 1/70 of the pan range, so five of them cannot hit the clamp.
+useWorkspacePanel.getActions().setImageGeometry({ imageWidth: 800, imageHeight: 600, maxCols: 60, maxRows: 20 });
+// 1 → 1.5 → 2 → 3 → 4 → 6 → 8; the pan window stays centred at 0.5 (`open` just reset it).
+for (let i = 0; i < 6; i++) useWorkspacePanel.getActions().zoomImage(1);
+await settle(200);
+
+const panStart = panX();
+await pressPan("\u001B[D");
+const afterSingle = panX();
+record("a single ← pans the zoomed image one step", panZoom() > 1 && afterSingle < panStart, {
+  zoom: panZoom(),
+  from: panStart,
+  to: afterSingle,
+});
+
+// A swipe: five notches 10ms apart. The pace gate admits one per 32ms, so the count is not five —
+// what matters is that the gesture MOVES the window instead of being dropped wholesale.
+for (let i = 0; i < 5; i++) await pressPan("\u001B[D", 10);
+await settle(200);
+const afterSwipe = panX();
+record("a burst of ← (a trackpad swipe) pans instead of being swallowed", afterSwipe < afterSingle, {
+  from: afterSingle,
+  to: afterSwipe,
+  singleStep: panStart - afterSingle,
+  swipeSteps: (afterSingle - afterSwipe) / Math.max(1e-9, panStart - afterSingle),
+});
+
+panInstance.unmount();
 
 const pass = results.every((result) => result.pass);
 console.log(JSON.stringify({ results, pass }, null, 2));
