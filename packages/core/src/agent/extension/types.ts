@@ -583,7 +583,7 @@ export interface ExtensionAPI {
    */
   order?: number;
 
-  activate(ctx: ExtensionContext): Promise<void> | void;
+  activate(ctx: ExtensionContext): Promise<void | ExtensionActivation> | void | ExtensionActivation;
   /**
    * Release this extension's resources. Runs **after** the flush phase, so anything buffered has
    * already landed — land state in `ctx.registerFlush(...)` instead of here if teardown can be
@@ -640,11 +640,35 @@ export interface ExtensionRegistrations {
   exitFlushRef: (() => void) | null;
 }
 
+/**
+ * What `activate` may return when it produced nothing.
+ *
+ * `void` means "activated normally". Returning this object is the extension telling the runner it is
+ * LOADED but has no capability in this host: no isolate backend, no tools to expose, or turned off
+ * by configuration. The runner then settles the instance as `inactive` with {@link inactive} as the
+ * reason instead of `active` — an "enabled" row with zero tools was indistinguishable from a broken
+ * feature, and the panel could not explain why `/code` was unavailable.
+ *
+ * Config-disabled extensions (`{ enabled: false }`) do not need this: the loader never calls
+ * `activate` for them.
+ */
+export interface ExtensionActivation {
+  inactive: string;
+}
+
 export interface ExtensionInstance {
   api: ExtensionAPI;
   context: ExtensionContext;
   state: "inactive" | "active" | "error";
   error?: Error;
+  /**
+   * Why this extension loaded but produced nothing (see {@link ExtensionActivation.inactive}).
+   *
+   * Distinct from `error`: nothing went wrong — the host cannot support the feature (no isolate
+   * backend, no tools to expose) or configuration turned it off. Reported as its own field because
+   * it renders as "not available, here is why", not as a red failure.
+   */
+  inactiveReason?: string;
   /** Artifacts this extension registered (used by enable/disable). */
   registrations: ExtensionRegistrations;
   /**
@@ -691,6 +715,12 @@ export interface ExtensionInfo {
   /** "active" | "error" | "inactive" */
   state: ExtensionInstance["state"];
   error?: string;
+  /**
+   * Set when the extension activated without producing anything (see
+   * {@link ExtensionActivation.inactive}): the panel shows it as unavailable WITH the reason,
+   * instead of claiming an "enabled" feature that registered no tool, command or section.
+   */
+  inactiveReason?: string;
   /**
    * Effective dispatch order for this extension — the declared `order`, or `0` when undeclared.
    * Reported so an ordering conflict is observable at runtime; see `extension-ordering`.

@@ -147,3 +147,8 @@ export { formatMcpStatus } from "./agent/mcp/extension.js";
 // Config loading is asserted for its per-server tolerance: one bad entry must cost one server, not
 // the whole file (which is how a single `"approval": "alwayss"` used to hide every MCP tool).
 export { loadMcpConfig } from "./agent/mcp/config.js";
+
+// Cross-process session exclusivity. A lock file is only verifiable against a real filesystem (the
+// heartbeat IS its mtime), so the validator drives the production class over a temp root.
+export { SESSION_LOCK_TTL_MS, SessionLock, SessionLockedError } from "./agent/persistence/session-lock.js";
+export { sessionLockPath } from "./agent/persistence/types.js";

@@ -7,6 +7,8 @@
 
 import { getFirstUserInput } from "../../agent/compaction/message-utils.js";
 import { dehydrateUIMessages, hydrateUIMessages, type MediaHydrationMiss } from "../../agent/media/media-utils.js";
+import { SessionLockController } from "../../agent/persistence/session-lock.js";
+import { assertSafeSessionId } from "../../agent/persistence/types.js";
 import { TITLE_SYSTEM_PROMPT } from "../../agent/prompt/session-summary-prompts.js";
 import { markRestoreReadFailure } from "../../agent/session/session-restore.js";
 import { runSideTextQuery } from "../../models/adapter/side-text-query.js";
@@ -87,9 +89,45 @@ export class SessionService {
    * earlier title.
    */
   private readonly titleInFlight = new Set<string>();
+
+  /**
+   * Cross-process lock over the session logs this service opens.
+   *
+   * On the SERVICE rather than on the store: a store instance is created per binding (and a second
+   * one exists for deletion), while "the session this agent is on" is a property of the agent, held
+   * for exactly as long as this service and released by {@link close}. See `session-lock.ts` for why
+   * the in-process claim cannot cover another process.
+   */
+  private readonly sessionLock = new SessionLockController();
+
+  /**
+   * Name the runtime that owns this service's locks.
+   *
+   * Called once by the agent, before any store is bound. Composed with a per-process instance id
+   * inside `SessionLock`, so two processes that both name their agent "main" cannot agree they are
+   * the same owner.
+   */
+  setLockOwner(ownerId: string): void {
+    this.sessionLock.setOwner(ownerId);
+  }
+
   setStore(store: SessionStore, config: { modelStyle: string; model: string }): void {
     this.store = store;
     this.config = config;
+  }
+
+  /**
+   * Take the cross-process lock for the session this service is now on.
+   *
+   * Called after a COMMIT, not only from the restore read: a `/new` session never goes through
+   * `readSessionForRestore`, and a session created and saved here could otherwise be resumed by
+   * another process while this one keeps appending to it. Idempotent for the id already held.
+   *
+   * Throws {@link SessionLockedError} when another process holds it; the caller runs it as a
+   * post-commit step, where a failure is reported without undoing a switch that already happened.
+   */
+  async lockSession(sessionId: string): Promise<void> {
+    await this.sessionLock.lockSession(sessionId, this.store?.getEnv());
   }
 
   /**
@@ -114,6 +152,10 @@ export class SessionService {
     while (this.pendingSaves.size > 0) {
       await Promise.allSettled([...this.pendingSaves]);
     }
+    // Hand the disk session back only AFTER the writer has drained. Releasing earlier let another
+    // process acquire the id and append while this one still had queued writes — the exact
+    // cross-process merge the lock exists to prevent. `finally` so a failed save cannot strand it.
+    await this.sessionLock.releaseAll();
   }
 
   /** Whether {@link close} has refused further writes. */
@@ -633,50 +675,68 @@ export class SessionService {
   async readSessionForRestore(sessionId: string, input: SessionRestoreInput = {}): Promise<RestoredSessionRead> {
     if (!this.store) throw new Error("Session store not available");
 
-    // Mark a missing/corrupt target. This is the `/resume <bad id>` case: nothing of the target was
-    // read, so the recovery must not re-load the departure from disk (that would roll back an
-    // in-memory message whose earlier persist failed). A later failure — including the canonical
-    // rewrite below — is NOT marked, because the target was readable and the switch's recovery path
-    // still owns the cleanup.
-    let session: SessionData | null;
-    try {
-      session = await this.store.load(sessionId);
-    } catch (error) {
-      throw markRestoreReadFailure(error);
-    }
-    if (!session) throw markRestoreReadFailure(new Error(`Session not found: ${sessionId}`));
+    // Validate before touching the filesystem: the lock path is derived from the id, and an unsafe
+    // id must fail as "invalid session id" rather than writing a lock file first.
+    assertSafeSessionId(sessionId);
+    // Cross-process exclusivity. Two terminals resuming the same id used to both claim it (the
+    // in-process table cannot see the other process) and append to one JSONL, which `load()` then
+    // folded into a merged transcript. Acquired BEFORE the read so the refusal happens before
+    // anything is written, and thrown out of here so the switch's existing failure path (abort the
+    // claim, re-open the departure) owns the cleanup.
+    await this.sessionLock.lockSession(sessionId, this.store.getEnv());
 
-    // Hydrate reads media files; canonicalize re-extracts media:// refs (writes).
-    // Neither must abort a resume on media IO failure, so degrade to the stored
-    // messages instead of throwing out of restore. Missing media is reported
-    // through `onMissingMedia` so the silent data loss becomes observable.
-    let hydrated: UIMessage[];
     try {
-      hydrated = await hydrateUIMessages(session.uiMessages, {
-        onMissing: input.onMissingMedia,
-        env: this.store.getEnv(),
-      });
+      // Mark a missing/corrupt target. This is the `/resume <bad id>` case: nothing of the target
+      // was read, so the recovery must not re-load the departure from disk (that would roll back an
+      // in-memory message whose earlier persist failed). A later failure — including the canonical
+      // rewrite below — is NOT marked, because the target was readable and the switch's recovery path
+      // still owns the cleanup.
+      let session: SessionData | null;
       try {
-        const dehydrated = await dehydrateUIMessages(hydrated, { env: this.store.getEnv() });
-        session.uiMessages = dehydrated;
-      } catch {
-        // Canonicalize is best-effort; keep the stored form when media writes fail.
+        session = await this.store.load(sessionId);
+      } catch (error) {
+        throw markRestoreReadFailure(error);
       }
-    } catch {
-      hydrated = session.uiMessages;
-    }
-    // Repair legacy sessions whose name was overwritten to a blank string before
-    // the empty-title guard existed. Reset to the default so the UI never shows
-    // an empty label and the next persist retitles via auto-title.
-    if (!session.name?.trim()) {
-      session.name = "New Session";
-    }
+      if (!session) throw markRestoreReadFailure(new Error(`Session not found: ${sessionId}`));
 
-    // Persist the canonical rewrite BEFORE anyone adopts it: a save failure must leave the agent on
-    // the session it was actually running, otherwise ownership/log/tracker and live state disagree.
-    await this.store.save(session);
+      // Hydrate reads media files; canonicalize re-extracts media:// refs (writes).
+      // Neither must abort a resume on media IO failure, so degrade to the stored
+      // messages instead of throwing out of restore. Missing media is reported
+      // through `onMissingMedia` so the silent data loss becomes observable.
+      let hydrated: UIMessage[];
+      try {
+        hydrated = await hydrateUIMessages(session.uiMessages, {
+          onMissing: input.onMissingMedia,
+          env: this.store.getEnv(),
+        });
+        try {
+          const dehydrated = await dehydrateUIMessages(hydrated, { env: this.store.getEnv() });
+          session.uiMessages = dehydrated;
+        } catch {
+          // Canonicalize is best-effort; keep the stored form when media writes fail.
+        }
+      } catch {
+        hydrated = session.uiMessages;
+      }
+      // Repair legacy sessions whose name was overwritten to a blank string before
+      // the empty-title guard existed. Reset to the default so the UI never shows
+      // an empty label and the next persist retitles via auto-title.
+      if (!session.name?.trim()) {
+        session.name = "New Session";
+      }
 
-    return { session, uiMessages: hydrated };
+      // Persist the canonical rewrite BEFORE anyone adopts it: a save failure must leave the agent on
+      // the session it was actually running, otherwise ownership/log/tracker and live state disagree.
+      await this.store.save(session);
+
+      return { session, uiMessages: hydrated };
+    } catch (error) {
+      // The target lock is already ours, but the load did not commit: hand the lock back to the
+      // session that never left (a read failure must not leave the departure unlocked and a bogus
+      // target locked). Best-effort — the TTL expires a stranded target lock.
+      await this.sessionLock.restoreAfterFailedRead(this.store.getEnv(), this.data?.id, sessionId);
+      throw error;
+    }
   }
 
   /**

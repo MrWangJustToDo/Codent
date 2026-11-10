@@ -53,6 +53,13 @@ export interface SessionTranscriptPort {
   getSessionData(): SessionData | null;
   setSessionData(data: SessionData): void;
   getSessionStore(): SessionStore | null;
+  /**
+   * Take the cross-process lock for the session this runtime is now on (see `session-lock.ts`).
+   *
+   * Optional: a duck-typed / embedded persistence double may not own one, and the lock degrades to
+   * the in-process claim exactly as an absent fs capability does.
+   */
+  lockSession?(sessionId: string): Promise<void>;
   awaitPersistIdle(): Promise<void>;
   getChatController(): AgentChatController | undefined;
   emitSessionNew(sessionId: string, reason: "session-new"): void;

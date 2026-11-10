@@ -22,6 +22,7 @@ import type { PendingExtensionNotice } from "./default-extension-ui.js";
 import type { ExtensionUiBridge } from "./extension-ui-bridge.js";
 import type {
   ExtensionInstance,
+  ExtensionActivation,
   ExtensionRuntimeAccess,
   ExtensionLlmRequest,
   ExtensionLlmResult,
@@ -67,7 +68,12 @@ import type { ModelMessage } from "@tanstack/ai";
 const EXTENSION_ID_RE = /^[A-Za-z][A-Za-z0-9._/-]*$/;
 
 /** Result of one activation transaction — see {@link ExtensionRunner.activateInstance}. */
-type ActivationOutcome = { kind: "active" } | { kind: "revoked" } | { kind: "failed"; error: Error };
+type ActivationOutcome =
+  | { kind: "active" }
+  | { kind: "revoked" }
+  /** Loaded but produced nothing — see `ExtensionActivation`. */
+  | { kind: "inactive"; reason: string }
+  | { kind: "failed"; error: Error };
 
 export interface ExtensionRunnerOptions {
   /**
@@ -127,6 +133,9 @@ export interface ExtensionRunnerOptions {
    * Separate from the two directional callbacks above because it is the general "republish the
    * list" signal: a host that only wired `extension.toggle` published `session:extensions` from the
    * DISPATCH site, so any other caller of `setEnabled` / `loadExtension` changed state silently.
+   *
+   * `extensionId` is `""` when the whole catalog moved at once (`destroyAll`): the publisher re-reads
+   * the (now empty) list, so no single extension is being attributed.
    */
   onExtensionStateChanged?: (extensionId: string) => void;
   cwd?: string;
@@ -847,7 +856,7 @@ export class ExtensionRunner {
 
     try {
       instance.everActivated = true;
-      await withCallbackTimeout(
+      const activation = await withCallbackTimeout(
         Promise.resolve(instance.api.activate(context)),
         `extension "${instance.api.id}" activate`,
         this.callbackTimeoutMs
@@ -863,8 +872,34 @@ export class ExtensionRunner {
         if (instance.context === context) await this.teardownIncarnation(instance);
         return { kind: "revoked" };
       }
+      const activationResult = activation as ExtensionActivation | undefined | null;
+      if (typeof activationResult?.inactive === "string" && activationResult.inactive.trim()) {
+        // The extension is LOADED and the user has it enabled, but this host cannot give it any
+        // capability. Roll back anything it registered before reporting that (a third-party
+        // extension may register, then decide it cannot proceed): leaving the tools/commands live
+        // while the catalog says `enabled: false` is a split state.
+        //
+        // Teardown also revokes the lease and calls `deactivate`, which is the same shape a failed
+        // activation already uses; a retry builds a fresh context.
+        try {
+          await this.teardownIncarnation(instance);
+        } catch (teardownError) {
+          this.emitExtensionEvent("agent:extension-error", {
+            extensionId: instance.api.id,
+            phase: "activate-teardown",
+            error: toError(teardownError).message,
+          });
+        }
+        if (instance.context === context) {
+          instance.state = "inactive";
+          instance.error = undefined;
+          instance.inactiveReason = activationResult.inactive;
+        }
+        return { kind: "inactive", reason: activationResult.inactive };
+      }
       instance.state = "active";
       instance.error = undefined;
+      instance.inactiveReason = undefined;
       // Outside the activation `try`: publishing the catalog is a HOST step, and a throwing
       // callback used to roll a healthy extension back to `error` (see `runHostCallback`).
       this.runHostCallback(
@@ -1009,6 +1044,9 @@ export class ExtensionRunner {
         // enable then stacked a third copy of every hook). Set it even when deactivate throws: the
         // agent is released either way, and leaving `active` blocked the retry path.
         if (instance.context === incarnation) instance.state = "inactive";
+        // A disabled/rolled-back extension has no live reason to report; an `inactive` activation
+        // sets this again AFTER the rollback teardown (see `activateInstance`).
+        instance.inactiveReason = undefined;
       }
     }
   }
@@ -1101,6 +1139,11 @@ export class ExtensionRunner {
       // WeakMap has no `clear()`; a fresh one drops every retained wrapper.
       this.interceptorWrappers = new WeakMap();
       this.contexts.clear();
+      // A destroyed runner owns no extensions. Publish that instead of leaving the last pre-destroy
+      // catalog on a push subscriber (the panel, a remote client): `destroyAll` was the only state
+      // transition that moved the catalog without telling anyone. The id is unused by the
+      // published summary — it re-reads the (now empty) list — so the empty id names the runner.
+      this.runHostCallback("onExtensionStateChanged", () => this.options.onExtensionStateChanged?.(""), "destroyAll");
     } finally {
       this.uiBridge.dispose();
     }
@@ -1119,6 +1162,7 @@ export class ExtensionRunner {
         enabled: instance.state === "active",
         state: instance.state,
         error: instance.error?.message,
+        ...(instance.inactiveReason !== undefined ? { inactiveReason: instance.inactiveReason } : {}),
         order: this.rankOf(instance.api.id).order,
         declaredOrder:
           typeof instance.api.order === "number" && Number.isFinite(instance.api.order)
@@ -1324,6 +1368,13 @@ export class ExtensionRunner {
       }
       if (outcome.kind === "revoked") {
         return { ok: false, message: `Extension "${id}" was disabled while activating` };
+      }
+      if (outcome.kind === "inactive") {
+        // Enabled, ran `activate`, and reported that it produced nothing. `ok: false` is honest: the
+        // toggle did not make a feature available, and the message is the extension's own reason.
+        // The disabled notice is left in place — there are no tools to advertise as returned.
+        this.notifyStateChanged(instance.api.id);
+        return { ok: false, message: `Extension "${id}" is loaded but inactive: ${outcome.reason}` };
       }
       // A failed enable is a state change too (the panel must show the error rather than the old
       // state), so it publishes as well.

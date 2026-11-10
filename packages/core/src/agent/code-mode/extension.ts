@@ -176,22 +176,30 @@ export function createCodeModeExtension(options: CodeModeExtensionConfig = {}): 
     description: "Sandboxed TypeScript execution (TanStack ai-code-mode)",
 
     async activate(ctx) {
-      if (options.disabled) return;
+      // Every early return here reports WHY the extension has no capability, so the runner can
+      // settle it `inactive` instead of `active`. Returning `void` after registering nothing made
+      // the panel show "enabled" with zero tools, and `disabledContent` (the surface that exists to
+      // explain a missing feature) could never appear. The warn log stays: the reason has to be in
+      // `agent.log` whether or not a host renders the panel.
+      if (options.disabled) {
+        return { inactive: "disabled by configuration (createCodeModeExtension({ disabled: true }))" };
+      }
 
       // Feature-detect the isolate backend (optional CoreEnv capability).
       let driver;
       try {
         driver = await ctx.coreEnv.createIsolateDriver?.();
       } catch (err) {
-        ctx.logger.warn(`Code Mode disabled: createIsolateDriver failed — ${errorMessage(err)}`);
-        return;
+        const reason = `Code Mode disabled: createIsolateDriver failed — ${errorMessage(err)}`;
+        ctx.logger.warn(reason);
+        return { inactive: reason };
       }
 
       if (!driver) {
-        ctx.logger.warn(
-          "Code Mode disabled: no isolate driver provided by this host (CoreEnv.createIsolateDriver). execute_typescript not registered."
-        );
-        return;
+        const reason =
+          "Code Mode disabled: no isolate driver provided by this host (CoreEnv.createIsolateDriver). execute_typescript not registered.";
+        ctx.logger.warn(reason);
+        return { inactive: reason };
       }
 
       const requestedTools = options.tools ?? [];
@@ -210,8 +218,9 @@ export function createCodeModeExtension(options: CodeModeExtensionConfig = {}): 
         );
       }
       if (tools.length === 0) {
-        ctx.logger.warn("Code Mode disabled: no external tools provided. execute_typescript not registered.");
-        return;
+        const reason = "Code Mode disabled: no external tools provided. execute_typescript not registered.";
+        ctx.logger.warn(reason);
+        return { inactive: reason };
       }
 
       // Mark the requested tools lazy so only the curated eager subset gets full

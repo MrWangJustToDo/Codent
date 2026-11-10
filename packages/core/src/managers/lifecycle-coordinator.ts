@@ -8,7 +8,11 @@
  * flush is the last step, never the first.
  */
 
-import { isCallbackTimeoutError, withCallbackTimeout } from "../agent/extension/callback-timeout.js";
+import {
+  EXTENSION_CALLBACK_TIMEOUT_MS,
+  isCallbackTimeoutError,
+  withCallbackTimeout,
+} from "../agent/extension/callback-timeout.js";
 import { clearTaskRuns } from "../agent/subagent/subagent-runs.js";
 import { SUBAGENT_ABORT_REASONS } from "../agent/subagent/subagent-stop-reason.js";
 import { errorMessage } from "../utils/errors.js";
@@ -129,11 +133,15 @@ export class LifecycleCoordinator {
     // timeout of its own, so one hung step made `settleTeardowns()` / `dispose()` never resolve —
     // the same "quit does not quit" failure the extension callbacks were bounded against, one layer
     // down. A timeout means "stop waiting", never "cancel": cleanup below still runs.
-    const settleStep = async (label: string, step: () => Promise<unknown> | undefined): Promise<void> => {
+    const settleStep = async (
+      label: string,
+      step: () => Promise<unknown> | undefined,
+      timeoutMs: number = TEARDOWN_STEP_TIMEOUT_MS
+    ): Promise<void> => {
       try {
         const pending = step();
         if (!pending) return;
-        await withCallbackTimeout(pending, label, TEARDOWN_STEP_TIMEOUT_MS);
+        await withCallbackTimeout(pending, label, timeoutMs);
       } catch (error) {
         // A timeout means "stop waiting" (warn); any other throw is a real teardown failure and is
         // reported as an error, so a broken step cannot hide behind the timeout wording.
@@ -179,7 +187,16 @@ export class LifecycleCoordinator {
           // `settleStep` could time out first and skip `destroyAll()` entirely — leaking every
           // extension's tools, interceptors and lease for the life of the process.
           await settleStep("extension shutdown", () => runner.emitSessionShutdown(id));
-          await settleStep("extension teardown", () => runner.destroyAll());
+          // `destroyAll` tears extensions down SEQUENTIALLY, each with its own bounded callbacks.
+          // A fixed 60s outer bound would cut off the 2nd..Nth deactivate and let the resource
+          // release below run while they are still shutting down; budget one callback per loaded
+          // extension (+1 for overhead). Structural fakes in validators may omit the accessor.
+          const extensionCount = typeof runner.getExtensionInfos === "function" ? runner.getExtensionInfos().length : 0;
+          await settleStep(
+            "extension teardown",
+            () => runner.destroyAll(),
+            Math.max(TEARDOWN_STEP_TIMEOUT_MS, (extensionCount + 1) * EXTENSION_CALLBACK_TIMEOUT_MS)
+          );
         }
       } catch {
         // Teardown failures are reported per phase on the bus; continue to cleanup.

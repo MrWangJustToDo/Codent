@@ -65,6 +65,20 @@ export function sessionLogPath(id: string): string {
   return `${SESSION_DIR}/${id}${SESSION_LOG_SUFFIX}`;
 }
 
+/**
+ * Sidecar cross-process lock for one session (see `session-lock.ts`).
+ *
+ * A sibling of the log rather than a field inside it: the log is append-only and folded by message
+ * id, so a heartbeat written as a line would grow the file and be replayed as history. A separate
+ * file also gives freshness a free signal — the filesystem mtime.
+ */
+export function sessionLockPath(id: string): string {
+  // Defense in depth: callers validate first, but a lock path derived from an unvalidated id is a
+  // write outside `.agents/sessions/` (a directory traversal even when the host still allows it).
+  assertSafeSessionId(id);
+  return `${SESSION_DIR}/${id}.session.lock`;
+}
+
 /** Throw for an id that must not be interpolated into a path. */
 export function assertSafeSessionId(id: string): void {
   if (!isSafeSessionId(id)) throw new Error(`Invalid session id: ${id}`);

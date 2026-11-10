@@ -76,6 +76,8 @@ export class MemoryManager {
 
   /** Debounce timeout for index refresh */
   private refreshTimeout?: ReturnType<typeof setTimeout>;
+  /** The debounced refresh currently running (so teardown can await it, not only the timer). */
+  private refreshInFlight?: Promise<void>;
 
   /** Workspace env for memory I/O (runtime-provided; ambient by default). */
   private readonly env: ResolvedCoreEnv;
@@ -317,7 +319,9 @@ export class MemoryManager {
    * while it is still safe to await — and only then disposes.
    */
   async flushPendingIndex(): Promise<void> {
-    if (!this.refreshTimeout) return;
+    // A fired debounce clears `refreshTimeout` BEFORE it awaits, so checking only the timer missed
+    // the very window this method exists for; `refreshInFlight` covers it.
+    if (!this.refreshTimeout && !this.refreshInFlight) return;
     await this.flushIndex();
   }
 
@@ -331,7 +335,20 @@ export class MemoryManager {
       clearTimeout(this.refreshTimeout);
       this.refreshTimeout = undefined;
     }
-    await this.refreshIndex();
+    // Join a refresh the timer already started instead of writing the same index twice.
+    if (this.refreshInFlight) return this.refreshInFlight;
+    await this.runRefresh();
+  }
+
+  /** Run one index refresh, tracking it so `flushPendingIndex` can await an in-flight one. */
+  private async runRefresh(): Promise<void> {
+    const pending = this.refreshIndex();
+    this.refreshInFlight = pending;
+    try {
+      await pending;
+    } finally {
+      if (this.refreshInFlight === pending) this.refreshInFlight = undefined;
+    }
   }
 
   /**
@@ -346,7 +363,7 @@ export class MemoryManager {
     }
     this.refreshTimeout = setTimeout(() => {
       this.refreshTimeout = undefined;
-      this.refreshIndex().catch(() => {
+      this.runRefresh().catch(() => {
         // Failed to refresh index
       });
     }, 100);

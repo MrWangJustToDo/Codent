@@ -635,4 +635,100 @@ assert.match(failErrorMessages[1].parts[0].content, /boom/);
   );
 }
 
+// ----------------------------------------------------------------------------
+// A force-submit supersedes the run in the SAME session. The abandoned stream's
+// late chunk must not call finalizeStream() on the new run's active message —
+// that marks the new message historical, so the rest of its reply is dropped.
+// ----------------------------------------------------------------------------
+{
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const channel = new AgentUIChannel();
+  let releaseOld;
+  let releaseNew;
+  const oldGate = new Promise((resolve) => {
+    releaseOld = resolve;
+  });
+  const newGate = new Promise((resolve) => {
+    releaseNew = resolve;
+  });
+  let oldStale = false;
+
+  const oldRun = channel.consumeRun({
+    isStale: () => oldStale,
+    stream: (async function* () {
+      yield { type: EventType.RUN_STARTED, threadId: "t-old", runId: "r-old", timestamp: Date.now() };
+      yield {
+        type: EventType.TEXT_MESSAGE_START,
+        messageId: "old-assistant",
+        role: "assistant",
+        threadId: "t-old",
+        runId: "r-old",
+      };
+      await oldGate;
+      yield {
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: "old-assistant",
+        delta: "late old",
+        threadId: "t-old",
+        runId: "r-old",
+      };
+      yield { type: EventType.TEXT_MESSAGE_END, messageId: "old-assistant", threadId: "t-old", runId: "r-old" };
+    })(),
+  });
+  await tick();
+
+  const newRun = channel.consumeRun({
+    stream: (async function* () {
+      yield { type: EventType.RUN_STARTED, threadId: "t-new", runId: "r-new", timestamp: Date.now() };
+      yield {
+        type: EventType.TEXT_MESSAGE_START,
+        messageId: "new-assistant",
+        role: "assistant",
+        threadId: "t-new",
+        runId: "r-new",
+      };
+      yield {
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: "new-assistant",
+        delta: "new reply",
+        threadId: "t-new",
+        runId: "r-new",
+      };
+      await newGate;
+      yield {
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: "new-assistant",
+        delta: " continued",
+        threadId: "t-new",
+        runId: "r-new",
+      };
+      yield { type: EventType.TEXT_MESSAGE_END, messageId: "new-assistant", threadId: "t-new", runId: "r-new" };
+      yield {
+        type: EventType.RUN_FINISHED,
+        threadId: "t-new",
+        runId: "r-new",
+        timestamp: Date.now(),
+        finishReason: "stop",
+        model: "mock",
+      };
+    })(),
+  });
+  await tick();
+
+  oldStale = true;
+  releaseOld();
+  await oldRun;
+  releaseNew();
+  await newRun;
+
+  const newMessage = channel.getMessages().find((message) => message.id === "new-assistant");
+  assert.ok(newMessage, "the new run's message survives the abandoned stream");
+  const text = newMessage.parts
+    .filter((part) => part.type === "text")
+    .map((part) => part.content)
+    .join("");
+  assert.match(text, /new reply/, "the pre-supersede text is kept");
+  assert.match(text, /continued/, "a late chunk from the abandoned run must not finalize the new message");
+}
+
 console.log("agent-ui-channel validation passed");

@@ -288,7 +288,12 @@ export class AgentBootstrap {
       onExtensionEnabled: (extensionId) => managed.clearExtensionTurnContext(extensionId),
       // State changes notify from the MECHANISM (runner), not from the one dispatch command that
       // used to emit: any other caller of `setEnabled` changed state without telling anyone.
-      onExtensionStateChanged: () => managed.publishExtensionState(),
+      // Both projections move together: disabling the MCP extension closes its clients, and the
+      // `mcp` channel would otherwise keep advertising the servers it just shut down.
+      onExtensionStateChanged: () => {
+        managed.publishExtensionState();
+        managed.publishMcpState();
+      },
       cwd: rootPath,
       agentId: managed.id,
       getCoreEnv: () => env,

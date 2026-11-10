@@ -185,6 +185,12 @@ export class AgentUIChannel {
    * session switch cannot append its late chunks to the new transcript.
    */
   private sessionGeneration = 0;
+  /**
+   * Monotonic owner id for the active `consumeRun`. A force-submit starts a new run on the SAME
+   * session generation, so generation equality cannot tell an abandoned stream whose late result
+   * must be ignored from the live one.
+   */
+  private streamRunSeq = 0;
   /** Active agent-loop turn assistant message (per-turn streaming scope). */
   private currentTurnMessageId?: string;
   /** Monotonic revision bumped on every messages change (wire projection cache). */
@@ -498,11 +504,22 @@ export class AgentUIChannel {
     // One staleness predicate for the whole method: the generation alone let a run that was aborted
     // mid-tool keep writing chunks after its turn had been finalized and persisted.
     const isStale = (): boolean => generation !== this.sessionGeneration || options.isStale?.() === true;
+    // Run OWNERSHIP, not just generation: a force-submit invalidates this run and starts a NEW one on
+    // the same transcript, so a late chunk from the abandoned stream must not finalize/strip the new
+    // run's in-flight assistant message. A newer `consumeRun` bumps the sequence.
+    const runSeq = ++this.streamRunSeq;
+    const ownsStream = (): boolean => runSeq === this.streamRunSeq;
+    let streamFinalized = false;
+    const finalizeOwned = (): void => {
+      if (streamFinalized || !ownsStream() || generation !== this.sessionGeneration) return;
+      streamFinalized = true;
+      this.finalizeStream();
+    };
     const finishStale = (): TanStackUIMessage[] => {
-      // A run-token stale (an abort) with the SAME session generation still owns this transcript:
-      // run the terminal cleanup, or an empty assistant shell from a first-chunk abort is persisted
-      // and the row spins. A generation change means the transcript was replaced — never touch it.
-      if (generation === this.sessionGeneration) this.finalizeStream();
+      // Same generation + still the owner: this is an aborted run, not a replaced transcript. Run
+      // the terminal cleanup so an empty assistant shell from a first-chunk abort is not persisted.
+      // When a newer run owns the channel, touching it would finalize THAT run's message.
+      finalizeOwned();
       return this.getMessages();
     };
 
@@ -514,10 +531,15 @@ export class AgentUIChannel {
       // A clear/restore during the stream invalidates finalization too: finalizeStream
       // would strip/attach rows on the transcript that has just replaced this run's.
       if (isStale()) return finishStale();
-      this.finalizeStream();
+      finalizeOwned();
       return this.getMessages();
     } finally {
-      this.endSummaryStream(generation);
+      // The throw path (an abort surfaced as RUN_ERROR) skips `finishStale`; finalize here when this
+      // run still owns the transcript so the empty shell is stripped before the pump persists. No-op
+      // after a normal/finishStale finalize, and never touches a newer run's channel.
+      finalizeOwned();
+      // Do not clear a newer run's summary subscription (same generation, different run).
+      if (ownsStream()) this.endSummaryStream(generation);
     }
   }
 

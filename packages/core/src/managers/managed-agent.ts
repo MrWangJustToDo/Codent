@@ -717,6 +717,9 @@ export class ManagedAgent {
         this.emitEvent(type, data);
       });
     this.session = init.session ?? new SessionService();
+    // Cross-process lock identity: the agent id alone is not unique across processes (two hosts both
+    // name their root "main"), so `SessionLock` composes it with a per-process instance id.
+    this.session.setLockOwner(this.id);
     this.sessionFacet = new SessionFacet(this);
     this.sessionPersistence = this.sessionFacet.persistence;
     // The store resolves the runtime env when bound, else ambient lazily at first write.
@@ -935,6 +938,10 @@ export class ManagedAgent {
         setSessionData: (data) => this.setSessionData(data),
         getSessionStore: () => this.getSessionStore(),
         awaitPersistIdle: () => this.session.awaitPersistIdle(),
+        // Cross-process exclusivity after a commit: `/new` never passes through the restore read,
+        // so the session it just created would otherwise stay unlocked while another process could
+        // resume it. Idempotent for the restore path (it already holds the id).
+        lockSession: (sessionId) => this.session.lockSession(sessionId),
         getChatController: () => this.getChatController(),
         emitSessionNew: (sessionId, reason) => this.emitEvent("session:new", { sessionId, reason }),
         emitSessionSwitch: (fromSessionId, toSessionId, messageCount, reason) =>
@@ -1382,9 +1389,9 @@ export class ManagedAgent {
     if (this.stateBatchDepth > 0) return;
     const start = this.stateBatchStartStatus;
     const statusChanged = this.stateBatchStatusPending;
-    // Attribution for the merged row: the last transition that moved the status (a `reset` when the
-    // batch moved it without naming an event). Absent rather than a fabricated `reset` when we cannot
-    // say — the field is optional and "we do not know" is not evidence of a reset.
+    // Attribution for the merged row: the last transition that actually moved the status. If that
+    // move named no event, the field is absent rather than a fabricated `reset` — "we cannot say"
+    // is not evidence of a reset (the setter stores `null` on an event-less move).
     const stateEvent = this.stateBatchLastEvent ?? undefined;
     this.stateBatchStartStatus = null;
     this.stateBatchStatusPending = false;
@@ -1885,6 +1892,23 @@ export class ManagedAgent {
    */
   publishExtensionState(): void {
     this.getEventBus()?.emit("session:extensions", readExtensionSummary(this.extensions.getExtensionRunner()));
+  }
+
+  /**
+   * Re-publish the MCP status row (`session:mcp`).
+   *
+   * The enabled state of the MCP extension IS MCP availability: its `deactivate` shuts every client
+   * down and clears the manager's server list. Only bootstrap and `/mcp refresh` used to emit the
+   * row, so a long-lived subscriber (panel, remote client) kept reading "connected, N tools" for a
+   * manager that had just been shut down, while a freshly-read snapshot showed nothing — the two
+   * disagreed until the next refresh.
+   *
+   * Published on every extension state change rather than filtered by extension id: core keeps no
+   * registry of built-in extension ids, the payload is a small retained snapshot, and one redundant
+   * frame is cheaper than a row that lies about a capability that is gone.
+   */
+  publishMcpState(): void {
+    this.getEventBus()?.emit("session:mcp", this.getMcpManager()?.getStatusPayload() ?? { servers: [] });
   }
 
   setLog(c: AgentLog): void {

@@ -228,6 +228,9 @@ export class SessionLifecycleService {
   private async settleNewSession(next: SessionData, reason: "session-new", current: SessionData | null): Promise<void> {
     const store = this.rt.transcript.getSessionStore();
     await this.settleCommittedTransition([
+      // The new session is this runtime's now: lock it so another process cannot resume the id while
+      // this one writes it (`/new` never passes through the restore read).
+      ["session lock handover", () => this.rt.transcript.lockSession?.(next.id) ?? undefined],
       ["session new transcript clear", () => this.rt.transcript.getChatController()?.clearTranscript()],
       ["session new reset", () => this.resetTransientState(reason, "full")],
       // The reset kills background jobs/tasks asynchronously; the switch is not complete until
@@ -474,6 +477,9 @@ export class SessionLifecycleService {
       this.rt.lease.commit();
 
       const steps: Array<[string, () => void | Promise<void>]> = [
+        // Cross-process lock follows the active session. Same step for `/new` and `/resume`; on the
+        // restore path it is idempotent (the read already acquired this id).
+        ["session lock handover", () => this.rt.transcript.lockSession?.(sessionId) ?? undefined],
         // Clear the leaving run's volatile state. The `resume` scope keeps mode/approvals/usage/todos —
         // the restore just adopted those.
         [

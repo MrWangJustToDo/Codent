@@ -449,6 +449,15 @@ const CHUNK = { type: "REASONING_MESSAGE_CONTENT", delta: "hmm" };
 
   assert.equal(rows.length, 1, "one net row");
   assert.deepEqual(rows[0], { from: "idle", to: "completed", event: undefined }, "no stale event attribution");
+
+  // The positive half: a batch whose last move names an event still reports it.
+  rows.length = 0;
+  agent.setStatus("running");
+  rows.length = 0; // the direct set is its own transition, not part of the batch under test
+  agent.beginStateBatch();
+  agent.transitionStatus({ type: "interrupt" }); // running → aborted, names `interrupt`
+  agent.endStateBatch();
+  assert.deepEqual(rows[0], { from: "running", to: "aborted", event: "interrupt" }, "the last event is preserved");
 }
 
 for (const manager of managers) {

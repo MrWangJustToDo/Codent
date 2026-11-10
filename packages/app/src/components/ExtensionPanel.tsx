@@ -100,6 +100,13 @@ const ExtensionPanelList = ({
               {info.declaredOrder === undefined ? " (default)" : ""}
               {info.state === "inactive" ? " · disabled" : ""}
             </Text>
+            {/* An extension that loaded but produced nothing (no backend, no tools) reports why.
+                Without this the row read "enabled" with zero tools and no explanation. */}
+            {info.inactiveReason ? (
+              <Text color={COLORS.muted} dimColor wrap="truncate">
+                {truncateText(info.inactiveReason, 81, { marker: "…" })}
+              </Text>
+            ) : null}
           </Box>
         ) : null;
         return (

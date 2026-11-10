@@ -1316,7 +1316,15 @@ export class AgentChatController {
     const current = this.channel.getMessages();
     const hasCancellable =
       hasCancellableIncompleteToolCalls(current) || (includeInFlight && hasInFlightToolCalls(current));
-    if (!hasCancellable) return;
+    if (!hasCancellable) {
+      // An abort before the first content/tool chunk can leave an empty assistant shell even though
+      // there is nothing to settle. The caller persists right after this, so strip it here (only on
+      // an actual change) instead of leaving a spinning row on disk. Later at pump-start there is no
+      // materialized assistant message yet, so this cannot remove a live row.
+      const cleaned = stripEmptyAssistantShells(current);
+      if (cleaned.length !== current.length) this.channel.setMessages(cleaned);
+      return;
+    }
     // The settle itself reports which calls it changed: a second predicate copy here would decide
     // against the pre-mutation snapshot and drift from `settleToolCalls` (it already had — the
     // abort path settled truncated calls the collector filtered out). These calls never produce

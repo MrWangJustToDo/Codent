@@ -115,6 +115,67 @@ function trackedRunner(extra = {}) {
   assert.deepEqual(seen, ["notify", "notify", "notify"], "a re-enable notifies");
 
   await runner.destroyAll();
+  // The destruction moved the catalog too: `destroyAll` was the one transition that emptied the
+  // list without telling anyone, so a push subscriber kept rendering extensions that no longer had
+  // a runner behind them. The id is empty because the published summary re-reads the (now empty)
+  // list — nothing is being attributed, the runner is.
+  assert.deepEqual(seen, ["notify", "notify", "notify", ""], "destroyAll publishes the empty catalog");
+}
+
+// ---------------------------------------------------------------------------
+// 1b. `activate` may report "loaded but produced nothing" — and that is not `active`
+// ---------------------------------------------------------------------------
+{
+  const { runner, seen } = trackedRunner();
+  const inactive = await runner.loadExtension({
+    ...makeExtension("noop"),
+    activate: () => ({ inactive: "this host has no backend for it" }),
+  });
+  assert.equal(inactive.state, "inactive", "a no-capability activation is not reported as active");
+  const info = runner.getExtensionInfos().find((entry) => entry.id === "noop");
+  assert.equal(info.enabled, false, "the panel does not claim an enabled feature");
+  assert.equal(info.inactiveReason, "this host has no backend for it", "and it carries the reason");
+  assert.deepEqual(seen, ["noop"], "the settle is still announced");
+
+  // Control: a normal activation (no return value) stays `active` and clears the reason.
+  const active = await runner.loadExtension(makeExtension("plain"));
+  assert.equal(active.state, "active", "returning nothing still means activated");
+  assert.equal(active.inactiveReason, undefined, "no reason on a healthy activation");
+
+  // Enabling an inactive extension reports the reason instead of a bare success.
+  const enabled = await runner.setEnabled("noop", true);
+  assert.equal(enabled.ok, false, "enabling something that cannot activate is not a success");
+  assert.match(enabled.message, /no backend/, "the failure message is the extension's own reason");
+
+  await runner.destroyAll();
+}
+
+// ---------------------------------------------------------------------------
+// 1c. Reporting `inactive` rolls back anything registered before the report
+// ---------------------------------------------------------------------------
+{
+  const registered = [];
+  const runner = new ExtensionRunner({
+    onRegisterTool: (def) => registered.push(def.name),
+    onUnregisterTool: (name) => {
+      const index = registered.indexOf(name);
+      if (index >= 0) registered.splice(index, 1);
+    },
+  });
+
+  const state = await runner.loadExtension({
+    ...makeExtension("leaky"),
+    activate(ctx) {
+      // A third-party extension may register, then discover it cannot proceed. The catalog must not
+      // report `enabled: false` while the tool is still callable.
+      ctx.registerTool({ name: "leaky_tool", description: "registered before the inactive report" });
+      return { inactive: "the backend is unavailable" };
+    },
+  });
+
+  assert.equal(state.state, "inactive", "settled inactive");
+  assert.deepEqual(registered, [], "no artifact from the rolled-back activation survives");
+  await runner.destroyAll();
 }
 
 // ---------------------------------------------------------------------------
@@ -192,6 +253,13 @@ function trackedRunner(extra = {}) {
   const target = runner.getExtensionInfos().find((info) => info.enabled);
   assert.ok(target, "an active built-in is available to toggle");
 
+  // `session:mcp` follows the same transition: disabling the MCP extension closes its clients, and
+  // the `mcp` channel used to keep advertising servers that had just been shut down (only bootstrap
+  // and `/mcp refresh` emitted the row). Published for every extension toggle: core keeps no
+  // registry of built-in extension ids, and one redundant small frame beats a row that lies.
+  const mcpFrames = [];
+  bus.on("session:mcp", (event) => mcpFrames.push(event.payload), { replay: false });
+
   // The retained snapshot BEFORE the change — a stale provider would keep replaying this.
   let before;
   bus.on("session:extensions", (event) => (before = event.payload), { replay: true });
@@ -200,6 +268,7 @@ function trackedRunner(extra = {}) {
   assert.equal((await runner.setEnabled(target.id, false)).ok, true);
 
   assert.equal(frames.length, 1, "the transition published exactly one frame");
+  assert.equal(mcpFrames.length, 1, "and the MCP status row is republished with it");
   const emitted = frames[0];
   assert.equal(
     emitted.extensions.find((extension) => extension.id === target.id)?.enabled,
