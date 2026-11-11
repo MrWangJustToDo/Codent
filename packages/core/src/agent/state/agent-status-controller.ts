@@ -329,11 +329,16 @@ export class AgentStatusController {
     }
     if (this.deps.getStatus() === "awaiting_user") {
       const axes = this.deps.getAgentState?.();
-      if (axes && (axes.outcome === "error" || axes.outcome === "aborted")) {
-        // Answering a question after the turn failed/aborted clears the wait, not the outcome.
-        this.dispatch({ type: "resume" });
-      } else {
+      if (axes?.outcome === "completed") {
+        // The turn had already settled while parked (a late answer): only the wait is cleared.
         this.dispatch({ type: "settle", result: "completed", clearWait: true });
+      } else {
+        // A LIVE turn parked on the answer — or one that ended in error/aborted, where the answer
+        // clears the wait and keeps the verdict. `resume` is the only correct one here: settling the
+        // turn `completed` before the pump resumed made the pump continue streaming under a terminal
+        // status, and ACP returned `end_turn` for a turn that was still running (the client lost its
+        // running indicator while output kept arriving).
+        this.dispatch({ type: "resume" });
       }
     }
   }

@@ -76,8 +76,11 @@ assert.equal(managed.getStatus(), "running");
 
 managed.setClientToolWaiting(true);
 assert.equal(managed.getStatus(), "awaiting_user");
+// Answering a LIVE question resumes the turn: the pump continues under the same turn, so the status
+// must stay active. Settling it `completed` here ended the turn before the pump could continue — the
+// ACP prompt returned `end_turn` and the client dropped its running indicator while output streamed.
 managed.setClientToolWaiting(false);
-assert.equal(managed.getStatus(), "completed");
+assert.equal(managed.getStatus(), "running");
 
 // Regression: while already awaiting_user, a repeated setClientToolWaiting(true)
 // must be a no-op (no setStatus → no re-emit). The app re-dispatches whenever a
@@ -98,7 +101,7 @@ assert.equal(managed.getStatus(), "completed");
   controller.setClientToolWaiting(true);
   assert.equal(setStatusCalls, 0);
   controller.setClientToolWaiting(false);
-  assert.equal(setStatusCalls, 1); // false path still transitions awaiting_user → completed
+  assert.equal(setStatusCalls, 1); // false path still transitions out of awaiting_user
 }
 
 // An answered client tool ends the `awaiting_user` wait, so the resume pump can start.
