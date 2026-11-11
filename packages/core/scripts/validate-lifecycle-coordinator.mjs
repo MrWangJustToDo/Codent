@@ -21,6 +21,9 @@ function fakeAgent(id, parentId) {
     childIds: [],
     updatedAt: 0,
     getMcpManager: () => ({ forceKill: () => events.push(`mcp:${id}`) }),
+    // The synchronous teardown covers language servers too: a host that exits without settling the
+    // async chain must not orphan them (`LspManager.forceKillAll`).
+    getLspManager: () => ({ forceKillAll: () => events.push(`lsp:${id}`) }),
     markDestroyed: () => events.push(`destroyed:${id}`),
     sessionLease: { beginDrain: () => events.push(`drain:${id}`) },
     releaseSessionLease: async () => events.push(`lease-release:${id}`),
@@ -74,6 +77,7 @@ assert.deepEqual(scopes, ["root", "child", "grandchild"], "every agent scope is 
 
 for (const id of ["root", "child", "grandchild"]) {
   assert.ok(events.includes(`mcp:${id}`), `${id} MCP killed`);
+  assert.ok(events.includes(`lsp:${id}`), `${id} LSP servers killed synchronously`);
   assert.ok(events.includes(`abort:${id}:Agent destroyed`), `${id} aborted`);
 }
 assert.ok(events.includes("event:child:subagent:destroyed:child"), "child destruction is reported");

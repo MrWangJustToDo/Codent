@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- the bridge suite keeps policy, routing, redaction and specialized-handler cases on one log-capture/sink harness; splitting it would duplicate that fixture (same reason as validate-command-job-registry.mjs). */
 /**
  * Validates Event→Log bridge policy and routing under the timeline contract:
  * bridged entries land in the JSONL sink, large payloads are summarized to
@@ -218,6 +219,70 @@ entries = await emitAndRead({
 const okEndEntry = entries.find((entry) => entry.event === "agent:tool-end" && entry.data?.tool_call_id === "tc-ok");
 assert.ok(okEndEntry, "a clean tool-end is bridged");
 assert.match(okEndEntry.message, /^Tool end: read_file/, "a clean call keeps the success wording");
+
+// An extension refusal RETURNS (TanStack reports `ok: true`), so it reaches the same event. Without
+// the `denied` marker the timeline claimed the call ran.
+entries = await emitAndRead({
+  type: "agent:tool-end",
+  ts: Date.now(),
+  agentId: "agent-1",
+  payload: { tool_name: "read_file", tool_call_id: "tc-denied", duration_ms: 0, denied: true, cancelled: false },
+});
+const deniedEndEntry = entries.find(
+  (entry) => entry.event === "agent:tool-end" && entry.data?.tool_call_id === "tc-denied"
+);
+assert.ok(deniedEndEntry, "a refused call is bridged");
+assert.match(deniedEndEntry.message, /^Tool denied: read_file/, "and is worded as a refusal, not an execution");
+
+// `session:save-error.target` names the failed writer; the old wording prefixed every row with
+// "save session", so a failed agent-log write read as a failed session save.
+entries = await emitAndRead({
+  type: "session:save-error",
+  ts: Date.now(),
+  agentId: "agent-1",
+  payload: { target: "agent log", error: "ENOSPC" },
+});
+const saveErrorEntry = entries.find((entry) => entry.event === "session:save-error");
+assert.ok(saveErrorEntry);
+assert.match(saveErrorEntry.message, /^Failed to save agent log: ENOSPC/, "the message names the target that failed");
+
+// `agent:extension-state` is append-only for RUNTIME transitions; startup-load rows carry
+// `bootstrap: true` and are suppressed (the bootstrap summary already lists them).
+entries = await emitAndRead({
+  type: "agent:extension-state",
+  ts: Date.now(),
+  agentId: "agent-1",
+  payload: { extensionId: "codent-lsp", enabled: true, state: "active" },
+});
+const extStateEntry = entries.find((entry) => entry.event === "agent:extension-state");
+assert.ok(extStateEntry, "a runtime extension transition is recorded");
+assert.match(extStateEntry.message, /^Extension enabled: "codent-lsp"/);
+
+const suppressedBefore = (await readEntries()).length;
+bus.emit(
+  "agent:extension-state",
+  { extensionId: "codent-skills", enabled: true, state: "active", bootstrap: true },
+  { agentId: "agent-1" }
+);
+await new Promise((resolve) => setTimeout(resolve, 100));
+assert.equal(
+  (await readEntries()).length,
+  suppressedBefore,
+  "a bootstrap-load row is suppressed (the bootstrap summary already lists it)"
+);
+
+// A failed activation reads as unavailable, not as a user disable.
+entries = await emitAndRead({
+  type: "agent:extension-state",
+  ts: Date.now(),
+  agentId: "agent-1",
+  payload: { extensionId: "broken-ext", enabled: false, state: "error" },
+});
+const failedExtEntry = entries.find(
+  (entry) => entry.event === "agent:extension-state" && entry.data?.extensionId === "broken-ext"
+);
+assert.ok(failedExtEntry);
+assert.match(failedExtEntry.message, /^Extension unavailable: "broken-ext"/, "an error state is not 'disabled'");
 
 entries = await emitAndRead({
   type: "subagent:error",

@@ -260,6 +260,12 @@ function trackedRunner(extra = {}) {
   const mcpFrames = [];
   bus.on("session:mcp", (event) => mcpFrames.push(event.payload), { replay: false });
 
+  // The append-only counterpart: one row per RUNTIME transition (the retained snapshot above says
+  // "what exists now" and is suppressed from the timeline, so without this a user cannot explain
+  // when/why an extension disappeared).
+  const stateRows = [];
+  bus.on("agent:extension-state", (event) => stateRows.push(event.payload), { replay: false });
+
   // The retained snapshot BEFORE the change — a stale provider would keep replaying this.
   let before;
   bus.on("session:extensions", (event) => (before = event.payload), { replay: true });
@@ -269,6 +275,10 @@ function trackedRunner(extra = {}) {
 
   assert.equal(frames.length, 1, "the transition published exactly one frame");
   assert.equal(mcpFrames.length, 1, "and the MCP status row is republished with it");
+  assert.equal(stateRows.length, 1, "and one append-only extension-state row is emitted");
+  assert.equal(stateRows[0].extensionId, target.id, "naming the transitioned extension");
+  assert.equal(stateRows[0].enabled, false, "with the new enabled state");
+  assert.equal(stateRows[0].bootstrap, undefined, "a runtime transition is not a bootstrap-load row");
   const emitted = frames[0];
   assert.equal(
     emitted.extensions.find((extension) => extension.id === target.id)?.enabled,

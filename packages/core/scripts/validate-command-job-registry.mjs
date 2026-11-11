@@ -29,6 +29,8 @@ import {
   createKillCommandTool,
   formatBackgroundJobsSection,
   registerCoreEnv,
+  runningBackgroundCommandLogPaths,
+  cancelInterruptedBackgroundCommands,
   sweepStaleJobLogs,
 } from "../dist/dev.mjs";
 
@@ -1071,5 +1073,54 @@ console.log("teardown log deletion OK");
 }
 
 await registry.destroyAll();
+
+// ---------------------------------------------------------------------------
+// The part-side repair must not point the model at a log the teardown deleted.
+// `destroyAll` deletes a running job's log with its record; a crash leaves both. The same settled
+// shape is written either way, so readability is decided by the caller and the pointer is dropped
+// only when the file is gone.
+// ---------------------------------------------------------------------------
+{
+  const runningHandle = {
+    command: "sleep 9",
+    stdout: "",
+    stderr: "",
+    exitCode: -1,
+    durationMs: 0,
+    success: false,
+    runInBackground: true,
+    status: "running",
+    jobId: "job_repair",
+    cachedOutputPath: "job.log",
+  };
+  const messages = [
+    {
+      id: "m_repair",
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-call",
+          id: "call_repair",
+          name: "run_command",
+          arguments: "{}",
+          state: "input-complete",
+          output: runningHandle,
+        },
+      ],
+    },
+  ];
+
+  assert.deepEqual(runningBackgroundCommandLogPaths(messages), ["job.log"], "the repair input is the pending log path");
+
+  const kept = cancelInterruptedBackgroundCommands(messages);
+  const keptOutput = kept[0].parts[0].output;
+  assert.equal(keptOutput.status, "killed", "the interrupted handle is settled as killed");
+  assert.equal(keptOutput.cachedOutputPath, "job.log", "a readable log keeps its pointer");
+
+  const dropped = cancelInterruptedBackgroundCommands(messages, undefined, () => false);
+  const droppedOutput = dropped[0].parts[0].output;
+  assert.equal(droppedOutput.status, "killed");
+  assert.equal(droppedOutput.cachedOutputPath, null, "a deleted log loses the pointer instead of dangling");
+}
 
 console.log("command-job-registry validation passed");

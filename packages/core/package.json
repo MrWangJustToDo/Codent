@@ -215,6 +215,7 @@
     "validate:mcp-prefer-multimodal": "pnpm run build && node scripts/validate-mcp-prefer-multimodal.mjs",
     "validate:command-job-registry": "pnpm run build && node scripts/validate-command-job-registry.mjs",
     "validate:pending-message-queue": "pnpm run build && node scripts/validate-pending-message-queue.mjs",
+    "validate:prompt-submit-dedupe": "pnpm run build && node scripts/validate-prompt-submit-dedupe.mjs",
     "validate:extract-plan": "pnpm run build && node scripts/validate-extract-plan.mjs",
     "validate:safe-command": "pnpm run build && node scripts/validate-safe-command.mjs",
     "validate:plan-tools": "pnpm run build && node scripts/validate-plan-tools.mjs",

@@ -155,4 +155,47 @@ for (const [label, result] of [
   assert.deepEqual(taskRefused, ["task"]);
 }
 
+// ---------------------------------------------------------------------------
+// An extension refusal (`tool:before:*` → skip) RETURNS, so it settles through `tool-end`.
+// It never executed, and it is not a user cancel: the payload must carry `denied: true` so the log
+// says "Tool denied" and the UI reads `output-denied` instead of a failure.
+// ---------------------------------------------------------------------------
+{
+  const skipRunner = {
+    getEventBus: () => ({
+      hasInterceptors: () => false,
+      intercept: async (event) => {
+        event.skip = true;
+        return false;
+      },
+    }),
+  };
+  const refusing = createExtensionsMiddleware({
+    getExtensionRunner: () => skipRunner,
+    getSessionId: () => "session-1",
+    emitEvent: (type, data) => events.push({ type, data }),
+  });
+
+  const decision = await refusing.onBeforeToolCall?.(undefined, {
+    toolName: "read_file",
+    args: { path: "a.ts" },
+  });
+  assert.equal(decision?.type, "skip", "a refused call is skipped, never executed");
+  assert.equal(decision.result?.denied, true, "the refusal carries the denied marker");
+  assert.equal(decision.result?.cancelled, false, "and is not a cancel");
+
+  events.length = 0;
+  await refusing.onAfterToolCall?.(undefined, {
+    ok: true,
+    toolName: "read_file",
+    duration: 0,
+    result: decision.result,
+    toolCall: { function: { arguments: { path: "a.ts" } } },
+  });
+  const refusedEnd = events.find((event) => event.type === "agent:tool-end");
+  assert.ok(refusedEnd, "a refusal still reports through tool-end (TanStack settles a skip with ok)");
+  assert.equal(refusedEnd.data?.denied, true, "and the event names the refusal");
+  assert.equal(refusedEnd.data?.cancelled, false, "without pretending it was a cancel");
+}
+
 console.log("extensions-middleware validation passed");

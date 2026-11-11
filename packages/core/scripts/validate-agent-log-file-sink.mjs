@@ -341,6 +341,52 @@ assert.equal(await fs.promises.readFile(filePath, "utf-8"), afterDetach, "no wri
 console.log("detach OK");
 
 // ----------------------------------------------------------------------------
+// 4b. A detach's final flush must NOT rotate.
+//
+// The shared-sink registry drops its entry synchronously and `detach()` is async, so a new binding
+// can create a second sink for the same file while this one is still flushing. A segment move there
+// would let two sinks fight over `archiveSegment`. Async-only env = the remote shape, where
+// `flushSync` cannot land the buffer and the final batch goes through `flush()`.
+// ----------------------------------------------------------------------------
+{
+  const rotRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-log-detach-rot-"));
+  const rotDir = path.join(rotRoot, "logs");
+  await fs.promises.mkdir(rotDir, { recursive: true });
+  const rotFile = path.join(rotDir, "agent.log");
+  // Already past maxBytes BEFORE the final batch: this is what makes rotation eligible.
+  await fs.promises.writeFile(rotFile, "x".repeat(200) + "\n", "utf8");
+
+  const asyncOnlyEnv = createEnv(rotRoot, { withAppendFile: true });
+  delete asyncOnlyEnv.fs.appendFileSync;
+  delete asyncOnlyEnv.fs.mkdirSync;
+
+  const rotLog = new AgentLog();
+  const rotDetach = rotLog.attachFileSink({
+    dir: rotDir,
+    filename: "agent.log",
+    maxBytes: 120,
+    maxFiles: 3,
+    flushIntervalMs: 60_000,
+    env: asyncOnlyEnv,
+  });
+  for (let i = 0; i < 5; i++) rotLog.info("system", `detach-${i}-${"y".repeat(30)}`);
+  rotDetach();
+
+  const afterFinal = await waitFor(
+    async () => fs.promises.readFile(rotFile, "utf-8"),
+    (content) => content.includes("detach-4-")
+  );
+  assert.ok(afterFinal.includes("detach-0-"), "the final batch is still written by the detach flush");
+  assert.equal(
+    (await fs.promises.readdir(rotDir)).some((name) => /^agent\.log\.\d+$/.test(name)),
+    false,
+    "a detached sink must not rotate the shared file"
+  );
+  await fs.promises.rm(rotRoot, TEMP_RM_OPTIONS);
+  console.log("detach-no-rotation OK");
+}
+
+// ----------------------------------------------------------------------------
 // 5. Reused log file: a later attachment appends to the same timeline, with no
 //    session divider (the file is workspace-scoped; sessions are entry fields).
 // ----------------------------------------------------------------------------

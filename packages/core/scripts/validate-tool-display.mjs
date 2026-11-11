@@ -354,6 +354,22 @@ for (const output of [
   );
 }
 
+// An extension refusal is a DENIAL, not a failure: the call never ran. It must read as
+// `output-denied` (a kept row, not counted as an error) and its body must name the refusal.
+{
+  const denied = { success: false, cancelled: false, denied: true, error: "not allowed by policy" };
+  assert.equal(
+    core.getUiToolState({ type: "tool-call", id: "call_denied", name: "read_file", state: "complete", output: denied }),
+    "output-denied",
+    "an extension refusal is denied, not an error"
+  );
+  assert.match(
+    core.formatToolOutput(denied, "read_file"),
+    /Denied: not allowed by policy/,
+    "and the row text names who refused it"
+  );
+}
+
 // An `error` field ALONGSIDE a payload is a legitimate MCP/extension result, not the framework's
 // bare error shape. The local formatter already rendered it; blanking the cross-process
 // `part.display` made the same row show a body locally and nothing on a remote/ACP host.

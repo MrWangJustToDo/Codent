@@ -9,6 +9,7 @@
 import assert from "node:assert/strict";
 
 import {
+  isActivePlanPhase,
   PLAN_COMPLETION_TOOL_NAMES,
   PLAN_TODO_TITLE,
   PlanModeController,
@@ -143,5 +144,47 @@ assert.equal(todo3.isPlanBound(), true);
 assert.equal(todo3.getTitle(), "Describe the work");
 // All complete under a drifted title must still advance to retro.
 assert.equal(c3.getPhase(), "retro", "title drift must not block executing -> retro");
+
+// ---------------------------------------------------------------------------
+// A persisted plan snapshot is untrusted: `SessionStore.load` validates only the envelope version.
+// An unknown phase used to read as "plan active but mutations allowed"; a non-array `steps` threw on
+// restore; non-string fields broke `.trim()`. The controller normalizes all of it.
+// ---------------------------------------------------------------------------
+{
+  assert.equal(isActivePlanPhase("executing"), true);
+  assert.equal(isActivePlanPhase("off"), false);
+  assert.equal(isActivePlanPhase("bogus"), false, "an unknown phase is not a live plan phase");
+
+  const c = new PlanModeController({ getTodoManager: () => null });
+  c.setEventBus(createAgentEventBus());
+  c.restoreState({
+    phase: "bogus",
+    planMarkdown: 42,
+    steps: "not-an-array",
+    enabledAt: "x",
+    todosSeeded: "yes",
+    preservedExistingTodos: 1,
+    planFilePath: 7,
+  });
+  assert.equal(c.getPhase(), "off", "an unknown phase restores as off");
+  assert.equal(c.isRestrictingTools(), false, "and does not restrict tools");
+  assert.deepEqual(c.getState().steps, [], "non-array steps normalize to empty");
+  assert.equal(c.getState().planMarkdown, null, "non-string markdown normalizes to null");
+  assert.equal(c.getState().planFilePath, null, "non-string path normalizes to null");
+  assert.equal(c.getState().todosSeeded, false, "truthy non-booleans normalize to false");
+
+  c.restoreState({
+    phase: "ready",
+    planMarkdown: "## Plan",
+    steps: [{ step: 1, text: "A" }, { bad: true }],
+    enabledAt: 5,
+    todosSeeded: true,
+    preservedExistingTodos: false,
+    planFilePath: ".agents/plans/x.md",
+  });
+  assert.equal(c.getPhase(), "ready", "a known phase is preserved");
+  assert.equal(c.isRestrictingTools(), true);
+  assert.deepEqual(c.getState().steps, [{ step: 1, text: "A" }], "malformed steps are dropped, valid ones kept");
+}
 
 console.log("validate:plan-lifecycle OK");

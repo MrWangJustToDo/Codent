@@ -33,7 +33,13 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
-import { SESSION_LOCK_TTL_MS, SessionLock, SessionLockedError, sessionLockPath } from "../dist/dev.mjs";
+import {
+  SESSION_LOCK_TTL_MS,
+  SessionLock,
+  SessionLockController,
+  SessionLockedError,
+  sessionLockPath,
+} from "../dist/dev.mjs";
 
 import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
 
@@ -262,6 +268,89 @@ assert.throws(() => sessionLockPath("../escape"), /Invalid session id/, "the loc
   // The heartbeat must not keep a host alive: a lock that is disposed leaves no live interval.
   // (Asserted structurally — the timer is unref'd, so this process exits on its own.)
   rmSync(lockPath("ses-b"), { force: true });
+}
+
+// ---------------------------------------------------------------------------
+// 7. The CONTROLLER path: fresh create, refusal, IO degradation, takeover recovery
+// ---------------------------------------------------------------------------
+{
+  // A brand-new session has no `.agents/sessions/` directory yet; create now takes the lock BEFORE
+  // the first persist, so the sidecar write must create it instead of failing create with ENOENT.
+  const freshRoot = mkdtempSync(join(tmpdir(), "codent-lock-fresh-"));
+  const freshEnv = fakeEnv(freshRoot);
+  const fresh = new SessionLockController();
+  fresh.setOwner("fresh-agent");
+  await fresh.lockSession("ses-fresh", freshEnv);
+  assert.equal(
+    existsSync(join(freshRoot, sessionLockPath("ses-fresh"))),
+    true,
+    "a fresh session's lock directory is created by the lock, not required beforehand"
+  );
+  await fresh.releaseAll();
+  assert.equal(
+    existsSync(join(freshRoot, sessionLockPath("ses-fresh"))),
+    false,
+    "and the lock is released with its own record"
+  );
+  rmSync(freshRoot, TEMP_RM_OPTIONS);
+}
+
+{
+  // A live foreign holder refuses a controller-level acquire with the explainable error.
+  writeForeignLock("ses-controller-held");
+  const contender = new SessionLockController();
+  contender.setOwner("contender");
+  await assert.rejects(
+    () => contender.lockSession("ses-controller-held", env),
+    (error) => error instanceof SessionLockedError && /open in another process/.test(error.message),
+    "the controller surfaces SessionLockedError for a live holder"
+  );
+  await contender.releaseAll();
+  rmSync(lockPath("ses-controller-held"), { force: true });
+}
+
+{
+  // A read-only / full disk must DEGRADE, not fail: the lock is advisory, and create now takes it
+  // on every startup.
+  const brokenEnv = {
+    ...env,
+    fs: {
+      ...env.fs,
+      writeFile: async () => {
+        throw new Error("EROFS");
+      },
+    },
+  };
+  const readonly = new SessionLockController();
+  readonly.setOwner("readonly-agent");
+  await assert.doesNotReject(
+    () => readonly.lockSession("ses-readonly", brokenEnv),
+    "an unwritable sidecar degrades to the in-process claim"
+  );
+  await readonly.releaseAll();
+}
+
+{
+  // A peer takes over (fresh foreign file), the heartbeat notices, the lost handler fires, writes are
+  // refused, and the next message recovers once the peer is gone.
+  const tracked = new SessionLockController();
+  tracked.setOwner("lost-agent");
+  const notices = [];
+  tracked.setLostHandler((sessionId) => notices.push(sessionId));
+
+  await tracked.lockSession("ses-lost", env);
+  assert.equal(tracked.hasLost("ses-lost"), false, "a held lock is not lost");
+
+  writeForeignLock("ses-lost", { instance: "peer", agent: "main" });
+  assert.equal(await tracked.refreshOwnership(env), "lost", "the heartbeat detects a foreign takeover");
+  assert.deepEqual(notices, ["ses-lost"], "and reports it exactly once");
+  assert.equal(tracked.hasLost("ses-lost"), true, "writes are refused from here on");
+
+  // The peer exits: the next write-path recovery re-acquires instead of staying read-only forever.
+  rmSync(lockPath("ses-lost"), { force: true });
+  assert.equal(await tracked.reacquireLost(env), true, "recovery re-acquires a free lock");
+  assert.equal(tracked.hasLost("ses-lost"), false, "and writes are allowed again");
+  await tracked.releaseAll();
 }
 
 rmSync(root, TEMP_RM_OPTIONS);

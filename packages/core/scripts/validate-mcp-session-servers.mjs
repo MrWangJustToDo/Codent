@@ -110,6 +110,7 @@ registerCoreEnv({
  */
 async function activateMcpExtension({ servers, configPath } = {}) {
   const logLines = [];
+  const commands = [];
   const captured = { config: null, calls: 0 };
 
   // The extension's own `ctx.logger` rows and the `session:mcp` rows both reach the log through the
@@ -138,7 +139,7 @@ async function activateMcpExtension({ servers, configPath } = {}) {
     cwd: root,
     eventBus: bus,
     onRegisterTool: () => {},
-    onRegisterCommand: () => {},
+    onRegisterCommand: (cmd) => commands.push(cmd.name),
     onUnregisterTool: () => {},
   });
 
@@ -149,7 +150,7 @@ async function activateMcpExtension({ servers, configPath } = {}) {
   });
   await runner.loadExtension(extension);
 
-  return { manager, captured, logLines, extension, runner };
+  return { manager, captured, logLines, extension, runner, commands };
 }
 
 // ============================================================================
@@ -269,6 +270,13 @@ assert.deepEqual(
   "an empty map falls back to the config file, like no map at all"
 );
 assert.equal(empty.manager.configSourceKind, "file", "an empty map is treated as 'no options supplied'");
+
+// An ENABLED extension with zero servers must still register `/mcp`: the disabled notice tells the
+// model the status command exists, and an empty list is a valid answer. Registering it after the
+// empty-config early return left the promise unmet (and `/mcp` answered "unknown command").
+const noServers = await activateMcpExtension({ servers: { mcpServers: {} } });
+assert.equal(noServers.captured.calls, 0, "no servers: nothing connects");
+assert.ok(noServers.commands.includes("mcp"), "but /mcp is still registered so the status is inspectable");
 
 // ============================================================================
 // 7. A failed server does not block the session (task 1.6)
