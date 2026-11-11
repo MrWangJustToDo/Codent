@@ -209,10 +209,27 @@ export class AgentManager {
       // channel-backed shape, and "agent log" is the target that failed.
       onPersistError: (log, info) => {
         const owner = this.agents.all().find((candidate) => candidate.log === log);
-        owner?.emitEvent("session:save-error", {
-          target: "agent log",
-          error: `${info.error} (stage: ${info.stage}, dropped: ${info.dropped}, consecutive: ${info.consecutiveFailures})`,
-        });
+        if (owner) {
+          owner.emitEvent("session:save-error", {
+            target: "agent log",
+            error: `${info.error} (stage: ${info.stage}, dropped: ${info.dropped}, consecutive: ${info.consecutiveFailures})`,
+          });
+          return;
+        }
+        // Bootstrap/teardown: the agent is not in the registry yet (or no longer), which is exactly
+        // why `constructionLogs` / `teardownLogs` exist. Without this branch a read-only or full disk
+        // was silent during the phase most likely to explain a broken session.
+        const agentId = this.agentIdForLog(log);
+        if (!agentId) return;
+        const sessionId = this.retainedMeta.get(agentId)?.sessionId;
+        this.busScope.root.emit(
+          "session:save-error",
+          {
+            target: "agent log",
+            error: `${info.error} (stage: ${info.stage}, dropped: ${info.dropped}, consecutive: ${info.consecutiveFailures})`,
+          },
+          { agentId, ...(sessionId ? { sessionId } : {}) }
+        );
       },
     });
     this.logExtension.start();
@@ -338,6 +355,13 @@ export class AgentManager {
     await stage(() => this.logExtension.dispose());
     await stage(() => this.busScope.dispose());
     if (firstError !== undefined) throw firstError;
+    // A build that exceeded BUILD_WAIT_TIMEOUT_MS may still hold a construction binding (log +
+    // retained envelope identity). The maps are only cleared on a COMPLETE teardown: a failed
+    // dispose is retryable, and until then `agentIdForLog` must still be able to attribute a
+    // persist failure to the half-torn-down agent.
+    this.constructionLogs.clear();
+    this.retainedMeta.clear();
+    this.teardownLogs.clear();
     this.tornDown = true;
   }
 
@@ -395,10 +419,38 @@ export class AgentManager {
     if (meta) this.retainedMeta.set(agentId, meta);
   }
 
-  /** Drop a construction-time log binding (registration or a failed build). @internal */
-  releaseConstructionLog(agentId: string): void {
+  /**
+   * Drop a construction-time log binding (registration or a failed build). @internal
+   *
+   * `log` makes it identity-checked: a FAILED build can carry the same id as a healthy registered
+   * agent (a duplicate-id error), and only the binding that failed may be released. Without the
+   * check the caller had to guard on `!agents.has(id)`, which skipped the release for the failed
+   * build itself — leaking its log and making `resolveLog` serve a detached sink to the healthy
+   * agent's later teardown events.
+   */
+  releaseConstructionLog(agentId: string, log?: AgentLog): void {
+    if (log !== undefined && this.constructionLogs.get(agentId) !== log) return;
     this.constructionLogs.delete(agentId);
     this.retainedMeta.delete(agentId);
+  }
+
+  /**
+   * Reverse-resolve a log to its owning agent id.
+   *
+   * The persist-error path needs "whose log failed", and during bootstrap/teardown the agent is
+   * absent from the registry. This reads the same three tables `resolveLog` reads, in the same order.
+   */
+  private agentIdForLog(log: AgentLog): string | undefined {
+    for (const agent of this.agents.all()) {
+      if (agent.log === log) return agent.id;
+    }
+    for (const [agentId, candidate] of this.constructionLogs) {
+      if (candidate === log) return agentId;
+    }
+    for (const [agentId, candidate] of this.teardownLogs) {
+      if (candidate === log) return agentId;
+    }
+    return undefined;
   }
 
   // ============================================================================
@@ -459,7 +511,7 @@ export class AgentManager {
       managed.manager = this;
       // The registry now resolves this agent, so the construction-time binding has done its job.
       // Dropping it here keeps one owner per log (registry → teardown), never two.
-      this.releaseConstructionLog(managed.id);
+      this.releaseConstructionLog(managed.id, managed.log);
 
       if (bootstrap) {
         // The JSONL sink is already bound by `agent-factory.ts` (`bindLogSink`, before
@@ -515,10 +567,12 @@ export class AgentManager {
           // because `busScope.of(id)` returns the LIVE agent's cached scope for that id — deleting
           // it by id would silently cut off a healthy agent's session projection and subagent
           // up-flow while the registry still looked complete.
-          if (!this.agents.has(managed.id)) {
-            this.releaseConstructionLog(managed.id);
-            this.releaseAgentScope(managed.id);
-          }
+          // The construction binding belongs to THIS build: a healthy agent with the same id
+          // released its own at registration, so releasing identity-checked is always safe.
+          this.releaseConstructionLog(managed.id, managed.log);
+          // The bus scope, by contrast, may be the LIVE agent's (`busScope.of(id)` returns its
+          // cached node), so it is only released when this build is not that agent.
+          if (!this.agents.has(managed.id)) this.releaseAgentScope(managed.id);
         }
       }
       throw error;

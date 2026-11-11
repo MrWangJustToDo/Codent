@@ -3,6 +3,7 @@ import { emitToolBeforeHook, ToolBeforeHookLedger } from "../../agent/extension/
 import { BUILTIN_TOOL_NAMES } from "../../agent/tools/catalog/tool-names.js";
 import { isAbortError, isCancelledOutputMarker } from "../../runtime-types/abort.js";
 import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
+import { isExtensionDeniedOutput } from "../../runtime-types/tool-denial.js";
 import { errorMessage } from "../../utils/errors.js";
 
 import type { ExtensionRunner } from "../../agent/extension/runner.js";
@@ -157,6 +158,10 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
           // cancel from a success. Read the verdict off the output, the same marker
           // the render layer uses, so one semantic does not get two readers.
           cancelled: isCancelledOutputMarker(info.result),
+          // An extension refusal is also a normal return (`onBeforeToolCall` → `skip`), so it
+          // arrives here with `ok: true`. Its marker is separate from the cancel one because a
+          // refusal never ran and must not be reported as either "executed" or "cancelled".
+          denied: isExtensionDeniedOutput(info.result),
         });
       } else {
         deps.emitEvent?.("agent:tool-error", {

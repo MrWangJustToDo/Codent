@@ -1,4 +1,5 @@
 import { isAbortError, isCancelledOutputMarker } from "../../../runtime-types/abort.js";
+import { isExtensionDeniedOutput } from "../../../runtime-types/tool-denial.js";
 import { TOOL_CANCELLED_MESSAGE } from "../../stream/incomplete-tool-calls.js";
 
 import type { ImagePart, ToolCallPart, ToolCallState } from "@tanstack/ai";
@@ -64,6 +65,12 @@ export function getUiToolState(part: ToolCallPart): UiToolState {
     return "approval-requested";
   }
   if (part.approval?.approved === false) {
+    return "output-denied";
+  }
+  // An extension's `tool:before:*` refusal is a DENIAL, not a failure: the call never ran, so it
+  // must not read as `output-error` (which painted a red cross, counted it in the compact activity
+  // summary, and made the same fact a "success" in the event log).
+  if (isExtensionDeniedOutput(part.output)) {
     return "output-denied";
   }
 

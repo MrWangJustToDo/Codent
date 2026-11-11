@@ -5,11 +5,17 @@
 import { isReasoningEffort, supportedReasoningEfforts } from "../../models/types.js";
 import { errorMessage } from "../../utils/errors.js";
 import { normalizeSessionApprovals } from "../approval/tool-approval-table.js";
+import { SESSION_END_CANCELLED_MESSAGE } from "../jobs/background-work.js";
+import { isActivePlanPhase } from "../plan/plan-mode-controller.js";
 import { readPlanFileAtRelativePath } from "../plan/plan-store.js";
 import { settleInterruptedToolCalls } from "../stream/incomplete-tool-calls.js";
 import { cancelInterruptedBackgroundTasks } from "../subagent/task-background.js";
-import { cancelInterruptedBackgroundCommands } from "../tools/builtin/shell/run-command-tool.js";
+import {
+  cancelInterruptedBackgroundCommands,
+  runningBackgroundCommandLogPaths,
+} from "../tools/builtin/shell/run-command-tool.js";
 
+import type { ResolvedCoreEnv } from "../../env";
 import type { SessionHost, SessionPersistInput } from "../../runtime-types/session-host.js";
 import type { SessionSyncTracker } from "../persistence/session-sync-tracker.js";
 import type { SessionData } from "../persistence/types.js";
@@ -38,6 +44,60 @@ export function markRestoreReadFailure<T>(error: T): T {
     Object.defineProperty(error, RESTORE_READ_FAILED, { value: true, configurable: true });
   }
   return error;
+}
+
+/**
+ * How long `/resume` waits for the adopted model's metadata before letting the switch finish.
+ *
+ * A warm models.dev cache resolves in milliseconds; this only bounds the cold-fetch case so the
+ * switch window does not grow to the fetch timeout. A fetch that misses the budget applies its
+ * correction when it lands.
+ */
+const MODEL_METADATA_SWITCH_BUDGET_MS = 1_500;
+
+/**
+ * Await `promise` for at most `ms`.
+ *
+ * Resolves `true` when it settled in time (either outcome) and `false` on timeout; never rejects and
+ * never keeps the process alive for the timer.
+ */
+async function settlesWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms);
+    (timer as { unref?: () => void }).unref?.();
+  });
+  try {
+    return await Promise.race([
+      promise.then(
+        () => true,
+        () => true
+      ),
+      timeout,
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/**
+ * Which interrupted background-command logs are gone.
+ *
+ * A local host exposes `existsSync`; a remote workspace only has async `exists`. A probe failure
+ * means "cannot tell", which keeps the pointer (the model reading a missing file is bad, but not as
+ * bad as discarding output that is actually there).
+ */
+async function resolveMissingCommandLogs(messages: TanStackUIMessage[], env: ResolvedCoreEnv): Promise<Set<string>> {
+  const missing = new Set<string>();
+  for (const path of new Set(runningBackgroundCommandLogPaths(messages))) {
+    try {
+      const present = env.fs.existsSync ? env.fs.existsSync(path) : await env.fs.exists(path);
+      if (!present) missing.add(path);
+    } catch {
+      // Cannot tell — keep the pointer.
+    }
+  }
+  return missing;
 }
 
 export function getSessionPersistInput(host: SessionHost, uiMessages?: TanStackUIMessage[]): SessionPersistInput {
@@ -122,8 +182,22 @@ export async function restoreManagedSession(
   // A background `task` is the one part that carries an output and still cannot be running: it wrote
   // its `running` handle at start, and a session end drops the ledger that would ever settle it. That
   // pass runs FIRST — the generic one skips any part with an output, so it would leave the handle.
+  // A graceful teardown DELETES a running job's log with its record. Decide readability here, where
+  // we can await: a REMOTE workspace only implements the async `exists`, and the repair below is a
+  // synchronous copy-on-write pass. A path we cannot probe keeps its pointer (do not claim it is gone).
+  // A duck-typed host double may not expose the env at all — then there is nothing to probe.
+  const restoreEnv = host.getCoreEnv?.();
+  const missingCommandLogs = restoreEnv
+    ? await resolveMissingCommandLogs(restored.uiMessages, restoreEnv)
+    : new Set<string>();
   const restoredMessages =
-    options.repairRuntime === false ? restored.uiMessages : cancelInterruptedBackgroundCommands(restored.uiMessages);
+    options.repairRuntime === false
+      ? restored.uiMessages
+      : cancelInterruptedBackgroundCommands(
+          restored.uiMessages,
+          SESSION_END_CANCELLED_MESSAGE,
+          (path) => !missingCommandLogs.has(path)
+        );
   const taskMessages =
     options.repairRuntime === false ? restoredMessages : cancelInterruptedBackgroundTasks(restoredMessages);
   const uiMessages = options.repairRuntime === false ? taskMessages : settleInterruptedToolCalls(taskMessages);
@@ -136,8 +210,25 @@ export async function restoreManagedSession(
     await host.session.saveRestoredMessages(session, uiMessages);
   }
 
-  const planSnapshot = session.planMode ? { ...session.planMode, steps: [...session.planMode.steps] } : null;
-  if (planSnapshot && planSnapshot.phase !== "off" && !planSnapshot.planMarkdown?.trim() && planSnapshot.planFilePath) {
+  // `SessionStore.load` validates only the envelope version, so `planMode` is whatever the file held.
+  // Normalize every field here — the controller normalizes the phase again, but this block reads the
+  // snapshot BEFORE that (file lookup, the `host.mode`-less fallback), and a non-string markdown used
+  // to throw `.trim()` and fail the whole resume.
+  const planSnapshot = session.planMode
+    ? {
+        ...session.planMode,
+        phase: isActivePlanPhase(session.planMode.phase) ? session.planMode.phase : "off",
+        steps: Array.isArray(session.planMode.steps) ? [...session.planMode.steps] : [],
+        planMarkdown: typeof session.planMode.planMarkdown === "string" ? session.planMode.planMarkdown : null,
+        planFilePath: typeof session.planMode.planFilePath === "string" ? session.planMode.planFilePath : null,
+      }
+    : null;
+  if (
+    planSnapshot &&
+    isActivePlanPhase(planSnapshot.phase) &&
+    !planSnapshot.planMarkdown?.trim() &&
+    planSnapshot.planFilePath
+  ) {
     const markdown = await readPlanFileAtRelativePath(planSnapshot.planFilePath, host.getCoreEnv());
     if (markdown?.trim()) {
       planSnapshot.planMarkdown = markdown;
@@ -218,7 +309,7 @@ export async function restoreManagedSession(
     host.mode.restore(planSnapshot, wantAuto);
   } else {
     host.planMode.restoreState(planSnapshot);
-    host.setAutoModeEnabled(planSnapshot?.phase !== "off" ? false : wantAuto);
+    host.setAutoModeEnabled(isActivePlanPhase(planSnapshot?.phase) ? false : wantAuto);
   }
   host.getApprovals().restore(approvals);
 
@@ -255,20 +346,51 @@ export async function restoreManagedSession(
     // The persisted model is not the bootstrap one, so its metadata was never resolved: capabilities
     // would be "unknown" (permissive → media sent to a text-only endpoint) and the context window
     // unset (compaction trigger loses its clamp).
-    if (modelChanged) await host.refreshModelMetadata?.();
-    // A persisted effort belongs to the model it was chosen for. `setModel` drops an unsupported
-    // level on an explicit switch, but the restore writes the persisted value AFTER the model, so
-    // an unavailable model that fell back to another one kept a depth its replacement does not
-    // offer. Only POSITIVE evidence may clear: `supportedReasoningEfforts` falls back to the known
-    // set when metadata is silent, whereas the menu predicate (`offerable…`) returns `[]` for
-    // "unknown" and would delete a user's explicit depth on every resume. `silent` is a failed
-    // resume's recovery: it must not write corrections to the session that never left.
-    if (!options.silent) {
-      const info = host.getModelInfo?.() ?? null;
-      const effort = host.getReasoningEffort();
-      if (info && effort !== undefined && !supportedReasoningEfforts(info).includes(effort)) {
-        host.setReasoningEffort?.(undefined);
+    //
+    // A models.dev resolve is a NETWORK read on a cold cache. Awaiting it here kept the switch in
+    // "switching" — where every send / approval / `/mode` is dropped — for up to the fetch timeout.
+    // Wait only a short budget (a warm cache resolves immediately) and let a cold fetch finish in the
+    // background; the depth correction is then applied by the guarded callback.
+    const restoreEpoch = host.captureEpoch?.();
+    // Session-generation identity is the guard: the callback can land after another `/resume`/`/new`,
+    // and `setReasoningEffort` persists + emits `mode:change`, so applying it then would clear the NEW
+    // session's depth. (There is no session-id read on this host port; the epoch is the same fact.)
+    const stillOnRestoredSession = () => (restoreEpoch ? restoreEpoch.isCurrent() : true);
+    const correctPersistedEffort = () => {
+      // A persisted effort belongs to the model it was chosen for. `setModel` drops an unsupported
+      // level on an explicit switch, but the restore writes the persisted value AFTER the model, so
+      // an unavailable model that fell back to another one kept a depth its replacement does not
+      // offer. Only POSITIVE evidence may clear: `supportedReasoningEfforts` falls back to the known
+      // set when metadata is silent, whereas the menu predicate (`offerable…`) returns `[]` for
+      // "unknown" and would delete a user's explicit depth on every resume. `silent` is a failed
+      // resume's recovery: it must not write corrections to the session that never left.
+      //
+      // The callback can land after another `/resume`/`/new`: `setReasoningEffort` persists and emits
+      // `mode:change`, so without the identity check it would clear the NEW session's depth.
+      try {
+        if (options.silent || !stillOnRestoredSession()) return;
+        const info = host.getModelInfo?.() ?? null;
+        const effort = host.getReasoningEffort();
+        if (info && effort !== undefined && !supportedReasoningEfforts(info).includes(effort)) {
+          host.setReasoningEffort?.(undefined);
+        }
+      } catch {
+        // A best-effort correction must not escape as an unhandled rejection (the process guard
+        // treats one as fatal).
       }
+    };
+    let effortCorrectionPending = false;
+    if (modelChanged && host.refreshModelMetadata) {
+      const refresh = host.refreshModelMetadata();
+      const settled = await settlesWithin(refresh, MODEL_METADATA_SWITCH_BUDGET_MS);
+      if (settled) {
+        correctPersistedEffort();
+      } else {
+        effortCorrectionPending = true;
+        void refresh.then(correctPersistedEffort, () => undefined);
+      }
+    } else {
+      correctPersistedEffort();
     }
     // Make the fallback converge on disk once: the corrected `SessionData` was adopted above, but
     // without a write the next resume reads the old id again.
@@ -283,8 +405,10 @@ export async function restoreManagedSession(
     // `session:restore` row there read as "the switch succeeded" in the timeline while the command
     // had returned an error. The failure itself is already reported by the caller.
     if (!options.silent) {
-      // Report the EFFECTIVE depth: a level the model no longer offers was cleared above.
-      const effectiveEffort = host.getReasoningEffort();
+      // Report the EFFECTIVE depth: a level the model no longer offers was cleared above. When the
+      // metadata fetch missed the switch budget the correction has not run yet, so omit the field
+      // rather than report a value that is about to change (the later `mode:change` carries it).
+      const effectiveEffort = effortCorrectionPending ? undefined : host.getReasoningEffort();
       host.emitEvent("session:restore", {
         sessionId,
         messageCount: uiMessages.length,

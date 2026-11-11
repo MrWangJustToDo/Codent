@@ -9,6 +9,7 @@
 
 import { CODE_MODE_LAZY_TOOL_NAMES, CODE_MODE_TOOL_NAMES, createCodeModeExtension } from "../agent/code-mode";
 import { ExtensionLoader, ExtensionRunner, getDefaultExtensionDirs } from "../agent/extension";
+import { readExtensionSummary } from "../agent/extension/extension-summary.js";
 import { createJobsExtension } from "../agent/jobs/extension.js";
 import { createLspExtension } from "../agent/lsp";
 import { createMcpExtension, mcpConfigFromServers, type McpElicitHook, type McpExtensionConfig } from "../agent/mcp";
@@ -23,6 +24,7 @@ import { createTaskTool } from "../agent/subagent/task-tool.js";
 import { BUILTIN_TOOL_NAMES } from "../agent/tools/catalog/tool-names.js";
 import { errorMessage } from "../utils/errors.js";
 
+import type { LspManager } from "../agent/lsp/lsp-manager.js";
 import type { ResolvedCoreEnv } from "../env";
 import type { AgentManager } from "./agent-manager.js";
 import type { ManagedAgent, ManagedAgentConfig } from "./managed-agent.js";
@@ -290,9 +292,25 @@ export class AgentBootstrap {
       // used to emit: any other caller of `setEnabled` changed state without telling anyone.
       // Both projections move together: disabling the MCP extension closes its clients, and the
       // `mcp` channel would otherwise keep advertising the servers it just shut down.
-      onExtensionStateChanged: () => {
+      onExtensionStateChanged: (extensionId) => {
         managed.publishExtensionState();
         managed.publishMcpState();
+        // Append-only row: the two snapshots above say "what exists now" and are suppressed in the
+        // timeline, so a user could not otherwise explain when/why an extension disappeared.
+        if (!extensionId) return;
+        const info = readExtensionSummary(managed.extensions.getExtensionRunner()).extensions.find(
+          (entry) => entry.id === extensionId
+        );
+        if (!info) return;
+        managed.emitEvent("agent:extension-state", {
+          extensionId,
+          enabled: info.enabled,
+          state: info.state,
+          ...(info.inactiveReason ? { reason: info.inactiveReason } : {}),
+          // Before registration the startup load's rows duplicate `session:bootstrap-summary`; the
+          // policy drops them, keeping the timeline row for runtime transitions only.
+          ...(manager.getAgent?.(managed.id) ? {} : { bootstrap: true }),
+        });
       },
       cwd: rootPath,
       agentId: managed.id,
@@ -388,7 +406,17 @@ export class AgentBootstrap {
     // Built-in LSP extension (enabled unless explicitly disabled).
     if (config.lsp !== false) {
       try {
-        const lspOptions = typeof config.lsp === "object" && config.lsp !== null ? config.lsp : undefined;
+        // The manager is also handed to the agent: teardown kills language servers synchronously
+        // (a host that exits without settling the async teardown must not orphan them), and only the
+        // extension used to hold the handle. Chain a caller-supplied hook instead of overwriting it.
+        const configured = typeof config.lsp === "object" && config.lsp !== null ? config.lsp : undefined;
+        const lspOptions = {
+          ...(configured ?? {}),
+          onManager: (manager: LspManager) => {
+            managed.setLspManager(manager);
+            configured?.onManager?.(manager);
+          },
+        };
         recordExtensionResult(
           report,
           "codent-lsp",

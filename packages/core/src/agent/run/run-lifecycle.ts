@@ -60,6 +60,9 @@ export async function prepareManagedAgentForRun(
   // Always consume the flags (avoid `||` short-circuit leaving a stale mark behind).
   const forcedNewTurn = host.consumePrepareAsNewTurn() === true;
   const flaggedContinuation = host.consumePrepareAsContinuation() === true;
+  // This pump drained the queue in its first phase and already wrote one `prompt:submit` per
+  // released message; the message-derived row below would be the same fact a second time.
+  const promptRowsAlreadyEmitted = host.consumePreparePromptRowsEmitted?.() === true;
   // A wake turn runs with the previous assistant message last, so the message-derived rule would
   // classify it as a tool continuation. It is a NEW turn (own `runId`, own turn boundaries), just
   // one without a prompt — see `markNextPrepareAsNewTurn`.
@@ -106,7 +109,7 @@ export async function prepareManagedAgentForRun(
     // would be handed nothing to select against.
     if (userMsg) await host.collectExtensionPromptHooks(userMsg);
 
-    if (userMsg) {
+    if (userMsg && !promptRowsAlreadyEmitted) {
       host.emitEvent("prompt:submit", {
         prompt: userMsg,
         contextMessageCount: (host.getUI?.()?.getMessages() ?? inputMessages).length,
@@ -125,6 +128,9 @@ export function finalizeManagedAgentRun(
   if (!host.beginTurnFinalize()) return false;
 
   host.clearPrepareAsContinuation();
+  // A mark that never reached its `prepareForRun` (a pre-prepare throw) must not suppress the next
+  // turn's prompt row.
+  host.clearPreparePromptRowsEmitted?.();
   host.recordStreamDuration();
   host.persistSession();
   host.clearTurnContext();

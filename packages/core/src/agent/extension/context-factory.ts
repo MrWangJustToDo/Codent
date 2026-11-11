@@ -193,8 +193,15 @@ export function createExtensionContext(
       let active = true;
       const dispose = () => {
         if (!active) return;
-        active = false;
+        // A registration is a lease, and the ledger IS the token: normal teardown drains it while
+        // the context is already revoked (`contexts.delete` runs first), so `isLive` cannot be the
+        // guard. What must never happen is a RETAINED disposer (a timer, a promise continuation)
+        // unregistering the NEXT incarnation's decorator — the owner id is shared across
+        // incarnations, so that call would succeed. Once the ledger no longer holds this disposer it
+        // has already been released; stop.
         const index = registrations?.toolOutputDecoratorDisposers.indexOf(dispose) ?? -1;
+        if (registrations && index < 0) return;
+        active = false;
         if (index >= 0) registrations!.toolOutputDecoratorDisposers.splice(index, 1);
         disposeOwned?.();
       };

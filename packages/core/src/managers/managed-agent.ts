@@ -70,6 +70,7 @@ import {
 import { backgroundWakeCause, TASK_JOB_KIND, type BackgroundWakeCause } from "../agent/jobs/background-work.js";
 import { ModeCoordinator } from "../agent/mode/mode-coordinator.js";
 import { ModeFacet } from "../agent/mode/mode-facet.js";
+import { SESSION_LOCK_TTL_MS } from "../agent/persistence/session-lock.js";
 import { type SessionSaveReason } from "../agent/persistence/session-sync-tracker.js";
 import { type SessionData } from "../agent/persistence/types.js";
 import {
@@ -141,7 +142,7 @@ import { CompactionService } from "./services/compaction-service.js";
 import { ExtensionRegistryService } from "./services/extension-registry-service.js";
 import { MemoryService } from "./services/memory-service.js";
 import { SessionService } from "./services/session-service.js";
-import { releaseAgentResources } from "./teardown-resources.js";
+import { forceKillChildProcesses, releaseAgentResources } from "./teardown-resources.js";
 import { dispatchAgentTelemetry } from "./telemetry/emit-agent-telemetry.js";
 import { UsageTracker } from "./telemetry/usage-tracker.js";
 import { ToolFacet } from "./tool-facet.js";
@@ -168,6 +169,7 @@ import type {
   ExtensionRuntimeAccess,
 } from "../agent/extension/types.js";
 import type { LspExtensionConfig } from "../agent/lsp";
+import type { LspManager } from "../agent/lsp/lsp-manager.js";
 import type { McpElicitHook, McpExtensionConfig, McpServerConfig } from "../agent/mcp";
 import type { McpManager } from "../agent/mcp/manager.js";
 import type { MemoryExtensionConfig } from "../agent/memory";
@@ -502,6 +504,8 @@ export class ManagedAgent {
   readonly toolService: AgentToolService;
   private todoManager: TodoManager | null;
   private mcpManager: McpManager | null = null;
+  /** Live LSP manager (a handle for the synchronous teardown kill; replaced on session restart). */
+  private lspManager: LspManager | null = null;
   private skillRegistry: SkillRegistry | null = null;
   log: AgentLog;
   /** Workspace log sink lifetime (bind once / flush-on-destroy). */
@@ -720,6 +724,25 @@ export class ManagedAgent {
     // Cross-process lock identity: the agent id alone is not unique across processes (two hosts both
     // name their root "main"), so `SessionLock` composes it with a per-process instance id.
     this.session.setLockOwner(this.id);
+    // A cross-process lock can be taken over after a stale window (long event-loop block, paused
+    // debugger). The heartbeat notices it; without a handler the takeover was silent and this process
+    // kept appending to the same log. `SessionService` refuses writes from here on; this row says why.
+    this.session.setLockLostHandler((sessionId) => {
+      const message =
+        `Lost the cross-process lock on session ${sessionId}: another process took it over ` +
+        `(stale for over ${Math.ceil(SESSION_LOCK_TTL_MS / 1000)}s). Writes are paused until that ` +
+        `process closes; the next message retries the lock.`;
+      this.emitEvent("session:diagnostic", {
+        area: "session",
+        level: "warn",
+        message,
+        details: { sessionId },
+      });
+      // `session:diagnostic` has NO session channel — the timeline-only row would leave the user
+      // typing into a session whose writes are being refused. `session:save-error` is the one
+      // channel-backed persistence-failure shape hosts surface.
+      this.emitEvent("session:save-error", { target: "session", error: message });
+    });
     this.sessionFacet = new SessionFacet(this);
     this.sessionPersistence = this.sessionFacet.persistence;
     // The store resolves the runtime env when bound, else ambient lazily at first write.
@@ -1638,6 +1661,18 @@ export class ManagedAgent {
     return this.session.ensureSessionData();
   }
 
+  /**
+   * Take the cross-process lock for the session this agent is on.
+   *
+   * `/new` and `/resume` already hand the lock over after their commit; a plain startup did not,
+   * so the first session it wrote stayed unlocked while another process could resume and append to
+   * the same log. Throws `SessionLockedError` when that process exists.
+   * @internal
+   */
+  async lockSession(sessionId: string): Promise<void> {
+    await this.session.lockSession(sessionId);
+  }
+
   // ============================================================================
   // Config & resources
   // ============================================================================
@@ -2135,6 +2170,15 @@ export class ManagedAgent {
     return this.mcpManager;
   }
 
+  /** @internal Record the live LSP manager (see `LspExtensionConfig.onManager`). */
+  setLspManager(manager: LspManager): void {
+    this.lspManager = manager;
+  }
+
+  getLspManager(): LspManager | null {
+    return this.lspManager;
+  }
+
   getExtensionRunner(): ExtensionRunner | null {
     return this.extensionFacet.getRunner();
   }
@@ -2437,10 +2481,15 @@ export class ManagedAgent {
    * {@link AgentManager} / lifecycle instead (which also releases ownership and scopes).
    */
   async disposeBuiltResources(): Promise<void> {
-    // Same resources, same order as `LifecycleCoordinator.destroy`: the shared list is released
-    // BEFORE `markDestroyed`, so a build that fails after the todo/memory managers exist cannot leak
-    // their timers on a path nobody registers.
-    releaseAgentResources(this);
+    // Same resources, same order as `LifecycleCoordinator.destroy`: children are killed before
+    // anything else (a build that fails after `activate` must not orphan an MCP/LSP child), and
+    // memory/todo are disposed AFTER `destroyAll` so a `deactivate` hook never reads a disposed
+    // manager. `releaseAgentResources` repeats the child kill; it is idempotent.
+    try {
+      forceKillChildProcesses(this);
+    } catch {
+      // Best-effort teardown.
+    }
     try {
       this.markDestroyed();
     } catch {
@@ -2452,7 +2501,27 @@ export class ManagedAgent {
       // Best-effort teardown.
     }
     try {
+      // Same order as the registered path: a debounced index refresh lands BEFORE `dispose()` cancels
+      // its timer. Without this a bootstrap failure silently dropped that write.
+      await this.getMemoryManager()?.flushPendingIndex?.();
+    } catch {
+      // Best-effort teardown.
+    }
+    try {
+      releaseAgentResources(this);
+    } catch {
+      // Best-effort teardown.
+    }
+    try {
       await this.destroyBackgroundWork();
+    } catch {
+      // Best-effort teardown.
+    }
+    try {
+      // Close the writer and hand the cross-process lock back. The lock is now taken inside
+      // `host.create` (after registration), so a failure here on the build path would otherwise
+      // leave `<id>.session.lock` behind until its TTL.
+      await this.session.close();
     } catch {
       // Best-effort teardown.
     }
@@ -2817,6 +2886,19 @@ export class ManagedAgent {
     return this.run.consumePrepareAsNewTurn();
   }
 
+  /** This pump already wrote prompt rows for the queued input it drained (see RunCoordinator). */
+  markNextPreparePromptRowsEmitted(): void {
+    this.run.markNextPreparePromptRowsEmitted();
+  }
+
+  clearPreparePromptRowsEmitted(): void {
+    this.run.clearPreparePromptRowsEmitted();
+  }
+
+  consumePreparePromptRowsEmitted(): boolean {
+    return this.run.consumePreparePromptRowsEmitted();
+  }
+
   async prepareForRun(options: {
     prompt?: string;
     messages?: Array<TanStackUIMessage | ModelMessage>;
@@ -3131,7 +3213,11 @@ export class ManagedAgent {
     }
     const lease = this.compactions.begin("manual");
     if (!lease) {
-      return { ok: false, error: "Compaction already in progress" };
+      // `isRunning()` was checked above, so this is NOT "already in progress": the state machine
+      // refused `compaction-start` (a run phase that cannot be preempted, a pending wait, a
+      // destroyed agent). Saying "already in progress" sent the user looking for a run that does
+      // not exist.
+      return { ok: false, error: "Cannot compact now — the agent is not in a state that accepts a compaction." };
     }
     try {
       return await runManualCompact(createManualCompactHost(this, lease), manager, options);

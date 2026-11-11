@@ -4,6 +4,7 @@ import { z } from "zod";
 import { isAbortError, isTimeoutError } from "../../../../runtime-types/abort.js";
 import { SESSION_END_CANCELLED_MESSAGE } from "../../../jobs/background-work.js";
 import { settleToolCallsAs } from "../../../stream/incomplete-tool-calls.js";
+import { isToolCallPart } from "../../../stream/message-parts.js";
 import { BUILTIN_TOOL_NAMES } from "../../catalog/tool-names.js";
 import { defineServerTool, isProjectedModelContent } from "../../runtime/define-tool.js";
 import { maybeCacheOutput } from "../../shared/cache/tool-output-cache.js";
@@ -16,6 +17,26 @@ import { evaluateCommandApproval } from "./safety/command-approval-policy.js";
 import type { AgentToolContext } from "../../runtime/tool-context.js";
 import type { RunCommandOutput } from "../../shared/schemas.js";
 import type { UIMessage } from "@tanstack/ai";
+
+/**
+ * Log paths of background commands that are still marked `running`.
+ *
+ * The restore repair must decide, per path, whether the durable log still exists — a REMOTE workspace
+ * only offers the async `exists`. Collecting the paths first lets that check stay async outside the
+ * synchronous copy-on-write repair.
+ */
+export function runningBackgroundCommandLogPaths(messages: UIMessage[]): string[] {
+  const paths: string[] = [];
+  for (const message of messages) {
+    for (const part of message.parts ?? []) {
+      if (!isToolCallPart(part) || part.name !== BUILTIN_TOOL_NAMES.runCommand) continue;
+      if (!isRunningBackgroundCommand(part.output)) continue;
+      const path = (part.output as { cachedOutputPath?: unknown }).cachedOutputPath;
+      if (typeof path === "string" && path) paths.push(path);
+    }
+  }
+  return paths;
+}
 
 /**
  * Settle background `run_command` handles that cannot still be running: the session ended.
@@ -31,13 +52,22 @@ import type { UIMessage } from "@tanstack/ai";
  */
 export function cancelInterruptedBackgroundCommands(
   messages: UIMessage[],
-  reason: string = SESSION_END_CANCELLED_MESSAGE
+  reason: string = SESSION_END_CANCELLED_MESSAGE,
+  /**
+   * Whether the job's durable log still exists.
+   *
+   * A graceful teardown DELETES a running job's log with its record (`destroyAll`), while a crash
+   * leaves both for the next start. The same settled shape is produced in either case, so the
+   * pointer must be dropped when the file is gone — telling the model to `read_file` a deleted path
+   * is worse than admitting the partial output is unavailable.
+   */
+  isLogReadable: (path: string) => boolean = () => true
 ): UIMessage[] {
   return settleToolCallsAs(
     messages,
     (part) => part.name === BUILTIN_TOOL_NAMES.runCommand && isRunningBackgroundCommand(part.output),
     reason,
-    (part, message) => interruptedBackgroundCommandOutput(part.output, message)
+    (part, message) => interruptedBackgroundCommandOutput(part.output, message, isLogReadable)
   );
 }
 
@@ -50,12 +80,17 @@ function isRunningBackgroundCommand(output: unknown): boolean {
 /**
  * The settled shape of a background command whose session ended.
  *
- * Keeps `jobId` and the log path (both still readable), and reports `killed` — the same status the
- * job record uses for the same event. `cancelled` is deliberately NOT set: that marker means "the
- * user stopped it" and renders as "Cancelled by user.".
+ * Keeps `jobId` and — only while the file still exists — the log path. Reports `killed`, the same
+ * status the job record uses for the same event. `cancelled` is deliberately NOT set: that marker
+ * means "the user stopped it" and renders as "Cancelled by user.".
  */
-function interruptedBackgroundCommandOutput(output: unknown, reason: string): RunCommandOutput {
+function interruptedBackgroundCommandOutput(
+  output: unknown,
+  reason: string,
+  isLogReadable: (path: string) => boolean
+): RunCommandOutput {
   const handle = (typeof output === "object" && output !== null ? output : {}) as Partial<RunCommandOutput>;
+  const priorPath = handle.cachedOutputPath ?? null;
   return {
     command: handle.command ?? "",
     stdout: handle.stdout ?? "",
@@ -66,8 +101,10 @@ function interruptedBackgroundCommandOutput(output: unknown, reason: string): Ru
     status: "killed",
     runInBackground: true,
     ...(handle.jobId ? { jobId: handle.jobId } : {}),
-    // Required by the shared output base; keep the handle's log so the partial output stays readable.
-    cachedOutputPath: handle.cachedOutputPath ?? null,
+    // Required by the shared output base. Keep the handle's log only when it is still readable:
+    // a graceful teardown deletes a running job's log, and `toModelOutput` points the model at
+    // this path.
+    cachedOutputPath: priorPath && isLogReadable(priorPath) ? priorPath : null,
   };
 }
 

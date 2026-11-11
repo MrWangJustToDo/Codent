@@ -494,7 +494,12 @@ export class AgentChatController {
     if (this.isPumpLive() || hasPendingInteraction(this.channel.getMessages())) return;
     if (!this.hasQueuedMessages()) return;
     const drained = this.drainSteerIntoChannel() || this.drainFollowUpIntoChannel();
-    if (drained) void this.enqueueRunOnce();
+    if (drained) {
+      // The drain already recorded the queued `prompt:submit` row; the pump it starts must not
+      // record the same message a second time as a "user" prompt.
+      this.managed.markNextPreparePromptRowsEmitted();
+      void this.enqueueRunOnce();
+    }
   }
 
   /**
@@ -1048,6 +1053,9 @@ export class AgentChatController {
           const steered = this.drainSteerIntoChannel();
           if (!steered) this.drainFollowUpIntoChannel();
           this.managed.clearPrepareAsNewTurn();
+          // The drain wrote one `prompt:submit` row per released message; `prepareForRun` must not
+          // write a second "user" row for the same text (it would count one prompt twice).
+          this.managed.markNextPreparePromptRowsEmitted();
           currentMessages = this.channel.getMessages();
         } else if (options.startsNewTurn) {
           // Set at the last moment: a pump that stops on a pending interaction never reaches its
@@ -1138,6 +1146,20 @@ export class AgentChatController {
           persist: () => this.persistMessages("pump-complete"),
         });
         finalized = true;
+
+        // A queued follow-up written during a FAILED run must not wait for the user to type again.
+        // The error ended the pump, and nothing else drains the queue: `wakeForBackgroundCompletion`
+        // deliberately leaves an errored run alone, and `interruptCurrentRun` (the abort path) clears
+        // its queue instead. Deliver each message once; if the next run fails too the queue is already
+        // empty, so this cannot loop.
+        if (outcomeKind === "error" && !hasPendingInteraction(this.channel.getMessages())) {
+          if (this.drainSteerIntoChannel() || this.drainFollowUpIntoChannel()) {
+            // The drain wrote the queued `prompt:submit` row(s); the resumed pump must not write a
+            // second "user" row for the same message. (The drain persists the user message itself.)
+            this.managed.markNextPreparePromptRowsEmitted();
+            void this.enqueueRunOnce();
+          }
+        }
       }
     } catch (error) {
       // The loop's steps are not all pure bookkeeping: `applyCommandSafetyPolicy` awaits the

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { isAbortError } from "../../../../runtime-types/abort.js";
+import { truncateText } from "../../../../utils/text-truncation.js";
 import { defineServerTool, isProjectedModelContent } from "../../runtime/define-tool.js";
 import { maybeCacheOutput } from "../../shared/cache/tool-output-cache.js";
 import { OUTPUT_LIMITS } from "../../shared/output-limits.js";
@@ -14,7 +15,12 @@ import { activeExcludeDirs, defaultSearchPolicy, searchTargetBypassesIgnore } fr
 
 import type { GrepOutput } from "../../shared/schemas.js";
 
-/** Maximum characters per matching line content (to prevent context overflow) */
+/**
+ * Maximum rendered characters for one matching line.
+ *
+ * The budget INCLUDES the `...[truncated]` marker (shared `truncateText` reserves it), so the content
+ * itself is at most 487 characters. The model-visible line never exceeds this value.
+ */
 const MAX_MATCH_LINE_CHARS = 500;
 
 /** Maximum total characters for all match content combined */
@@ -26,15 +32,13 @@ const DEFAULT_LIMIT = 100;
 /**
  * Cut one matched LINE to `maxLength`, marking the cut inline.
  *
- * Deliberately not `truncateToolOutput`: that one inserts a newline before its marker, which is
- * fine for a block of text but would split a single match line in two — and this result is parsed
+ * Delegates to the shared helper (which reserves the marker from the budget and never splits a
+ * line). It is not `truncateToolOutput`: that one inserts a newline before its marker, which is fine
+ * for a block of text but would split a single match line in two — this result is parsed
  * line-by-line, so the cut has to stay on one line.
  */
 function truncateMatchLine(content: string, maxLength: number): string {
-  if (content.length <= maxLength) {
-    return content;
-  }
-  return content.slice(0, maxLength) + "...[truncated]";
+  return truncateText(content, maxLength, { marker: "...[truncated]" });
 }
 
 /**

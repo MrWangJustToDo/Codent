@@ -14,6 +14,7 @@
 
 import { errorMessage } from "../../utils/errors.js";
 import { buildAutoModePrompt } from "../approval/auto-mode-prompt.js";
+import { extensionSectionKind } from "../extension/turn-context.js";
 import { buildModeInactivePrompt, buildPlanModePrompt } from "../plan/plan-prompts.js";
 import { buildFrozenSystemPrompt } from "../prompt/frozen-system-prompt.js";
 
@@ -321,7 +322,9 @@ function stripExtensionSections(
   extensionId: string,
   notice?: string
 ): ExtensionTurnContextSection[] {
-  const prefix = `ext:${extensionId}`;
+  // One definition of the kind id: this used to spell `ext:${extensionId}` itself, so a change to
+  // the prefix/separator would silently stop stripping the disabled extension's sections.
+  const prefix = extensionSectionKind(extensionId);
   const remaining = sections.filter((section) => section.id !== prefix && !section.id.startsWith(`${prefix}:`));
   const body = notice?.trim();
   return body ? [...remaining, { id: prefix, content: body }] : remaining;

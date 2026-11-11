@@ -8,6 +8,8 @@
  * AutoModeController change fire its persist, so the write cannot capture `plan on + auto on`.
  */
 
+import { isActivePlanPhase } from "../plan/plan-mode-controller.js";
+
 import { createModeState, type ModeState } from "./mode-state.js";
 import { resolveAgentPolicyFacts, type AgentPolicyFacts, type AgentPolicyFactsInput } from "./policy-facts.js";
 
@@ -71,9 +73,12 @@ export class ModeCoordinator {
   }
 
   enablePlan(): void {
-    this.deps.planMode.enable();
-    // Plan wins: an auto switch cannot remain on while plan mode is active.
+    // Leave auto BEFORE enabling plan. The other order published `{ mode: "plan", autoMode: true }`
+    // for one frame: `planMode.enable()` emits `session:plan` and the state publication read the
+    // still-live auto flag, so a subscriber inspecting the snapshot saw the mutually-exclusive pair
+    // the coordinator exists to prevent.
     this.deps.autoMode.setEnabled(false);
+    this.deps.planMode.enable();
     // Always persist: plan enable is session state, and the auto callback is a no-op when auto
     // was already off.
     this.deps.persist();
@@ -130,11 +135,17 @@ export class ModeCoordinator {
 
   /** Restore both modes; a restored plan phase wins over the persisted auto flag. */
   restore(plan: PlanModeState | null | undefined, auto: boolean): void {
-    this.deps.planMode.restoreState(plan);
+    // Silent restore first, plan second: `restore` fires no onChange, while `restoreState` emits
+    // `session:plan` + a state publication that reads the live auto flag. The old order published the
+    // target phase next to the DEPARTURE's auto value for one frame.
+    //
+    // Only a KNOWN non-off phase suppresses auto: the controller normalizes an unknown phase to
+    // "off", so treating it as active here would leave auto false for a session that has no plan.
+    this.deps.autoMode.restore(isActivePlanPhase(plan?.phase) ? false : auto);
     // `restore`, not `setEnabled`: the load is not a user mode switch. Firing the live callback
     // here wrote `mode:change` into the TARGET's log while its envelope still named the departure
     // (the sink is re-bound before the load, adoption happens after), and attempted a persist the
     // service rejects — the target's own `session:restore` is the record.
-    this.deps.autoMode.restore(this.state.snapshot().planPhase === "off" && auto);
+    this.deps.planMode.restoreState(plan);
   }
 }

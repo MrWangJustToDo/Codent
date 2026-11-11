@@ -42,6 +42,43 @@ export interface PlanModeState {
   planFilePath: string | null;
 }
 
+const PLAN_PHASES: readonly PlanModePhase[] = ["off", "planning", "ready", "executing", "retro"];
+
+/**
+ * Coerce a persisted phase.
+ *
+ * `SessionStore.load` validates only the envelope version, so `planMode` is whatever the file held.
+ * An unknown phase used to be assigned verbatim: `getMode()` reports `plan` for anything not
+ * `"off"`, while `isRestrictingTools()` recognizes only planning/ready — so a corrupted phase read
+ * as "plan mode active but mutations allowed". Unknown means "not a plan phase".
+ */
+function normalizePlanPhase(value: unknown): PlanModePhase {
+  return typeof value === "string" && (PLAN_PHASES as readonly string[]).includes(value)
+    ? (value as PlanModePhase)
+    : "off";
+}
+
+/**
+ * Whether a persisted phase is a live plan phase (not `off`, not a corrupted value).
+ *
+ * Exported for the restore path, which must answer this BEFORE the controller normalizes: treating
+ * an unknown phase as active suppresses auto mode, and reading its plan file is wasted IO.
+ */
+export function isActivePlanPhase(value: unknown): value is PlanModePhase {
+  return value === "planning" || value === "ready" || value === "executing" || value === "retro";
+}
+
+function normalizePlanSteps(value: unknown): PlanStep[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (step): step is PlanStep =>
+      typeof step === "object" &&
+      step !== null &&
+      typeof (step as PlanStep).step === "number" &&
+      typeof (step as PlanStep).text === "string"
+  );
+}
+
 export interface PlanModeControllerDeps {
   getTodoManager: () => TodoManager | null;
   /** Owning runtime's env, so plan files land under the runtime root. Ambient when omitted. */
@@ -182,7 +219,8 @@ export class PlanModeController {
   private applyRestoredState(snapshot: PlanModeState | null | undefined): void {
     this.detachTodoListener();
 
-    if (!snapshot || snapshot.phase === "off") {
+    const phase = normalizePlanPhase(snapshot?.phase);
+    if (!snapshot || phase === "off") {
       this.resetPlanState("off", null);
       // A plan phase turns todo auto-clear OFF; resuming a plain session must turn it back ON, or
       // its completed list lingers in the footer forever (autoClear would stay disabled for the
@@ -197,13 +235,13 @@ export class PlanModeController {
       return;
     }
 
-    this.phase = snapshot.phase;
-    this.planMarkdown = snapshot.planMarkdown;
-    this.steps = [...snapshot.steps];
-    this.enabledAt = snapshot.enabledAt;
-    this.todosSeeded = snapshot.todosSeeded;
-    this.preservedExistingTodos = snapshot.preservedExistingTodos;
-    this.planFilePath = snapshot.planFilePath;
+    this.phase = phase;
+    this.planMarkdown = typeof snapshot.planMarkdown === "string" ? snapshot.planMarkdown : null;
+    this.steps = normalizePlanSteps(snapshot.steps);
+    this.enabledAt = typeof snapshot.enabledAt === "number" ? snapshot.enabledAt : null;
+    this.todosSeeded = snapshot.todosSeeded === true;
+    this.preservedExistingTodos = snapshot.preservedExistingTodos === true;
+    this.planFilePath = typeof snapshot.planFilePath === "string" ? snapshot.planFilePath : null;
 
     if (this.phase === "executing" || this.phase === "retro") {
       this.setPlanTodoAutoClear(false);
@@ -494,9 +532,18 @@ export class PlanModeController {
     });
   }
 
-  /** Record path after explicit `/mode save` (may rename). */
-  setPlanFilePath(path: string): void {
+  /**
+   * Record the path after an explicit `/mode save` (may rename) and publish it.
+   *
+   * This is a state change like every other phase mutation, so it goes through `notifyChange`:
+   * the retained `session:plan` projection (and the review banner, which reads `planFilePath`)
+   * otherwise kept showing the old file name, and the persisted `planMode.planFilePath` only
+   * updated on an unrelated later write.
+   */
+  recordPlanFilePath(path: string): void {
+    if (this.planFilePath === path) return;
     this.planFilePath = path;
+    this.notifyChange();
   }
 
   /** @returns seed outcome for ready vs execute flows */

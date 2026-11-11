@@ -1,6 +1,8 @@
 import { utf8ByteLength } from "../../utils/bytes.js";
 import { truncateText } from "../../utils/text-truncation.js";
 
+import { redactSecrets } from "./redaction.js";
+
 import type { AgentEvent } from "../agent-event-bus";
 
 /**
@@ -51,10 +53,18 @@ function asText(value: unknown): string {
   }
 }
 
+/** How much raw text is scanned for redaction before the preview cut (bounded, not O(payload)). */
+const REDACTION_SCAN_CHARS = PREVIEW_MAX_CHARS * 16;
+
 /** Summarize any value into `<key>Bytes` + `<key>Preview` (≤200 chars). */
 function summarizeEntry(out: Record<string, unknown>, key: string, value: unknown): void {
-  const text = asText(value);
-  out[`${key}Bytes`] = utf8ByteLength(text);
+  const raw = asText(value);
+  // Redact BEFORE truncating: cutting first can leave a secret's prefix too short for the pattern
+  // (a key split at 200 chars was no longer recognizable) and ship it to disk. Only a bounded prefix
+  // is scanned — the rest is discarded by the cut anyway.
+  const scan = raw.length > REDACTION_SCAN_CHARS ? raw.slice(0, REDACTION_SCAN_CHARS) : raw;
+  const text = redactSecrets(scan);
+  out[`${key}Bytes`] = utf8ByteLength(raw);
   out[`${key}Preview`] = text.length > PREVIEW_MAX_CHARS ? text.slice(0, PREVIEW_MAX_CHARS) : text;
 }
 
@@ -84,7 +94,11 @@ export function summarizePayload(payload: Record<string, unknown>): Record<strin
 
     if (typeof value === "string") {
       if (value.length <= KEEP_STRING_MAX_CHARS || KEEP_FIELD_RE.test(key)) {
-        out[key] = truncateText(value, KEEP_STRING_HARD_MAX_CHARS);
+        // Redact before the hard cap: a credential sliced by the cap is unrecognizable to the
+        // patterns, and the seam's later redaction only sees the already-cut text.
+        const scan =
+          value.length > KEEP_STRING_HARD_MAX_CHARS * 8 ? value.slice(0, KEEP_STRING_HARD_MAX_CHARS * 8) : value;
+        out[key] = truncateText(redactSecrets(scan), KEEP_STRING_HARD_MAX_CHARS);
       } else {
         summarizeEntry(out, key, value);
       }

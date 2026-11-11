@@ -150,5 +150,11 @@ export { loadMcpConfig } from "./agent/mcp/config.js";
 
 // Cross-process session exclusivity. A lock file is only verifiable against a real filesystem (the
 // heartbeat IS its mtime), so the validator drives the production class over a temp root.
-export { SESSION_LOCK_TTL_MS, SessionLock, SessionLockedError } from "./agent/persistence/session-lock.js";
+export {
+  SESSION_LOCK_TTL_MS,
+  SessionLock,
+  SessionLockController,
+  SessionLockedError,
+} from "./agent/persistence/session-lock.js";
+export { prepareManagedAgentForRun } from "./agent/run/run-lifecycle.js";
 export { sessionLockPath } from "./agent/persistence/types.js";

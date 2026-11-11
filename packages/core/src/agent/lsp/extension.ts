@@ -47,6 +47,14 @@ export interface LspExtensionConfig {
   disabledTools?: string[];
   /** Re-enable all tools (overrides `disabledTools`). */
   enableAll?: boolean;
+  /**
+   * Observe the live manager.
+   *
+   * The host needs a synchronous handle at teardown (a process that exits without settling the
+   * async teardown must not orphan language servers), and the extension swaps managers on session
+   * restart, so this is called again with each new one.
+   */
+  onManager?: (manager: LspManager) => void;
 }
 
 /**
@@ -174,6 +182,8 @@ export function createLspExtension(options?: LspExtensionConfig): ExtensionAPI {
           // The manager is swapped on session:start; this closure always points at the
           // one the extension currently owns, so deactivate never shuts down a stale one.
           shutdownCurrent = () => manager.shutdownAll().catch(() => {});
+          // The host keeps a live handle for the synchronous teardown path.
+          options?.onManager?.(manager);
         },
         (treeSitter) => {
           shutdownTreeSitter = () => treeSitter.shutdown();

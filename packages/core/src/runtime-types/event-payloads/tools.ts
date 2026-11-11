@@ -91,6 +91,15 @@ export type ToolEventPayloads = {
      * cancel. The verdict has to come from the output, because the return says nothing.
      */
     cancelled?: boolean;
+    /**
+     * True when an extension's `tool:before:*` hook refused the call (`event.skip`).
+     *
+     * A refusal RETURNS a result (`{ success: false, denied: true, error }`) rather than throwing,
+     * so TanStack reports it through `onAfterToolCall` with `ok: true` — indistinguishable from a
+     * genuine success by the event's success flag. Without this field the timeline recorded
+     * "Tool end" for a call that never ran, and the UI painted it as a failure.
+     */
+    denied?: boolean;
   };
   "agent:tool-error": {
     tool_name?: string;

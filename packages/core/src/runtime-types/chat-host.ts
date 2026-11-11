@@ -77,6 +77,8 @@ export interface AgentChatHost {
   clearPrepareAsContinuation(): void;
   markNextPrepareAsNewTurn(): void;
   clearPrepareAsNewTurn(): void;
+  /** This pump already wrote prompt rows for the queued input it drained. */
+  markNextPreparePromptRowsEmitted(): void;
   maybeSaveSessionUIMessages(messages: UIMessage[], reason: SessionSaveReason): void;
   runToolBeforeHook(toolCallId: string, toolName: string, args: unknown): Promise<ToolBeforeHookOutcome>;
   wakeForBackgroundWork(cause?: BackgroundWakeCause): Promise<void>;

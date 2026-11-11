@@ -72,6 +72,8 @@ const RETAINED_CHANNEL_EVENT = (() => {
 
 type ChannelPayload<C extends AgentSessionChannel> = Extract<AgentSessionEvent, { channel: C }>["payload"];
 
+/** One warning per channel per process for a retained declaration with no provider. */
+const warnedRetainedChannels = new Set<AgentSessionChannel>();
 /**
  * Lifecycle payloads that must not cross the wire verbatim.
  *
@@ -260,7 +262,19 @@ class LocalAgentSessionImpl implements AgentSession {
         const type = RETAINED_CHANNEL_EVENT.get(channel);
         if (!type) continue;
         const payload = bus.retainedValue(type, { includeParents: false });
-        if (payload === undefined) continue;
+        if (payload === undefined) {
+          // Two different silences: NO provider (reported below) and a provider that legitimately has
+          // no value yet (only the former is a wiring bug). `session:jobs` shipped the first shape
+          // before it gained its provider; this warning is the regression net for the declaration,
+          // not a detector for "projection returned null".
+          if (!bus.hasRetained(type, { includeParents: false }) && !warnedRetainedChannels.has(channel)) {
+            warnedRetainedChannels.add(channel);
+            console.warn(
+              `[agent-session] channel "${channel}" is declared retained ("${type}") but no provider is registered; subscribers receive no initial frame`
+            );
+          }
+          continue;
+        }
         const projected = projectChannelEvent(channel, {
           type,
           ts: now(),

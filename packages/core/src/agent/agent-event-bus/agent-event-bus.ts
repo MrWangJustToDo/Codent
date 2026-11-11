@@ -102,6 +102,23 @@ export function isInterceptorTimedOut(event: object): boolean {
   return timedOutEvents.has(event);
 }
 
+/**
+ * Drop an interceptor's rewrite wherever this event keeps it.
+ *
+ * `modifiedArgs` is a top-level field, but `ToolAfterPayload.modifiedResult` lives INSIDE `payload`
+ * (`agent/extension/types.ts`). Clearing only the top level left a half-executed `tool:after`
+ * rewrite readable by the caller, and nothing but an opt-in `isInterceptorTimedOut` check stood
+ * between it and the model's tool result.
+ */
+function clearPayloadRewrite(event: object): void {
+  try {
+    const payload = (event as { payload?: { modifiedResult?: unknown } }).payload;
+    if (payload && typeof payload === "object") payload.modifiedResult = undefined;
+  } catch {
+    // Best-effort cleanup: a frozen/foreign payload must not turn a contained timeout into a throw.
+  }
+}
+
 // ============================================================================
 // DefaultAgentEventBus
 // ============================================================================
@@ -272,6 +289,18 @@ export class DefaultAgentEventBus implements AgentEventBus {
     }
   }
 
+  /**
+   * Whether this bus has a registered provider for a retained event.
+   *
+   * `retainedValue` cannot answer that: it returns `undefined` both for "no provider" and for "the
+   * provider has no value yet". A `retained: true` channel with no provider is a silent failure
+   * (new subscribers simply never get an initial frame), so the session subscriber uses this to say
+   * so once instead of skipping in silence.
+   */
+  hasRetained<T extends AgentEventType>(type: T, options?: { includeParents?: boolean }): boolean {
+    return this.findRetained(type, options?.includeParents === true) !== undefined;
+  }
+
   emit<T extends AgentEventType>(type: T, payload: AgentEvent<T>["payload"], meta?: AgentEventMetaInput): void {
     const event = this.buildEvent(type, payload, meta) as AgentEvent;
     // Internal events are withheld from the wildcard fan-out: "internal" means "the caller must not
@@ -374,8 +403,10 @@ export class DefaultAgentEventBus implements AgentEventBus {
   async intercept<T extends InterceptableEvent>(event: T): Promise<T["defaultReturn"] | undefined> {
     const deadline = Date.now() + this.interceptorTimeoutMs;
     // Attribution for the budget-exhausted report: the handler that consumed it, not the next one
-    // (which never ran).
+    // (which never ran). Pattern and scope are kept as a PAIR so the report cannot name one
+    // agent's pattern on another scope.
     let lastPattern = "*";
+    let lastScopeId: string | undefined;
     outer: for (let node: EventBusScopeNode | null = this.node; node; node = node.parent) {
       // Snapshot: `node.interceptors` is mutated by onIntercept()/its disposer, and this loop
       // awaits between entries. Iterating the live array let an interceptor registered during
@@ -387,6 +418,7 @@ export class DefaultAgentEventBus implements AgentEventBus {
         if (!registration.active) continue;
         if (!interceptorMatches(registration.pattern, event.type)) continue;
         lastPattern = registration.pattern;
+        lastScopeId = node.id;
         // Isolated like the observer wildcards: a throwing interceptor must not
         // propagate into the tool call it wraps (one broken extension would fail
         // every tool it touches). The observer/transformer/context-provider
@@ -402,7 +434,7 @@ export class DefaultAgentEventBus implements AgentEventBus {
             this.reporter({
               pattern: lastPattern,
               event: event.type,
-              scopeId: node.id,
+              scopeId: lastScopeId ?? node.id,
               error: new Error(`interceptor chain exceeded ${this.interceptorTimeoutMs}ms`),
             })
           );
@@ -420,6 +452,7 @@ export class DefaultAgentEventBus implements AgentEventBus {
           };
           mutable.modifiedArgs = undefined;
           mutable.modifiedResult = undefined;
+          clearPayloadRewrite(event);
           mutable.skip = true;
           mutable.handlerError = true;
           break outer;
@@ -458,13 +491,16 @@ export class DefaultAgentEventBus implements AgentEventBus {
             };
             mutable.modifiedArgs = undefined;
             mutable.modifiedResult = undefined;
+            clearPayloadRewrite(event);
             mutable.skip = true;
             mutable.handlerError = true;
             break outer;
           }
           // Any other throw: the handler that threw produced no verdict. Mark the event so a
           // fail-closed gate can deny, and keep going — one broken extension must not fail every
-          // call it touches.
+          // call it touches. A half-written rewrite is equally untrustworthy here (the timeout path
+          // clears it for the same reason), so drop it rather than let the caller apply it.
+          clearPayloadRewrite(event);
           (event as { handlerError?: boolean }).handlerError = true;
           continue;
         }

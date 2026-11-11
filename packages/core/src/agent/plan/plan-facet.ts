@@ -61,6 +61,10 @@ export async function savePlanToWorkspace(
   if (phase !== "ready" && phase !== "executing" && phase !== "planning" && phase !== "retro") {
     return { ok: false, error: `Cannot save plan from phase "${phase}"` };
   }
+  // `recordPlanFilePath` now publishes + persists, so the write must be verified against the session
+  // it was started in: a `/resume` during the save would otherwise stamp the departure's plan path
+  // onto the target and write it to disk.
+  const isStale = host.captureStaleness?.();
   try {
     const { path } = await savePlanFile(
       planMarkdown,
@@ -70,7 +74,10 @@ export async function savePlanToWorkspace(
       },
       host.getCoreEnv()
     );
-    host.planMode.setPlanFilePath(path);
+    if (isStale?.() === true) {
+      return { ok: false, error: "Session changed before the plan was saved" };
+    }
+    host.planMode.recordPlanFilePath(path);
     return { ok: true, path };
   } catch (error) {
     const err = toError(error);

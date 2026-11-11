@@ -59,6 +59,15 @@ export function createMcpExtension(options: CreateMcpExtensionOptions): Extensio
         disabledContent: () =>
           "MCP extension is disabled — external MCP servers (mcp__<server>_<tool>) and the /mcp status command are unavailable.",
       });
+      // Registered before the connection attempt: with no servers configured `activateMcp` returns
+      // early, and the `/mcp` command used to be registered after that return — so an enabled
+      // extension advertised a status command that did not exist (the `disabledContent` above
+      // promises it whenever the extension is on). An empty list is a valid, useful answer.
+      ctx.registerCommand({
+        name: "mcp",
+        description: "List configured MCP servers and their connection status",
+        execute: async () => formatMcpStatus(mcpManager.getServerStatuses(), mcpManager.isElicitationAvailable()),
+      });
       await activateMcp(ctx, mcpManager, configPath, servers ?? null);
     },
     deactivate() {
@@ -167,12 +176,6 @@ async function activateMcp(
         }),
     });
   }
-
-  ctx.registerCommand({
-    name: "mcp",
-    description: "List configured MCP servers and their connection status",
-    execute: async () => formatMcpStatus(mcpManager.getServerStatuses(), mcpManager.isElicitationAvailable()),
-  });
 }
 
 // ============================================================================

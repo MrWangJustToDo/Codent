@@ -186,16 +186,44 @@ export class CodentAgent {
     // there is one workspace plane. No-op when it was already bound to this runtime; refuses a
     // second (different) binding and a manager that already created agents.
     options.manager?.bindRuntime(runtime);
-    const manager = options.manager ?? (options.host ? undefined : new AgentManager(runtime));
-    const host = options.host ?? createLocalAgentSessionHost({ manager: manager! });
-    // A manager we built is ours to tear down; an injected one belongs to the injector, and
-    // disposing it here would destroy every root agent another runtime is using.
+    // A manager we build is ours to tear down if a later step here throws; an injected one belongs
+    // to the injector (disposing it here would destroy every root agent another runtime is using).
     const ownsManager = options.ownsManager ?? options.manager === undefined;
     // The RUNTIME is a different question: an injected `new AgentManager()` has no runtime, so this
     // call built one and owns its provider/env; only an injected runtime (and its plane) is borrowed.
     // Pass `ownsRuntime: false` explicitly to keep a caller-owned provider alive.
     const ownsRuntime = options.ownsRuntime ?? (options.manager === undefined || injectedRuntime === undefined);
-    return new CodentAgent(runtime, host, manager, options.models, ownsManager, ownsRuntime);
+    let manager: AgentManager | undefined;
+    try {
+      manager = options.manager ?? (options.host ? undefined : new AgentManager(runtime));
+      const host = options.host ?? createLocalAgentSessionHost({ manager: manager! });
+      return new CodentAgent(runtime, host, manager, options.models, ownsManager, ownsRuntime);
+    } catch (error) {
+      // `new AgentManager` starts the log extension and registers a PROCESS-EXIT hook; the runtime may
+      // own a provider/env. A throw after either point used to leak both — the same failure the
+      // provider path above already guards against.
+      if (manager && ownsManager) {
+        await manager.dispose().catch(() => undefined);
+      }
+      if (ownsRuntime) {
+        // Release what this call created: the provider it built and (only when the runtime owns it)
+        // the workspace env, with the same registry clear `dispose()` performs.
+        try {
+          await runtime.modelProvider?.destroy?.();
+        } catch {
+          // Best-effort: the throw below is the caller's error.
+        }
+        if (runtime.ownsEnv) {
+          try {
+            if (peekCoreEnv() === runtime.sourceEnv) clearCoreEnv();
+            await runtime.env.destroy?.();
+          } catch {
+            // Best-effort.
+          }
+        }
+      }
+      throw error;
+    }
   }
 
   /** The runtime's workspace env (fs/shell/fetch), with defaults resolved. */

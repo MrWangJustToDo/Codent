@@ -700,7 +700,8 @@ registerModelProvider(await createRemoteProvider("http://localhost:3100"));
 | `prompt:submit` | Run prepared |
 | `prompt:before` | Extension `before_agent_start` / turn-context providers collected |
 | `agent:thinking` | Model reasoning stream starts |
-| `agent:tool-start` / `agent:tool-end` / `agent:tool-error` | Tool lifecycle (extensions middleware). A start ends in **one** of `tool-end` (ran; carries `ok: true`) or `tool-error` (threw; carries `duration_ms`); a denied call never starts. A **client tool** (`ask_user`) gets a start (the middleware sees the call) but **no** `tool-end` — the host executes it, so its answer arrives as `agent:client-tool-result` (`tool_call_id` + the result object) written from `addToolResult`. Do not pair start/end 1:1 when reading a log |
+| `agent:tool-start` / `agent:tool-end` / `agent:tool-error` | Tool lifecycle (extensions middleware). A start ends in **one** of `tool-end` (ran; carries `ok: true`) or `tool-error` (threw; carries `duration_ms`). An **approval**-denied call never starts; an **extension**-denied call (`tool:before:*` → `event.skip`) DOES start and settles through `tool-end` with `denied: true` (`ok: true`, never executed) — readers must check the marker, not the event name. A **client tool** (`ask_user`) gets a start (the middleware sees the call) but **no** `tool-end` — the host executes it, so its answer arrives as `agent:client-tool-result` (`tool_call_id` + the result object) written from `addToolResult`. Do not pair start/end 1:1 when reading a log |
+| `agent:extension-state` | An extension was loaded, enabled, disabled, replaced or failed to activate. Append-only counterpart of the retained `session:extensions` snapshot (suppressed from the timeline); startup-load rows carry `bootstrap: true` and are suppressed. |
 | `tool:phase` | One model tool phase's decision set: `pending` / `executed` / `held` (plain calls TanStack parked beside an approval) / `approved` (an answered gate that has not produced a result yet) / `needsApproval` / `needsClient`, as `{id,name}` refs plus a scalar `*Count` each (the log summarizes arrays into bytes+preview, so the counts are what a report reads). Emitted once per phase (debug) by the pump, so "the call never ran" is answerable from the timeline (a held sibling has no `agent:tool-start`) |
 | `tool:settle` | The pump settled calls it could not run (truncated args, a held sibling at turn end, abort) with a synthetic cancel result. Emitted by `applyCancelledIncompleteTools` (info) with `cause` (which boundary ran the pass — not necessarily a cancel) and `count`; these calls never produce `agent:tool-end`/`tool-error` |
 | `tool:resume` | Held siblings were re-added to `resumeToolState.approvals` after an approval decision (debug). Explains why a plain call beside the gate runs instead of waiting for turn end |
@@ -1154,7 +1155,7 @@ Runtime data under the project root is grouped under a single gitignored `.agent
 
 | Path | Purpose |
 |------|---------|
-| `.agents/sessions/` | Session message log (`*.session.jsonl`, one line per message + state; timestamps live on the message) |
+| `.agents/sessions/` | Session message log (`*.session.jsonl`, one line per message + state; timestamps live on the message). A transient `<id>.session.lock` sidecar names the owning process and carries its heartbeat MTIME (TTL 120 s); it is taken by `create`, `/new` and `/resume`, handed over on a switch, released after the writer drains, and blocks a second process from appending to the same log (`SessionLockedError`). A lost lock (peer takeover) pauses writes until the next message retries it, and is reported on `session:save-error`. |
 | `.agents/logs/` | AgentLog JSONL event timeline (`agent.log`, size-rotated; written by the built-in log extension) |
 | `.agents/usage/` | Global usage history (`usage-<year>.jsonl`, per-LLM-call records) |
 | `.agents/config/models.json` | Model provider entries + `global.toolConfig` (websearch keys/provider). The TUI **and** `codent acp` merge that block UNDER their env-derived value (`BRAVE_API_KEY` / `EXA_API_KEY` / `PARALLEL_API_KEY` / `TAVILY_API_KEY` / `WEBSEARCH_PROVIDER`, via `websearchToolConfigFromEnv`). Runtime knobs (`maxIterations` / `mcpConfigPath` / `systemPrompt`) are flags/env, never this file |
@@ -1205,7 +1206,7 @@ included, ~50 ms) → `grep -r` with `--exclude-dir` from the policy. `glob` is 
 `fd` → `git ls-files --cached --others --exclude-standard` → `find`. The legacy no-`execFile` host
 path keeps the policy's directory list (no VCS rung).
 
-- Max 500 chars per matching line content
+- Max 500 chars per matching line **including** the `...[truncated]` marker (the shared `truncateText` reserves it, so the content is ≤487)
 - Max 50KB total content across all matches
 - Validate: `validate:search-ignore-policy` (real temp repo: ignored tree skipped, untracked file
   found, explicit path reopens, `glob` agrees, `--no-config` always / `--no-ignore` never by

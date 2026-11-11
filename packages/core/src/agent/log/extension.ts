@@ -180,7 +180,15 @@ export function createLogExtension(options: LogExtensionOptions): LogExtension {
   const unavailableSinks = new Set<string>();
 
   const flushSinksSync = (): void => {
-    for (const log of sinks.keys()) log.flushSync();
+    // Per-log containment: this runs in the process-exit finalizer, and one throwing sink used to
+    // abort the loop so every later log lost its final batch (often the fault lines).
+    for (const log of sinks.keys()) {
+      try {
+        log.flushSync();
+      } catch {
+        // Best-effort by contract; the sink reports its own write failures.
+      }
+    }
   };
 
   return {

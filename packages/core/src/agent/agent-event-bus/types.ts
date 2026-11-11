@@ -266,6 +266,8 @@ export interface AgentEventBus {
    * aggregate view.
    */
   retainedValue<T extends AgentEventType>(type: T, options?: { includeParents?: boolean }): AgentEvents[T] | undefined;
+  /** Whether a provider is registered for this retained event (see `retainedValue`). */
+  hasRetained<T extends AgentEventType>(type: T, options?: { includeParents?: boolean }): boolean;
 
   /** Emit an observer event. Synchronous, fire-and-forget, errors isolated. */
   emit<T extends AgentEventType>(type: T, payload: AgentEvents[T], meta?: AgentEventMetaInput): void;

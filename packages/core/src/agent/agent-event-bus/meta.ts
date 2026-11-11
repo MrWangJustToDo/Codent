@@ -65,6 +65,8 @@ export const AGENT_EVENT_META = {
   // is recorded. `agent:state` stays the retained snapshot a host reads.
   "agent:status": { mode: "emit", visibility: "observable" },
   "agent:extension-error": { mode: "emit", channel: "lifecycle", visibility: "observable" },
+  // Append-only lifecycle row; the live state rides `session:extensions` (retained snapshot).
+  "agent:extension-state": { mode: "emit", visibility: "observable" },
   "agent:event-handler-error": { mode: "emit", visibility: "observable" },
   // `extension:log` is observable by construction: internal events are withheld from wildcard
   // delivery, and the log consumer IS the wildcard subscriber (see `event-visibility.ts`).

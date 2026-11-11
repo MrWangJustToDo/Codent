@@ -206,7 +206,9 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
   "session:save-error": {
     level: "warn",
     category: "system",
-    formatMessage: (event) => `Failed to save session ${p(event).target ?? "data"}: ${p(event).error ?? "unknown"}`,
+    // `target` names what failed ("session", "agent log", …); the old wording prefixed every row with
+    // "save session", so a failed LOG write read as a failed session save.
+    formatMessage: (event) => `Failed to save ${p(event).target ?? "data"}: ${p(event).error ?? "unknown"}`,
   },
   "session:persist": {
     level: "debug",
@@ -378,6 +380,29 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
       return `Extension ${phase}failed${id}: ${d.error ?? "unknown"}`;
     },
   },
+  // Append-only counterpart of the `session:extensions` snapshot (which is suppressed).
+  "agent:extension-state": {
+    level: "info",
+    category: "system",
+    // Startup load is already in `session:bootstrap-summary`; only runtime transitions belong here.
+    suppress: (event) => p(event).bootstrap === true,
+    formatMessage: (event) => {
+      const d = p(event);
+      const id = d.extensionId || "unknown";
+      // `enabled` is `state === "active"`: a failed or empty activation must not read as "disabled".
+      if (d.state === "error") {
+        return d.reason ? `Extension unavailable: "${id}" — ${d.reason}` : `Extension unavailable: "${id}"`;
+      }
+      if (d.enabled !== true) {
+        if (d.state === "inactive" && d.reason) {
+          return `Extension enabled but inactive: "${id}" — ${d.reason}`;
+        }
+        return d.reason ? `Extension disabled: "${id}" — ${d.reason}` : `Extension disabled: "${id}"`;
+      }
+      const state = d.state ? ` (${d.state})` : "";
+      return d.reason ? `Extension enabled: "${id}"${state} — ${d.reason}` : `Extension enabled: "${id}"${state}`;
+    },
+  },
   "agent:event-handler-error": {
     level: "warn",
     category: "hooks",
@@ -493,6 +518,8 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
       const name = p(event).tool_name ?? "unknown";
       const duration = p(event).duration_ms;
       const suffix = duration != null ? ` (${duration}ms)` : "";
+      // A refusal returns normally in TanStack, so `ok` cannot separate it from a success.
+      if (p(event).denied === true) return `Tool denied: ${name}${suffix}`;
       return p(event).cancelled === true ? `Tool cancelled: ${name}${suffix}` : `Tool end: ${name}${suffix}`;
     },
   },

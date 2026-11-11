@@ -270,13 +270,18 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
       // Rotate when the active file already meets maxBytes, or when the pending batch would push
       // it past the limit — so a large batch never leaves the active file over budget. Size comes
       // from stat (restart-safe).
+      //
+      // Never after `detach()` started: the shared-sink registry drops its entry synchronously and
+      // `detach` is async, so a new binding can create a second sink for the same file while this
+      // one is still flushing. Moving the segment there would split the window and let two sinks
+      // fight over `archiveSegment`. Appending the final batch (possibly over budget) cannot.
       let currentBytes = 0;
       try {
         currentBytes = (await envFs.stat(filePath)).size;
       } catch {
         currentBytes = 0;
       }
-      if (currentBytes > 0 && currentBytes + contentBytes >= maxBytes) {
+      if (!disposed && currentBytes > 0 && currentBytes + contentBytes >= maxBytes) {
         await rotate();
       }
       await appendFile(filePath, content);

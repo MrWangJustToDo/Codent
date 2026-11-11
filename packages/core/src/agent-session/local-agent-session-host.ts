@@ -192,10 +192,26 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
       const restored = targetSessionId ? await managed.restoreSession(targetSessionId) : undefined;
       const initial = restored?.uiMessages ?? [];
 
+      // `AgentManager.dispose()` waits for in-flight BUILDS, not for the rest of this create (the
+      // restore, `initChat`, bootstrap events). If it ran in that window the agent is already torn
+      // down, and installing a chat controller now would leave a live pump on a dead transcript that
+      // no later teardown step settles. Fail into the catch, which destroys it idempotently.
+      if (managed.isDestroyed?.() === true) throw new Error("Agent was destroyed while its session was being created");
+
       // Fix the session id before the first persist (in-memory only; no disk
       // write until the first save()). The JSONL log sink is attached by the
       // manager before bootstrap events fire, so the timeline includes them.
       managed.ensureSessionData();
+
+      // Cross-process exclusivity for a DEFAULT create. `/new` and `/resume` hand the lock over
+      // after their commit, but a plain startup takes neither path: the first session it writes
+      // was left unlocked, so another process could `/resume` it and append to the same JSONL
+      // (which `load()` then folds into one merged transcript). Acquired before the first persist.
+      const ensured = managed.getSessionData();
+      // Duck-typed host doubles may not implement the lock; the feature degrades to in-process
+      // ownership there (the same rule `SessionLockController` applies when the fs lacks the
+      // required capabilities).
+      if (ensured) await managed.lockSession?.(ensured.id);
 
       // Chat controller stays behind Session; adapters must not call ManagedAgent.initChat.
       managed.initChat(this.manager as AgentManager, initial);
@@ -213,6 +229,10 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
 
       // A create is also a natural boundary: the previous conversation's children are gone.
       this.pruneDanglingSessions();
+      // Final synchronous re-check: `dispose()` may have run during the awaited bootstrap events
+      // above (it only waits for in-flight BUILDS, and this create already returned from that).
+      // Returning a session handle for a dead agent is worse than failing this create.
+      if (managed.isDestroyed?.() === true) throw new Error("Agent was destroyed while its session was being created");
       const session = createLocalAgentSession({
         managed,
         manager: this.manager,

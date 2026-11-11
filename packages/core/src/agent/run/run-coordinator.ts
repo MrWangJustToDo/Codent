@@ -254,6 +254,8 @@ export class RunCoordinator {
   private streamStartedAt = 0;
   private lastStreamDurationMs = 0;
   private currentRunId: string | null = null;
+  /** See {@link markNextPreparePromptRowsEmitted}. */
+  private preparePromptRowsEmitted = false;
 
   markNextPrepareAsContinuation(): void {
     this.prepareAsContinuation = true;
@@ -284,6 +286,29 @@ export class RunCoordinator {
   consumePrepareAsNewTurn(): boolean {
     const value = this.prepareAsNewTurn;
     this.prepareAsNewTurn = false;
+    return value;
+  }
+
+  /**
+   * This pump already released queued input and recorded its `prompt:submit` rows.
+   *
+   * The chain-pump's first phase drains the queue itself (so the model's first call sees the user's
+   * message) and writes one row per released message. `prepareForRun` would then write a "user"
+   * row for the same message, because the drained message IS the last genuine user text — one
+   * message, two lifecycle rows. The flag suppresses only that second row; extension hooks still run.
+   */
+  markNextPreparePromptRowsEmitted(): void {
+    this.preparePromptRowsEmitted = true;
+  }
+
+  clearPreparePromptRowsEmitted(): void {
+    this.preparePromptRowsEmitted = false;
+  }
+
+  /** Consume and clear {@link markNextPreparePromptRowsEmitted}. */
+  consumePreparePromptRowsEmitted(): boolean {
+    const value = this.preparePromptRowsEmitted;
+    this.preparePromptRowsEmitted = false;
     return value;
   }
 

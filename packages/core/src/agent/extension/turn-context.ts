@@ -35,6 +35,18 @@ import type {
 const SECTION_NAME_RE = /^[A-Za-z][A-Za-z0-9._-]*$/;
 const EXTENSION_KIND_PREFIX = "ext:";
 
+/**
+ * The `<ctx kind>` an extension section is admitted under.
+ *
+ * Exported because the controller that STRIPS a disabled extension's sections from a mid-turn
+ * snapshot has to recompute the same id. It used to spell `ext:${extensionId}` itself, so changing
+ * the prefix or separator would silently stop matching — the snapshot kept telling the model to
+ * call tools that had just disappeared.
+ */
+export function extensionSectionKind(extensionId: string, name?: string): string {
+  return name ? `${EXTENSION_KIND_PREFIX}${extensionId}:${name}` : `${EXTENSION_KIND_PREFIX}${extensionId}`;
+}
+
 export interface ExtensionTurnContextDeps {
   /** Live session id, read per turn (a resumed session must not carry the previous one). */
   getSessionId: () => string | null;
@@ -328,7 +340,7 @@ export class ExtensionTurnContext {
   }
 
   private sectionKind(extensionId: string, name?: string): string {
-    return name ? `${EXTENSION_KIND_PREFIX}${extensionId}:${name}` : `${EXTENSION_KIND_PREFIX}${extensionId}`;
+    return extensionSectionKind(extensionId, name);
   }
 
   private callbackTimeoutMs(): number {

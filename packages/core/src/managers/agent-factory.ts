@@ -218,10 +218,11 @@ export async function buildManagedAgent({
     // resources before the manager registers the agent. If a later step fails,
     // no registry/lifecycle owner exists to clean them up.
     await managed.disposeBuiltResources();
-    // A duplicate id means `busScope.of(id)` handed this build the LIVE agent's scope. Releasing by
-    // id would cut off that healthy agent's projection, so only release what this build created.
+    // A duplicate id means `busScope.of(id)` handed this build the LIVE agent's scope. The
+    // construction/log binding, however, belongs to THIS build — the healthy agent released its own
+    // at registration — so it is released identity-checked; only the scope needs the guard.
+    manager.releaseConstructionLog(managed.id, managed.log);
     if (!manager.getAgent?.(managed.id)) {
-      manager.releaseConstructionLog(managed.id);
       manager.releaseAgentScope(managed.id);
     }
     throw error;

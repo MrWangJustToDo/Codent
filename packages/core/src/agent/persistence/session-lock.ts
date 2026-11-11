@@ -185,6 +185,9 @@ export class SessionLock {
   ): Promise<{ ok: true; ticket: string } | { ok: false; held: SessionLockRecord }> {
     const canonical = sessionLockPath(sessionId);
     const dir = this.env.path.dirname(canonical);
+    // A fresh session's directory may not exist yet; the ticket write below would fail and silently
+    // skip the election. `write()` ensures this too, but the order is inspect → CONTEST → write.
+    await this.ensureDir(dir);
     const prefix = `${this.env.path.basename(canonical)}.`;
     const queuedAt = Date.now();
     const ticket = `${canonical}.${queuedAt.toString(36)}-${(this.ticketSeq += 1).toString(36)}`;
@@ -314,7 +317,21 @@ export class SessionLock {
   }
 
   private async write(sessionId: string, since: number): Promise<void> {
-    await this.env.fs.writeFile(sessionLockPath(sessionId), JSON.stringify(this.record(since)));
+    const path = sessionLockPath(sessionId);
+    // A FRESH session has no directory yet — the store creates it on the first save, and a create
+    // now takes the lock BEFORE that write. Without this, startup failed with ENOENT on the lock.
+    await this.ensureDir(this.env.path.dirname(path));
+    await this.env.fs.writeFile(path, JSON.stringify(this.record(since)));
+  }
+
+  /** Best-effort `mkdir` for the lock's directory (a read-only host degrades at the write). */
+  private async ensureDir(dir: string): Promise<void> {
+    try {
+      if (this.env.fs.mkdir) await this.env.fs.mkdir(dir);
+      else this.env.fs.mkdirSync?.(dir);
+    } catch {
+      // Best-effort: the caller's write reports the real failure.
+    }
   }
 
   /**
@@ -341,9 +358,17 @@ export class SessionLock {
     this.timer = undefined;
   }
 
-  private async beat(): Promise<void> {
+  /**
+   * Re-verify ownership once and refresh the heartbeat.
+   *
+   * Public so a validation can drive the takeover path without waiting for the 30 s tick; the timer
+   * calls exactly this method. Returns `"lost"` when a peer took the lock over (the heartbeat stops
+   * and `onLost` fires once).
+   */
+  async refreshOwnership(): Promise<"held" | "lost"> {
     const sessionId = this.current;
-    if (sessionId === undefined || this.lost) return;
+    if (this.lost) return "lost";
+    if (sessionId === undefined) return "held";
     try {
       // Re-verify ownership before refreshing: another process may have taken over after a stale
       // window, and rewriting the file would silently steal the session back mid-run.
@@ -353,12 +378,18 @@ export class SessionLock {
         this.current = undefined;
         this.stopHeartbeat();
         this.onLost?.(sessionId);
-        return;
+        return "lost";
       }
       await this.write(sessionId, held?.since ?? Date.now());
+      return "held";
     } catch {
       // A failed beat is not a lost lock: the next tick retries, and the TTL is generous.
+      return "held";
     }
+  }
+
+  private async beat(): Promise<void> {
+    await this.refreshOwnership();
   }
 }
 
@@ -373,18 +404,87 @@ export class SessionLock {
 export class SessionLockController {
   private lock: SessionLock | null = null;
   private ownerId: string | undefined;
+  /** Set when a heartbeat found the lock taken over by another process. */
+  private lostSessionId: string | undefined;
+  private lostHandler: ((sessionId: string) => void) | undefined;
 
   setOwner(ownerId: string): void {
-    this.ownerId = ownerId;
+    // The previous lock's heartbeat interval would otherwise outlive every reference to it.
+    this.lock?.dispose();
     this.lock = null;
+    this.ownerId = ownerId;
+    this.lostSessionId = undefined;
+  }
+
+  /**
+   * Register the one handler that learns about a lost lock.
+   *
+   * A lock can be taken over after a stale window (a long event-loop block, a paused debugger), and
+   * the heartbeat is the only place that can notice. Reporting it is not optional bookkeeping:
+   * without it this process keeps appending to a log another process now owns, which is the exact
+   * merged-transcript failure the lock exists to prevent.
+   */
+  setLostHandler(handler: ((sessionId: string) => void) | undefined): void {
+    this.lostHandler = handler;
+  }
+
+  /** Whether this runtime lost the cross-process lock for `sessionId` (so writes must stop). */
+  hasLost(sessionId: string | undefined): boolean {
+    return sessionId !== undefined && this.lostSessionId === sessionId;
   }
 
   /** Take the lock, or no-op when the host cannot support one. Throws `SessionLockedError`. */
   async lockSession(sessionId: string, env: ResolvedCoreEnv | null | undefined): Promise<void> {
     const lock = this.current(env);
     if (!lock) return;
-    const acquired = await lock.acquire(sessionId);
+    let acquired: SessionLockAcquisition;
+    try {
+      acquired = await lock.acquire(sessionId);
+    } catch {
+      // The sidecar cannot be written (read-only mount, full disk, an embedded host whose fs cannot
+      // persist it). The lock is advisory: degrading to the in-process claim is the same rule the
+      // rest of `SessionLock` follows (missing mtime, failed ticket). Blocking session creation here
+      // turned a save-time warning into "the app does not start".
+      return;
+    }
     if (!acquired.ok) throw new SessionLockedError(sessionId, acquired.held);
+    // Re-acquiring is how a lost holder legitimately recovers (the other process closed, the TTL
+    // expired): stop refusing writes for that id.
+    if (this.lostSessionId === sessionId) this.lostSessionId = undefined;
+  }
+
+  /**
+   * Drive one ownership check (the heartbeat's own step).
+   *
+   * Public for validation: the timer ticks every 30 s, so the takeover path is otherwise untestable.
+   */
+  async refreshOwnership(env: ResolvedCoreEnv | null | undefined): Promise<"held" | "lost"> {
+    const lock = this.current(env);
+    if (!lock) return "held";
+    return lock.refreshOwnership();
+  }
+
+  /**
+   * Try to take the lock back after a heartbeat found it taken over.
+   *
+   * Without this, "writes are paused" was permanent until the process restarted: the only other
+   * acquire paths are `/new`, `/resume` and create, and a user whose session is already open has no
+   * reason to run one. Called before refusing a write, so a peer that has exited heals on the next
+   * message instead of losing the rest of the conversation.
+   */
+  async reacquireLost(env: ResolvedCoreEnv | null | undefined): Promise<boolean> {
+    const sessionId = this.lostSessionId;
+    if (sessionId === undefined) return true;
+    const lock = this.current(env);
+    if (!lock) return true;
+    try {
+      const acquired = await lock.acquire(sessionId);
+      if (!acquired.ok) return false;
+      this.lostSessionId = undefined;
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -421,8 +521,14 @@ export class SessionLockController {
 
   private current(env: ResolvedCoreEnv | null | undefined): SessionLock | null {
     if (!this.ownerId || !env?.path) return null;
+    // The lock derives its sidecar path from the workspace path utilities. A duck-typed host double
+    // may expose only `rootPath`; degrade to the in-process claim rather than throw on `basename`.
+    if (!env.path.dirname || !env.path.basename || !env.path.join) return null;
     if (!env.fs?.writeFile || !env.fs.readFile || !env.fs.stat || !env.fs.remove || !env.fs.readdir) return null;
-    this.lock ??= new SessionLock(env, this.ownerId);
+    this.lock ??= new SessionLock(env, this.ownerId, (sessionId) => {
+      this.lostSessionId = sessionId;
+      this.lostHandler?.(sessionId);
+    });
     return this.lock;
   }
 }

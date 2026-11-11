@@ -69,6 +69,7 @@ export { subagentResultToTaskOutput } from "../agent/subagent/run-subagent.js";
 // through their real factories (their `toModelOutput` must tell the model, not only the UI).
 export {
   cancelInterruptedBackgroundCommands,
+  runningBackgroundCommandLogPaths,
   createRunCommandTool,
   buildTimedOutCommandResult,
   commandTimeoutNotice,
@@ -382,7 +383,7 @@ export {
   resetToolOutputSweepForTesting,
   sweepStaleToolOutput,
 } from "../agent/tools/shared/cache/tool-output-cache.js";
-export { PlanModeController, PLAN_TODO_TITLE } from "../agent/plan/plan-mode-controller.js";
+export { PlanModeController, PLAN_TODO_TITLE, isActivePlanPhase } from "../agent/plan/plan-mode-controller.js";
 export { cleanStepText, extractDoneSteps, extractPlan } from "../agent/plan/extract-plan.js";
 export {
   getPlanModeToolExcludeSet,

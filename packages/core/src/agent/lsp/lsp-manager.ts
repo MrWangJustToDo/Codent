@@ -724,6 +724,28 @@ export class LspManager {
     // later `shutdownAll` owns, so the child outlived the session.
   }
 
+  /**
+   * Force-kill every live language server SYNCHRONOUSLY.
+   *
+   * `shutdownAll` is the graceful path (it sends LSP `shutdown`/`exit` and awaits). A host that exits
+   * without settling the async teardown would orphan every server, which is the exact failure the
+   * MCP half of the teardown already guards against; `LspConnection.kill()` is synchronous.
+   */
+  forceKillAll(): void {
+    this.shuttingDown = true;
+    for (const timer of this.restartTimers.values()) clearTimeout(timer);
+    this.restartTimers.clear();
+    const connections = new Set([...this.clients.values()].map((client) => client.connection));
+    for (const connection of connections) {
+      try {
+        connection.kill();
+      } catch {
+        // Best-effort: one dead transport must not keep the rest alive.
+      }
+    }
+    this.clients.clear();
+  }
+
   /** Restart a specific language server. */
   async restartServer(languageId: string): Promise<void> {
     // "Restart this language's server" — which, when the id shares a process, means restarting the

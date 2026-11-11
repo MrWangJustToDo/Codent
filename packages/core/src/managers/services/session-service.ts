@@ -111,6 +111,26 @@ export class SessionService {
     this.sessionLock.setOwner(ownerId);
   }
 
+  /**
+   * Register the handler that reports a lock taken over by another process.
+   *
+   * The controller cannot emit telemetry itself (it has no bus); the agent wires this to
+   * `session:save-error` / `session:diagnostic` so the takeover is visible instead of silent.
+   */
+  setLockLostHandler(handler: ((sessionId: string) => void) | undefined): void {
+    this.sessionLock.setLostHandler(handler);
+  }
+
+  /**
+   * Try to take back a lock another process took over.
+   *
+   * Called before refusing a write: a peer that has closed (or whose TTL expired) is recoverable on
+   * the next message, instead of leaving the session read-only until the process restarts.
+   */
+  async reacquireLostLock(): Promise<boolean> {
+    return this.sessionLock.reacquireLost(this.store?.getEnv());
+  }
+
   setStore(store: SessionStore, config: { modelStyle: string; model: string }): void {
     this.store = store;
     this.config = config;
@@ -146,16 +166,19 @@ export class SessionService {
     // submitted after this point, but writes already admitted must still run to completion.
     const admitted = this.persistQueue;
     this.closed = true;
-    await admitted;
-    // A title save is a direct `saveToStore` call, not part of `persistQueue`; wait for those
-    // too. Loop because a queued save can start another one while we await.
-    while (this.pendingSaves.size > 0) {
-      await Promise.allSettled([...this.pendingSaves]);
+    try {
+      await admitted;
+      // A title save is a direct `saveToStore` call, not part of `persistQueue`; wait for those
+      // too. Loop because a queued save can start another one while we await.
+      while (this.pendingSaves.size > 0) {
+        await Promise.allSettled([...this.pendingSaves]);
+      }
+    } finally {
+      // Hand the disk session back only AFTER the writer has drained. Releasing earlier let another
+      // process acquire the id and append while this one still had queued writes — the exact
+      // cross-process merge the lock exists to prevent.
+      await this.sessionLock.releaseAll();
     }
-    // Hand the disk session back only AFTER the writer has drained. Releasing earlier let another
-    // process acquire the id and append while this one still had queued writes — the exact
-    // cross-process merge the lock exists to prevent. `finally` so a failed save cannot strand it.
-    await this.sessionLock.releaseAll();
   }
 
   /** Whether {@link close} has refused further writes. */
@@ -359,6 +382,9 @@ export class SessionService {
     // Same rule for a restore stand-in: it is never a save target (see setSessionDataPlaceholder).
     if (this.restorePlaceholder && data === this.restorePlaceholder) return false;
     if (store.isDeleted?.(data.id) === true) return false;
+    // The direct writer (async title save) is not part of `persistQueue`, so it needs the same
+    // lost-lock guard. It does not re-acquire: the queued path owns that recovery.
+    if (this.sessionLock.hasLost(data.id)) return false;
     // Track the direct write too: `generateSessionTitle` calls this outside `persistQueue`, and
     // `close()` must be able to wait for it before the log is deleted.
     const run = (async () => {
@@ -402,6 +428,10 @@ export class SessionService {
     options: { coalesceUiMessages?: boolean } = {}
   ): Promise<boolean> {
     if (this.closed) return false;
+    // A lock another process took over means this writer no longer owns the log. Try to take it back
+    // first (the peer may have exited); appending behind a live peer is the merged-transcript failure
+    // the lock exists to prevent, so refuse if it is still held.
+    if (this.sessionLock.hasLost(this.data?.id) && !(await this.reacquireLostLock())) return false;
     // Refuse at DISPATCH, not at execution: the writes that ride a restore are admitted here, and
     // the queue would run them after adoption (when they look harmless). A placeholder means the
     // target's transcript is not loaded yet, so nothing this session writes can be its truth.

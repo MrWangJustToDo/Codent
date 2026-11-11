@@ -1480,7 +1480,11 @@ export class ExtensionRunner {
     for (const [name, body] of sectionNotices) {
       this.turnContextSections.setSectionNotice(instance.api.id, name, body);
     }
-    instance.disabledSections = [...(disabledSections?.keys() ?? [])];
+    // Only replace the list when this disable actually captured sections. A second disable whose
+    // provider is already gone (an `error` instance, or a residual artifact) would otherwise reset
+    // it to `[]`, and the next enable could no longer retract the per-section notices already
+    // written into the model's history.
+    if (disabledSections) instance.disabledSections = [...disabledSections.keys()];
     // A disabled instance is not a broken one: keeping the previous activation's error made the
     // management panel read "inactive + failed to activate (…)" forever, as if the state were
     // current. A teardown failure is reported through the returned message and the bus event.

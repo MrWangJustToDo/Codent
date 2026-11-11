@@ -122,6 +122,30 @@ export type AgentEventPayloads = {
     error?: string;
   };
   /**
+   * An extension was loaded, enabled, disabled or replaced.
+   *
+   * The state itself is published on the `session:extensions` snapshot (retained), but that channel
+   * is a projection of "what exists now" and is deliberately suppressed in the timeline. Without an
+   * append-only row a session could not answer "why did `lsp_diagnostics` disappear at 14:32".
+   */
+  "agent:extension-state": {
+    extensionId: string;
+    /** Whether the extension is live after the change. */
+    enabled: boolean;
+    /** `active` | `inactive` | `error` — why a loaded extension may still do nothing. */
+    state?: string;
+    /** `inactiveReason` when the activation produced no capability. */
+    reason?: string;
+    /**
+     * Emitted while the agent is still bootstrapping (not yet registered).
+     *
+     * The startup load of every built-in would otherwise add one info row per session; the
+     * `session:bootstrap-summary` already reports that list, so the policy suppresses these and keeps
+     * the append-only row for RUNTIME changes (enable / disable / replace).
+     */
+    bootstrap?: boolean;
+  };
+  /**
    * An extension's own log output (`ctx.logger`). Observable on purpose: the log consumer is the
    * wildcard subscriber, and internal events are withheld from it — an internal `extension:log`
    * would never be recorded (the same trap `validate-extension-event-observation` §7b documents).

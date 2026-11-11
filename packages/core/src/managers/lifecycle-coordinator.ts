@@ -17,7 +17,7 @@ import { clearTaskRuns } from "../agent/subagent/subagent-runs.js";
 import { SUBAGENT_ABORT_REASONS } from "../agent/subagent/subagent-stop-reason.js";
 import { errorMessage } from "../utils/errors.js";
 
-import { forceKillMcpChildren, releaseAgentResources } from "./teardown-resources.js";
+import { forceKillChildProcesses, releaseAgentResources } from "./teardown-resources.js";
 
 import type { AgentRegistry } from "./agent-registry.js";
 import type { AgentLog } from "../agent/agent-log/agent-log.js";
@@ -78,13 +78,13 @@ export class LifecycleCoordinator {
     // (transcript, runner, tool registry, log sink) until the next connect, because nothing ever
     // passed `undefined` to `setUIChannel`.
     attempt(() => managedAgent.setUIChannel(undefined));
-    // The MCP children are killed SYNCHRONOUSLY here — a host that exits without settling the async
-    // teardown must not orphan them (`validate:lifecycle-coordinator` asserts the kill is already
-    // recorded when `destroy` returns). The rest of the resource list (memory index debounce, todo
-    // auto-clear) is released in the async teardown, AFTER the extensions: `session:shutdown` and
-    // every `deactivate` is where an extension lands final work, and disposing those managers first
-    // left every hook reading a dead manager.
-    attempt(() => forceKillMcpChildren(managedAgent));
+    // The MCP children and LSP servers are killed SYNCHRONOUSLY here — a host that exits without
+    // settling the async teardown must not orphan them (`validate:lifecycle-coordinator` asserts the
+    // kill is already recorded when `destroy` returns). The rest of the resource list (memory index
+    // debounce, todo auto-clear) is released in the async teardown, AFTER the extensions:
+    // `session:shutdown` and every `deactivate` is where an extension lands final work, and disposing
+    // those managers first left every hook reading a dead manager.
+    attempt(() => forceKillChildProcesses(managedAgent));
 
     // Before the abort: the compaction `finally` and any queued pump unwind asynchronously and must
     // see "destroyed", not "stopped", or they resume a run on an agent that is being removed.
@@ -241,12 +241,9 @@ export class LifecycleCoordinator {
         this.deps.releaseLog?.(id);
         // Idempotent backstop: the synchronous kill at the top of `destroy` already covered a host
         // that exits before teardowns settle. This second pass covers a child registered by a late
-        // async producer during the teardown window, and is a no-op when the maps are empty.
-        try {
-          managedAgent.getMcpManager()?.forceKill();
-        } catch {
-          // Best-effort: the process may already be going away.
-        }
+        // async producer during the teardown window (an LSP restart timer, a FileSync poll), and is a
+        // no-op when the maps are empty. Same list as the first pass — MCP AND LSP.
+        forceKillChildProcesses(managedAgent);
       }
     })();
     this.trackTeardown(teardown);

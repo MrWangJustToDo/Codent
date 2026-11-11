@@ -33,6 +33,13 @@ export interface RunLifecycleHost {
   consumePrepareAsContinuation: () => boolean;
   clearPrepareAsContinuation: () => void;
   consumePrepareAsNewTurn: () => boolean;
+  /**
+   * This pump already recorded `prompt:submit` for the queued input it released itself, so
+   * `prepareForRun` must not write a second row for the same message. Optional: a host that drains
+   * no queue of its own never sets it.
+   */
+  consumePreparePromptRowsEmitted?: () => boolean;
+  clearPreparePromptRowsEmitted?: () => void;
   takePendingWakeCause: () => BackgroundWakeCause | undefined;
   beginTurnFinalize: () => boolean;
   getStreamStartedAt: () => number;
