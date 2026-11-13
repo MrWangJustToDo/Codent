@@ -89,6 +89,15 @@ export class RunCoordinator {
   }
 
   addPendingAbortController(abortController: AbortController): void {
+    // A tool that registers AFTER the run was cancelled must not run to completion: `abort()` already
+    // drained this list, so nothing would ever abort it. The test is the CURRENT run's signal, not
+    // `lastAbortReason`: registration happens inside a live run (`prepareForRun` always mints the
+    // controller first), and a fresh controller is not aborted, so an earlier run's reason cannot
+    // leak here.
+    if (this.currentAbortController?.signal.aborted) {
+      abortController.abort(this.currentAbortController.signal.reason);
+      return;
+    }
     this.pendingAbortControllers.push(abortController);
   }
 

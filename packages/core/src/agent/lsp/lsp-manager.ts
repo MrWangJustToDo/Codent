@@ -685,6 +685,10 @@ export class LspManager {
         this.handleUnexpectedExit(languageId, null);
       });
     }, backoff);
+    // A backoff timer must never be the reason a host waits to exit: the largest step is 30s and a
+    // teardown that already ran (`shuttingDown`) is only cancelled by `shutdownAll`/`forceKillAll`,
+    // so an unreferenced timer keeps the same "quit means quit" contract as every other timer here.
+    (timer as { unref?: () => void }).unref?.();
     if (key !== null) this.restartTimers.set(key, timer);
   }
 

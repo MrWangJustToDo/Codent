@@ -566,14 +566,27 @@ export class SessionStore {
         if (last) lines.push(buildLine(last, stateFields, snapshot));
       }
       if (lines.length > 0) {
-        const appended = await appendLogLines(this.fs, this.getLogPath(session.id), lines, {
-          tailTerminated: this.tailTerminated.get(session.id) ?? true,
-        });
-        if (!appended) {
-          // Env fs has no `appendFile` (optional primitive). Degrade to a full
-          // rewrite so this save is not silently lost — otherwise the delta
-          // baseline below would dedupe every later save into nothing.
-          await this.rewriteLog(messages, stateFields, snapshot);
+        try {
+          const appended = await appendLogLines(this.fs, this.getLogPath(session.id), lines, {
+            tailTerminated: this.tailTerminated.get(session.id) ?? true,
+          });
+          if (!appended) {
+            // Env fs has no `appendFile` (optional primitive). Degrade to a full
+            // rewrite so this save is not silently lost — otherwise the delta
+            // baseline below would dedupe every later save into nothing.
+            await this.rewriteLog(messages, stateFields, snapshot);
+          }
+        } catch (error) {
+          // A failed append may still have written PART of the record (ENOSPC, a dropped remote
+          // connection). Leave the delta baseline untouched so the rows are retried, and mark the
+          // tail unknown so the retry prefixes a newline: appending onto the fragment with
+          // `separator: ""` glued the next record to it, which parsed as one corrupt line and lost
+          // the message permanently — while the baseline below had already recorded it as saved.
+          // A retry after a PARTIAL write can repeat the rows that did land; the reader folds them
+          // by message id in file order (last write wins), so the content is unchanged and only the
+          // log carries duplicate lines.
+          this.tailTerminated.set(session.id, false);
+          throw error;
         }
       }
     }

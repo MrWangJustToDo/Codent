@@ -15,6 +15,26 @@ import type { FileSync } from "../file-sync.js";
 import type { LspManager } from "../lsp-manager.js";
 import type { CompletionItem, CompletionList, CompletionItemKind, MarkupContent } from "vscode-languageserver-protocol";
 
+/** How long one `completionItem/resolve` may take before the item is shown unresolved. */
+const RESOLVE_TIMEOUT_MS = 2000;
+
+/**
+ * Bound one `completionItem/resolve` by {@link RESOLVE_TIMEOUT_MS}, releasing the timer afterwards.
+ *
+ * A bare `Promise.race` against a rejecting timeout leaves the timer armed when the request wins,
+ * and a completion request resolves up to `limit` items at once on every keystroke.
+ */
+function raceCompletionResolve(request: Promise<CompletionItem>): Promise<CompletionItem> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<CompletionItem>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("resolve timeout")), RESOLVE_TIMEOUT_MS);
+    (timer as { unref?: () => void }).unref?.();
+  });
+  return Promise.race([request, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+}
+
 const KIND_LABELS: Record<number, string> = {
   1: "text",
   2: "method",
@@ -236,14 +256,14 @@ export function createCompletionsTool(deps: CompletionsToolDeps) {
         if (resolveSupported) {
           const results = await Promise.allSettled(
             topItems.map((item) =>
-              Promise.race([
+              // The timeout timer is cleared when the request wins: a race that only rejects on
+              // timeout left one live 2s handle per resolved item, on a path every completion
+              // keystroke takes. `unref` keeps a pending resolve from holding the process open.
+              raceCompletionResolve(
                 client.connection.sendRequest<CompletionItem>("completionItem/resolve", item, {
                   signal: options?.abortSignal,
-                }),
-                new Promise<CompletionItem>((_, reject) =>
-                  setTimeout(() => reject(new Error("resolve timeout")), 2000)
-                ),
-              ])
+                })
+              )
             )
           );
           resolvedItems = results.map((result, i) => (result.status === "fulfilled" ? result.value : topItems[i]));
