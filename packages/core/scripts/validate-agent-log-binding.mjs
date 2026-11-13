@@ -21,6 +21,9 @@ function makeLog({ hasSink = true, pending = 0, pendingDropped = 0 } = {}) {
       return () => calls.push({ op: "detach" });
     },
     flushSync: () => calls.push({ op: "flush" }),
+    // The seam is closed AFTER the final flush: from then on it drops (and reports) instead of
+    // buffering for a drain that will never come.
+    close: () => calls.push({ op: "close" }),
     hasSink: () => hasSink,
     getPendingEntryCount: () => pending,
     getPendingDroppedCount: () => pendingDropped,
@@ -89,14 +92,14 @@ function makeBinding({ log, attachViaManager }) {
   await binding.flushOnDestroy();
   assert.deepEqual(
     log.calls.map((call) => call.op),
-    ["manager-attach", "flush", "detach"],
-    "destroy flushes before releasing"
+    ["manager-attach", "flush", "close", "detach"],
+    "destroy flushes, closes the seam, then releases"
   );
 
   await binding.flushOnDestroy();
   assert.deepEqual(
     log.calls.map((call) => call.op),
-    ["manager-attach", "flush", "detach", "flush"],
+    ["manager-attach", "flush", "close", "detach", "flush", "close"],
     "detach is idempotent"
   );
 }

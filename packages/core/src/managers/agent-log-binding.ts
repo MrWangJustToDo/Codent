@@ -80,6 +80,9 @@ export class AgentLogBinding {
     } catch {
       // A failed final write must not block releasing the sink.
     }
+    // Close BEFORE detaching: from here on the seam has no sink, and anything emitted in the rest of
+    // teardown would otherwise be buffered for a drain that never comes.
+    log.close();
     this.detach();
     unregisterActiveAgentLog(log);
   }

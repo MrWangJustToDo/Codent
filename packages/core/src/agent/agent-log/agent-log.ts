@@ -91,6 +91,15 @@ export class AgentLog {
   private pendingEntries: LogEntry[] = [];
   /** Entries dropped by the pending cap. Reported once when the buffer is drained. */
   private pendingDropped = 0;
+  /**
+   * Whether a sink was ever attached. A runtime torn down before bootstrap finished has its buffer
+   * reported by {@link AgentLogBinding}, which knows the "no sink was bound" context.
+   */
+  private everAttached = false;
+  /** Set once teardown landed its final batch: later entries are dropped, not buffered. */
+  private closed = false;
+  /** Entries emitted after {@link close}; the first one is reported, so the loss stays visible. */
+  private closedDropped = 0;
   /** One line for the first entry whose construction threw (a broken `data` getter, etc.). */
   private entryBuildFailureReported = false;
   /** One line for the first sink whose `handleEntry` threw (a host/diagnostic sink bug). */
@@ -267,6 +276,14 @@ export class AgentLog {
         // entry" and, because that reporter fires once per process, every later entry vanished
         // silently. The pending-buffer DRAIN goes through the same helper.
         this.safeHandle(this.sinkEntry, entry);
+      } else if (this.closed) {
+        // Teardown is over and the sink is gone: there is nowhere to write and nobody left to drain
+        // a buffer. Count it and say so once — silence here is how a broken shutdown loses its own
+        // explanation.
+        this.closedDropped += 1;
+        if (this.closedDropped === 1) {
+          console.warn("[agent] log is closed after teardown; entries emitted from here on are dropped");
+        }
       } else {
         this.pendingEntries.push(entry);
         if (this.pendingEntries.length > MAX_PENDING_LOG_ENTRIES) {
@@ -350,6 +367,7 @@ export class AgentLog {
    * seam's flush paths. Replaces any previous sink.
    */
   attachSink(sink: LogSink): void {
+    this.everAttached = true;
     // A replacement must land the previous sink's pending batch first: the seam re-points, it
     // cannot release the old sink, and a host that used `attachFileSink` (the embedded fallback)
     // before the manager bound its own would otherwise lose every line written in between.
@@ -403,6 +421,32 @@ export class AgentLog {
         if (this.shouldLog(entry.level)) this.safeHandle(sink.handleEntry, entry);
       }
     }
+  }
+
+  /**
+   * Teardown is done: the final batch is on disk, so nothing may buffer entries again.
+   *
+   * `flushOnDestroy` flushes, closes the seam and then releases the sink, and `log()` reads "no sink"
+   * as "bootstrap — hold this until one attaches". Everything emitted between that release and the
+   * end of teardown (a failing session save, an extension error) therefore landed in a buffer nobody
+   * would ever drain, and those are exactly the entries that explain a broken shutdown. From here on
+   * they are dropped and counted instead (see the `closed` branch in `log()`), so the loss is a
+   * recorded fact rather than a silent gap.
+   *
+   * A runtime that never bound a sink is skipped here — its buffer is the bootstrap diagnostics, and
+   * `AgentLogBinding` reports that case with the context this method cannot know.
+   */
+  close(): void {
+    this.closed = true;
+    const buffered = this.pendingEntries.length;
+    const dropped = this.pendingDropped;
+    this.pendingEntries = [];
+    this.pendingDropped = 0;
+    if (!this.everAttached || (buffered === 0 && dropped === 0)) return;
+    console.warn(
+      `[agent] log closed after teardown; ${buffered} late entr${buffered === 1 ? "y" : "ies"} could not be written` +
+        (dropped > 0 ? ` (+${dropped} already overflowed)` : "")
+    );
   }
 
   /**
