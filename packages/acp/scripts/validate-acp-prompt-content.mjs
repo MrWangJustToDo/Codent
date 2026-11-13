@@ -18,7 +18,7 @@
 
 import { methods } from "@agentclientprotocol/sdk";
 
-import { createAcpAgent } from "../dist/index.mjs";
+import { createAcpAgent, MEDIA_ONLY_INSTRUCTION } from "../dist/index.mjs";
 
 import { createChecker, finish } from "./acp-report.mjs";
 import { makeHost, makeSession, runClient } from "./acp-session-double.mjs";
@@ -27,8 +27,7 @@ const checker = createChecker();
 const check = checker.check;
 
 /** A 1×1 PNG. Any bytes would do; this one is a real image so a decoder in the chain cannot object. */
-const PNG =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==";
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==";
 
 /**
  * Send one prompt through the real handlers over the real SDK transport and report what the session
@@ -84,25 +83,50 @@ function errorMessageOf(error) {
   const { stopReason, failure, sent, assistantText } = await sendPrompt([
     { type: "image", data: PNG, mimeType: "image/png" },
   ]);
+  const content = sent[0]?.content;
 
   check("an image-only prompt is accepted (no refusal, no empty-content filter)", failure === undefined, failure);
   check("…and the turn starts", sent.length === 1, JSON.stringify(sent.length));
   check(
     "…with the image as a content part, not as empty text",
-    Array.isArray(sent[0]?.content) && sent[0].content.length === 1 && sent[0].content[0]?.type === "image",
-    JSON.stringify(sent[0]?.content)
+    Array.isArray(content) && content[0]?.type === "image",
+    JSON.stringify(content)
   );
   check(
     "…carrying the client's bytes and mime type through unchanged",
-    sent[0]?.content?.[0]?.source?.type === "data" &&
-      sent[0]?.content?.[0]?.source?.value === PNG &&
-      sent[0]?.content?.[0]?.source?.mimeType === "image/png",
-    JSON.stringify(sent[0]?.content?.[0]?.source ?? null)
+    content?.[0]?.source?.type === "data" &&
+      content?.[0]?.source?.value === PNG &&
+      content?.[0]?.source?.mimeType === "image/png",
+    JSON.stringify(content?.[0]?.source ?? null)
+  );
+  // A picture with no words is not a question. Left alone the model has nothing to answer and a run
+  // with no assistant text is reported as a turn that ended with no output at all.
+  check(
+    "…and a media-only prompt picks up the instruction that says so",
+    Array.isArray(content) && content.at(-1)?.type === "text" && content.at(-1)?.content === MEDIA_ONLY_INSTRUCTION,
+    JSON.stringify(content?.at(-1) ?? null)
   );
   check("…and the turn hands back (end_turn) rather than hanging", stopReason === "end_turn", stopReason);
   // The fake session streams nothing, so there is no agent text — stated so this case is not read as
   // "the agent answered": the assertion above is about the prompt reaching the session at all.
   check("…with no invented assistant text", assistantText === "", assistantText);
+}
+
+// ===========================================================================
+// 1b. Whitespace is not a message either
+// ===========================================================================
+{
+  const { sent } = await sendPrompt([
+    { type: "image", data: PNG, mimeType: "image/png" },
+    { type: "text", text: "   \n" },
+  ]);
+  const content = sent[0]?.content;
+
+  check(
+    "a blank text block next to an image still gets the instruction",
+    Array.isArray(content) && content.at(-1)?.type === "text" && content.at(-1)?.content === MEDIA_ONLY_INSTRUCTION,
+    JSON.stringify(content)
+  );
 }
 
 // ===========================================================================
@@ -122,6 +146,11 @@ function errorMessageOf(error) {
       content.map((part) => part.type).join(",") === "text,image,text" &&
       content[0]?.content === "what is wrong here?" &&
       content[2]?.content === "and here?",
+    JSON.stringify(content)
+  );
+  check(
+    "…and a prompt that already says something gets no instruction bolted on",
+    content.filter((part) => part.content === MEDIA_ONLY_INSTRUCTION).length === 0,
     JSON.stringify(content)
   );
 }

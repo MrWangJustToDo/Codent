@@ -32,7 +32,13 @@ export {
 } from "./client-env.js";
 export { bootstrapLocalAcp, bootstrapAcpAgent, type LocalAcpBootstrap, type AcpModelOverride } from "./bootstrap.js";
 export { AcpProjector, type AcpProjectorOptions } from "./projector.js";
-export { promptBlocksToContent, textBlock, type PromptCaps, type PromptMapping } from "./content.js";
+export {
+  MEDIA_ONLY_INSTRUCTION,
+  promptBlocksToContent,
+  textBlock,
+  type PromptCaps,
+  type PromptMapping,
+} from "./content.js";
 export {
   toolCallInfo,
   toolKindFor,

@@ -95,8 +95,29 @@ export function promptBlocksToContent(blocks: ContentBlock[], caps: PromptCaps):
     const text = parts.map((part) => (part.type === "text" ? part.content : "")).join("\n\n");
     return { content: text };
   }
+  // Media with no words around it (paste a screenshot, press enter) reaches the model as a picture
+  // and nothing to answer. Every host that has a text box solves this at the input layer — the app
+  // writes `[Image #N: file]` into the submitted text — but an ACP client sends the block on its
+  // own, and a model given only an image frequently answers with nothing, which the run then reports
+  // as an empty reply (the empty assistant shell is stripped), i.e. the client sees a turn that ends
+  // with no output at all. One instruction is what turns that into an answer, and it states exactly
+  // what the user did, so the model is not misled about a question that was never asked.
+  if (!parts.some((part) => part.type === "text" && part.content.trim().length > 0)) {
+    parts.push({ type: "text", content: MEDIA_ONLY_INSTRUCTION });
+  }
   return { content: parts };
 }
+
+/**
+ * What a media-only prompt says to the model.
+ *
+ * Not a fabricated user message: it names the situation (an attachment, no question) and the two
+ * things the act of sending it can mean. Kept as one exported constant so a host that reports the
+ * prompt back can recognize it, and so the wording is changed in one place.
+ */
+export const MEDIA_ONLY_INSTRUCTION =
+  "The user attached this without a message. Look at the attachment(s) and respond: describe what " +
+  "they show, and if the intent is clear (an error message, a failing test, a broken UI), act on it.";
 
 /** Outbound agent text as a Markdown content block. */
 export function textBlock(text: string): ContentBlock {
