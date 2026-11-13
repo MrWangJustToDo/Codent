@@ -111,13 +111,18 @@ export function promptBlocksToContent(blocks: ContentBlock[], caps: PromptCaps):
 /**
  * What a media-only prompt says to the model.
  *
- * Not a fabricated user message: it names the situation (an attachment, no question) and the two
- * things the act of sending it can mean. Kept as one exported constant so a host that reports the
- * prompt back can recognize it, and so the wording is changed in one place.
+ * Bracket-notation, like the app's own synthesized refs for attachments (`[Image #N: file]`) and for
+ * resources (`[resource: …]`): the sentence is persisted with the message, so a client that reloads
+ * the session renders it inside the user's turn — and a note in brackets reads as a note rather than
+ * as words the user typed.
+ *
+ * Not a fabricated question: it names the situation (an attachment, no message) and the two things
+ * sending it can mean. Kept as one exported constant so the wording lives in one place and a test can
+ * assert exactly what the model was told.
  */
 export const MEDIA_ONLY_INSTRUCTION =
-  "The user attached this without a message. Look at the attachment(s) and respond: describe what " +
-  "they show, and if the intent is clear (an error message, a failing test, a broken UI), act on it.";
+  "[Attachment sent without a message. Look at it: describe what it shows, and if the intent is " +
+  "clear — an error message, a failing test, a broken UI — act on it.]";
 
 /** Outbound agent text as a Markdown content block. */
 export function textBlock(text: string): ContentBlock {
