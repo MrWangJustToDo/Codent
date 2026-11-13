@@ -4,6 +4,7 @@
    moving one out would separate a decision from the loop that enforces it. The refusal gate and
    the queue drain helpers are the next extracted unit; the `SendMessageOutcome` contract added here
    is what pushed the file over the ceiling. */
+import { isParkedStatus, isTerminalStatus } from "../../runtime-types/agent-status.js";
 import { toError } from "../../utils/errors.js";
 import { ApprovalDecisionCoordinator } from "../approval/approval-decision-coordinator.js";
 import { assertNotCompactionSummaryInput } from "../compaction";
@@ -251,7 +252,7 @@ export class AgentChatController {
     const pending = hasPendingInteraction(messages);
     if (!pending && !this.isPumpLive() && registeredPrefork === 0) {
       const status = this.managed.getStatus();
-      if (status === "waiting" || status === "awaiting_user") {
+      if (isParkedStatus(status)) {
         // Esc also drops queued input, matching the normal abort path.
         this.clearQueuedMessages();
         this.managed.statusController.clearUnbackedWait();
@@ -328,6 +329,19 @@ export class AgentChatController {
   }
 
   /**
+   * Deny every pending approval and refresh the derived count.
+   *
+   * The turn that asked is gone (Esc, teardown, a stream failure), so the question must not outlive
+   * it: a `pending` row keeps the prompt in `interactions.approvals`, and the next input parks on a
+   * question nobody is asking any more. One method, because the transcript write and the retained
+   * count have to agree — the count is a recomputation from the transcript, like every other writer.
+   */
+  denyPendingApprovals(reason: string): void {
+    this.approvalDecisions.denyPendingApprovals(reason);
+    this.managed.setPendingApprovalCount(countPendingToolApprovals(this.channel.getMessages()));
+  }
+
+  /**
    * Abort the in-flight pump, cancel incomplete tools, and finalize the aborted turn.
    * Invalidates the run token so the old pump exits without double-finalizing.
    */
@@ -358,13 +372,9 @@ export class AgentChatController {
     // An approval prompt is a question the interrupted turn no longer has. Leaving it pending
     // kept the part in `interactions.approvals` while the run was over: the next input was
     // admitted against a status that said `aborted`, then parked on the old question forever.
-    // Deny here (channel write + table) so the turn ends with no unanswered interaction.
-    this.approvalDecisions.denyPendingApprovals(TOOL_CANCELLED_MESSAGE);
-    // The deny rewrote the channel AFTER the last status flip, so the retained count would
-    // otherwise keep reporting the approvals that no longer exist (snapshot / ACP consumers).
-    // Derived from the transcript, like every other writer: this is a *recomputation*, not the
-    // lease-blind zeroing the setter's contract forbids.
-    this.managed.setPendingApprovalCount(countPendingToolApprovals(this.channel.getMessages()));
+    // Deny here (channel write + table + derived count) so the turn ends with no unanswered
+    // interaction.
+    this.denyPendingApprovals(TOOL_CANCELLED_MESSAGE);
     // Turn finalize here: the invalidated token makes the in-flight pump skip its outcome path.
     // When this run actually had a pump, go through the SAME finalizer the pump uses — the abort
     // is then a first-class turn outcome (status + `finalizeRun` + one `turn:summary`), not a
@@ -849,7 +859,7 @@ export class AgentChatController {
       if (this.lifecycleEpoch !== epoch || this.managed.isDestroyed()) return;
       if (hasPendingInteraction(this.channel.getMessages())) return;
       const status = this.managed.getStatus();
-      if (status === "waiting" || status === "awaiting_user" || status === "error" || status === "aborted") return;
+      if (isParkedStatus(status) || isTerminalStatus(status)) return;
       const normalized = toError(error);
       this.managed.setError(normalized.message);
       this.managed.statusController.onRunError(normalized.message, normalized.stack);

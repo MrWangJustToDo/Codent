@@ -179,6 +179,9 @@ for (const parked of ["waiting", "awaiting_user"]) {
   assert.equal(wakes, 1, `a ${parked} session is not woken (the answer's pump delivers instead)`);
   await deliver(jobId);
 }
+// Leave the parked wait through the state writer: a question outlives a verdict by design (an
+// unanswered `ask_user` must stay answerable), so a legacy status write is refused while it is set.
+managed.transitionStatus({ type: "resume" });
 
 // ============================================================================
 // 3b. A stopped or failed run is NOT resumed by a background job
@@ -200,11 +203,13 @@ managed.setStatus("idle", "validator");
 // 4. Manual compaction owns the transcript and is not a pump
 // ============================================================================
 
-managed.setStatus("compacting", "manual-compact");
+// `compacting` is a run phase owned by a lease, not a status a host can write freely: enter and
+// leave it through the state writer, exactly like the runtime does.
+managed.transitionStatus({ type: "compaction-start" });
 const duringCompact = await runJob("npm run lint");
 assert.equal(wakes, 1, "a turn is not started on top of a running compaction");
 await deliver(duringCompact);
-managed.setStatus("idle", "validator");
+managed.transitionStatus({ type: "compaction-end" });
 
 // ============================================================================
 // 5. Plan review is an interactive pause: the user starts the next turn

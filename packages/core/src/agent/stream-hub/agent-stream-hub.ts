@@ -97,6 +97,23 @@ export class AgentStreamHub {
     this.eventBus = bus;
   }
 
+  /**
+   * Release the hub at teardown.
+   *
+   * `clearAll()` is a session switch — the next session still projects into the same bus. Teardown
+   * has no next session, and a host that kept `getStreamHub()` (or an `AgentSession` over it) would
+   * otherwise pin the deleted scope's bus node, the settled-command set and the retained stream
+   * entries for the life of the process.
+   *
+   * @internal Called by `LifecycleCoordinator.destroy` while the object graph is still alive.
+   */
+  dispose(): void {
+    this.generation += 1;
+    this.streams.clear();
+    this.closedCommandIds.clear();
+    this.eventBus = undefined;
+  }
+
   /** Current session generation. Producers capture this before a run and pass it to reset/append. */
   getGeneration(): number {
     return this.generation;

@@ -218,6 +218,19 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
       };
 
     case "settle":
+      // A settle needs one of the two things that make a turn real: a run that started (any phase
+      // but `idle`, or a `busy` lifecycle left by a wait that was answered before any chunk
+      // arrived), or a wait the transcript still shows. Settling a fresh agent reported
+      // `completed` with a `lastStreamDurationMs` for a turn that never existed, and skipped every
+      // `reconcileAfterRun` check — that path returns early on `completed`, so the phantom verdict
+      // was never corrected. A parked `wait` is exempt even with `run: "idle"`: `clearUnbackedWait`
+      // is the escape hatch for a wait asserted without a run, and it settles.
+      // `busy` is exempt too: `pause` accepts `run: "idle"`, `resume` only clears the wait, so
+      // "busy + idle + no wait" is a real (if transient) axis set and `onRunFinish` must be able to
+      // settle it — the `isBusyStatus`-derived reconcile paths cannot (they require `run !== idle`).
+      if (state.run === "idle" && state.wait === "none" && state.lifecycle !== "busy") {
+        reject("settle requires a started run or a pending wait", event, options);
+      }
       // A settle during compaction records the result without stealing the phase (the lease
       // applies it on `compaction-end`).
       if (state.run === "compacting") {
@@ -282,7 +295,12 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
       // projection kept reporting error/aborted while `isActiveState` became true forever. A QUESTION
       // is deliberately exempt — an unanswered `ask_user` outlives a failed run and must keep the
       // session parked on the user (`syncPendingQuestionWait`).
-      if (event.wait === "approval" && (state.outcome === "error" || state.outcome === "aborted")) {
+      //
+      // `completed` is NOT exempt: it is the only projection of "this turn is over", and pausing it
+      // made `shouldDeferMidRunQueue` true forever — every later message queued behind a pump that
+      // had already finished, which is the same trap the error/aborted rule closed. Only a
+      // verdict-free run (`outcome: "none"`) can ask for an approval.
+      if (event.wait === "approval" && state.outcome !== "none") {
         reject(`pause requires a live run, got outcome ${state.outcome}`, event, options);
       }
       return { ...state, lifecycle: "busy", wait: event.wait };

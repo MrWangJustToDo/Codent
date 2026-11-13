@@ -5,7 +5,11 @@
 
 export {
   ACTIVE_STATUSES,
+  STICKY_STATUSES,
   isActiveStatus,
+  isBusyStatus,
+  isParkedStatus,
+  isStickyStatus,
   isTerminalStatus,
   resolveFinishStatus,
 } from "../runtime-types/agent-status.js";

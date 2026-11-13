@@ -72,12 +72,20 @@ export class LifecycleCoordinator {
       }
     };
 
+    // Deny pending approvals BEFORE dropping the scope: nothing can answer them after teardown, and
+    // the refusal must be emitted while the registry / bus still resolve this agent. `markDestroyed`
+    // repeats it for the bootstrap-failure path; a second deny finds nothing and emits nothing.
+    attempt(() => managedAgent.denyPendingApprovalsForTeardown?.());
     attempt(() => this.deps.clearAgentScope(id));
     // Release the UI channel's subscriptions (approval-request, retained providers) while the graph
     // is still alive. A host that keeps the `AgentSession` around used to pin the whole object graph
     // (transcript, runner, tool registry, log sink) until the next connect, because nothing ever
     // passed `undefined` to `setUIChannel`.
     attempt(() => managedAgent.setUIChannel(undefined));
+    // Same rule for the stream hub: it holds a reference to the scoped bus (`clearAgentScope` just
+    // deleted it) plus the retained command/task buffers. Releasing it here also advances its
+    // generation, so a producer that starts late cannot recreate a buffer on a destroyed agent.
+    attempt(() => managedAgent.getStreamHub().dispose());
     // The MCP children and LSP servers are killed SYNCHRONOUSLY here — a host that exits without
     // settling the async teardown must not orphan them (`validate:lifecycle-coordinator` asserts the
     // kill is already recorded when `destroy` returns). The rest of the resource list (memory index

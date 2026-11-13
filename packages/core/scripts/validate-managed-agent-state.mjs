@@ -244,4 +244,155 @@ registerCoreEnv({
   assert.equal(compacting.compactions.isRunning(), false, "the teardown releases ownership");
 }
 
+// ---------------------------------------------------------------------------
+// 4. `setStatus` refuses the two lossy rebuilds (compaction lease, pending wait)
+// ---------------------------------------------------------------------------
+// The legacy writer rebuilds every axis from a projection, and the projection cannot express a
+// compaction lease's restore fields or a wait that has no status of its own. Both losses are silent:
+// the agent kept a plausible-looking status while the lease was stranded / the prompt was dropped.
+{
+  const manager = new AgentManager();
+  const agent = await manager.createManagedAgent({ name: "legacy-set-status", model: "test-model" });
+
+  // A lease in flight: the run phase, its outcome and the three `resume*` fields belong to it.
+  agent.setStatus("running");
+  agent.transitionStatus({ type: "compaction-start" });
+  assert.equal(agent.getStatus(), "compacting");
+  assert.equal(agent.getAgentState().resumeRun, "streaming", "the lease records the phase to restore");
+
+  agent.setStatus("running");
+  assert.equal(agent.getAgentState().run, "compacting", "a status write cannot steal the lease's run phase");
+  assert.equal(agent.getAgentState().resumeRun, "streaming", "the restore fields survive the ignored write");
+  assert.equal(agent.getStatus(), "compacting");
+
+  // The lease still finishes: this is what the old code broke (its `compaction-end` became illegal).
+  agent.transitionStatus({ type: "compaction-end" });
+  assert.equal(agent.getStatus(), "running", "the lease restores the phase it interrupted");
+
+  // A pending approval belongs to the run that asked for it. Only a verdict ends it.
+  agent.transitionStatus({ type: "pause", wait: "approval" });
+  assert.equal(agent.getStatus(), "waiting");
+  agent.setStatus("running");
+  assert.equal(agent.getStatus(), "waiting", "a status write cannot drop a pending approval");
+  assert.equal(agent.getAgentState().wait, "approval");
+
+  // A verdict DOES end the gate — that is the `interrupt`/`fail` rule, not a loss.
+  agent.setStatus("aborted");
+  assert.equal(agent.getStatus(), "aborted");
+  assert.equal(agent.getAgentState().wait, "none", "an abort ends the approval wait it gated");
+
+  // A QUESTION outlives a verdict: the prompt is still owed, but the failure must not be lost.
+  // The old guard refused the whole write, so a legacy host's error/abort simply vanished and the
+  // session resumed as if nothing had failed once the question was answered.
+  agent.transitionStatus({ type: "prepare" });
+  agent.transitionStatus({ type: "pause", wait: "question" });
+  assert.equal(agent.getStatus(), "awaiting_user");
+
+  agent.setStatus("aborted");
+  assert.equal(agent.getStatus(), "awaiting_user", "the question still owns the projection");
+  assert.equal(agent.getAgentState().outcome, "aborted", "but the abort is recorded on the axes");
+  agent.transitionStatus({ type: "resume" });
+  assert.equal(agent.getStatus(), "aborted", "clearing the wait reveals the verdict");
+
+  agent.transitionStatus({ type: "prepare" });
+  agent.transitionStatus({ type: "pause", wait: "question" });
+  agent.setError("provider down");
+  agent.setStatus("error");
+  assert.equal(agent.getStatus(), "awaiting_user", "an error leaves the question answerable");
+  assert.equal(agent.getAgentState().outcome, "error", "and is recorded");
+  assert.equal(agent.getAgentState().errorMessage, "provider down", "with its message");
+  agent.transitionStatus({ type: "resume" });
+  assert.equal(agent.getStatus(), "error");
+
+  // `completed` behaves the same: the turn settled, the prompt is still the session's.
+  agent.transitionStatus({ type: "prepare" });
+  agent.transitionStatus({ type: "pause", wait: "question" });
+  agent.setStatus("completed");
+  assert.equal(agent.getStatus(), "awaiting_user");
+  assert.equal(agent.getAgentState().outcome, "completed", "a late settle keeps the question");
+  agent.transitionStatus({ type: "resume" });
+  assert.equal(agent.getStatus(), "completed");
+
+  // A plain running/idle write still cannot erase the prompt.
+  agent.transitionStatus({ type: "prepare" });
+  agent.transitionStatus({ type: "pause", wait: "question" });
+  agent.setStatus("idle");
+  assert.equal(agent.getStatus(), "awaiting_user", "an outcome-free write is refused");
+}
+
+// ---------------------------------------------------------------------------
+// 5. The L1 frame has ONE authority for the error message
+// ---------------------------------------------------------------------------
+// `fail` writes the axes, while a CLEARING `setError("")` (retry, compaction repair) wrote only the
+// run field — so the frame carried `error: ""` beside `state.errorMessage: "old fault"`, and an
+// axes-reading host (ACP, the remote reducer) rendered a failure that no longer existed.
+{
+  const manager = new AgentManager();
+  const agent = await manager.createManagedAgent({ name: "l1-error-single-source", model: "test-model" });
+
+  // Production order: `setError` first (no verdict on the axes yet, so it is not mirrored), then the
+  // status writer records the failure on the axes.
+  agent.setError("provider down");
+  agent.transitionStatus({ type: "fail", error: "provider down" });
+  assert.equal(agent.getStatus(), "error");
+  let l1 = agent.getL1State();
+  assert.equal(l1.error, "provider down");
+  assert.equal(l1.state.errorMessage, "provider down");
+
+  agent.setError("");
+  l1 = agent.getL1State();
+  assert.equal(l1.error, "");
+  assert.equal(l1.state.errorMessage, undefined, "a cleared error is not still reported by the axes");
+
+  agent.setError("later fault");
+  l1 = agent.getL1State();
+  assert.equal(l1.state.errorMessage, "later fault", "and a new one reaches the axes the same way");
+
+  // A healthy/completed state never gains a message from a stray `setError`.
+  const healthy = await manager.createManagedAgent({ name: "l1-error-healthy", model: "test-model" });
+  healthy.setError("not a verdict");
+  assert.equal(healthy.getL1State().state.errorMessage, undefined, "no failure is invented on a live state");
+}
+
+// ---------------------------------------------------------------------------
+// 6. Teardown denies pending approvals instead of persisting them as `pending`
+// ---------------------------------------------------------------------------
+// Nothing can answer an interaction after teardown. A `pending` row written by `session.close()`
+// made a resumed session park on a question nobody asked, with no pump owning the deny.
+{
+  const manager = new AgentManager();
+  const agent = await manager.createManagedAgent({ name: "destroy-pending-approval", model: "test-model" });
+  const chat = agent.initChat(manager);
+  chat.setMessages([
+    { id: "u1", role: "user", parts: [{ type: "text", content: "remove the temp dir" }] },
+    {
+      id: "a1",
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-call",
+          id: "call_rm",
+          name: "run_command",
+          state: "input-complete",
+          input: { command: "rm -rf build" },
+          approval: { id: "ap-1", needsApproval: true },
+        },
+      ],
+    },
+  ]);
+  assert.equal(agent.readInteractions().approvals.length, 1, "the fixture is parked on an approval");
+
+  agent.markDestroyed();
+  assert.equal(
+    agent.readInteractions().approvals.length,
+    0,
+    "teardown denies the gate instead of leaving a question nothing can answer"
+  );
+  // The deny itself, not the count zeroing: `markDestroyed` also zeros the derived count outright,
+  // so a count assertion alone would pass even if nothing was written to the transcript.
+  const part = chat.getMessages().find((message) => message.id === "a1")?.parts[0];
+  assert.equal(part?.approval?.approved, false, "the gate carries a recorded decision (policy: denied)");
+  assert.equal(agent.getL1State().pendingApprovalCount, 0);
+}
+
 console.log("managed-agent-state validation passed");

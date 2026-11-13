@@ -96,6 +96,7 @@ import { SessionFacet } from "../agent/session/session-facet.js";
 import { SessionLease } from "../agent/session/session-lease.js";
 import { SessionLifecycleService, type SessionLifecycleReason } from "../agent/session/session-lifecycle-service.js";
 import { createAgentStatusController, type AgentStatusController } from "../agent/state/agent-status-controller.js";
+import { TOOL_CANCELLED_MESSAGE } from "../agent/stream/incomplete-tool-calls.js";
 import { collectPendingInteractions } from "../agent/stream/tool-phase-utils.js";
 import { AgentStreamHub } from "../agent/stream-hub/agent-stream-hub.js";
 import {
@@ -1109,7 +1110,57 @@ export class ManagedAgent {
    */
   setStatus(status: AgentStatus, event?: AgentStateEventType): void {
     if (this.destroyed) return;
-    this.agentState = deriveAgentState(status, this.getError());
+    // Two refusals, both "the projection is lossy" artifacts rather than policy:
+    //
+    // 1. A live compaction lease owns `run`, `outcome` and the three `resume*` fields, and
+    //    `deriveAgentState` cannot express them. Rebuilding the axes here stranded the lease: its
+    //    `compaction-end` then read as an illegal transition, so the phase was never restored and
+    //    the agent stayed `compacting` forever. A write that NAMES `compaction-end` IS the end of
+    //    the lease, so its rebuild is the intended exit (the restore fields are spent there).
+    // 2. A wait belongs to the interaction the host is showing. `waiting`/`awaiting_user` are the
+    //    only projections that carry it, and an approval dies only with a verdict — so a write to
+    //    `running`/`idle` while a prompt is pending reported `run: streaming, wait: none` with the
+    //    prompt still on screen and the input queue admitted against a parked session.
+    if (this.agentState.run === "compacting" && status !== "compacting" && event !== "compaction-end") {
+      this.emitDiagnostic("session", "Ignored a status write during compaction", {
+        level: "warn",
+        data: { status, reason: "compaction lease owns the run phase" },
+      });
+      return;
+    }
+    // A question outlives a verdict by design (`fail`/`interrupt` keep the wait), and
+    // `deriveAgentState` cannot express "verdict + pending question". Applying the outcome through
+    // the state machine preserves both; rebuilding the axes would either drop the prompt (plain
+    // run/idle write) or lose the verdict (the old guard refused the whole write).
+    if (this.agentState.wait === "question" && status !== "awaiting_user") {
+      if (status === "error") {
+        this.transitionStatus({ type: "fail", error: this.getError() });
+        return;
+      }
+      if (status === "aborted") {
+        this.transitionStatus({ type: "interrupt" });
+        return;
+      }
+      if (status === "completed") {
+        // `settle` keeps the wait unless `clearWait`: the turn is over, the prompt is still owed.
+        this.transitionStatus({ type: "settle", result: "completed" });
+        return;
+      }
+      this.emitDiagnostic("session", "Ignored a status write that would drop a pending question", {
+        level: "warn",
+        data: { status, wait: this.agentState.wait },
+      });
+      return;
+    }
+    const next = deriveAgentState(status, this.getError());
+    if (this.agentState.wait === "approval" && next.wait === "none" && next.outcome === "none") {
+      this.emitDiagnostic("session", "Ignored a status write that would drop a pending wait", {
+        level: "warn",
+        data: { status, wait: this.agentState.wait },
+      });
+      return;
+    }
+    this.agentState = next;
     this.applyStatus(status, event);
   }
 
@@ -1193,6 +1244,13 @@ export class ManagedAgent {
 
   setError(error: string): void {
     this.run.setError(error);
+    // The axes are the serialized authority for the message (`fail` / `stream-end` write them), and a
+    // CLEARING write — `setError("")` on a retry or a compaction repair — never did, so the state
+    // frame kept reporting a fault the run had already moved past while `error` was empty. Mirror
+    // only onto an axes FAILURE: writing a message onto a healthy/completed state would invent one.
+    if (this.agentState.outcome === "error") {
+      this.agentState = { ...this.agentState, ...(error ? { errorMessage: error } : { errorMessage: undefined }) };
+    }
     this.emitStateChange();
   }
 
@@ -3131,6 +3189,28 @@ export class ManagedAgent {
   }
 
   /**
+   * Deny pending approvals because nothing can answer them after teardown.
+   *
+   * Called twice by design: once at the very top of `LifecycleCoordinator.destroy` (while the bus
+   * scope and registry entry still resolve the agent, so the refusal is observable) and once from
+   * {@link markDestroyed} (the bootstrap-failure path calls that directly). The second call finds no
+   * pending approval and emits nothing, so the derived count and the channel cannot disagree.
+   * @internal
+   */
+  denyPendingApprovalsForTeardown(): void {
+    const chat = this.getChatController();
+    if (!chat) return;
+    try {
+      chat.denyPendingApprovals(TOOL_CANCELLED_MESSAGE);
+    } catch (error) {
+      this.emitDiagnostic("session", "Failed to deny pending approvals during teardown", {
+        level: "warn",
+        error: errorMessage(error),
+      });
+    }
+  }
+
+  /**
    * Mark this runtime as torn down. @internal Called by `LifecycleCoordinator.destroy` before the
    * abort, so a producer that is unwinding asynchronously (a compaction's `finally`, a queued pump)
    * can tell "the user stopped this run" from "there is no runtime to resume".
@@ -3139,9 +3219,15 @@ export class ManagedAgent {
     this.destroyed = true;
     // A destroyed agent is not "idle, writable, with N approvals pending". `teardown` projects
     // `idle` from the cleared axes, so the status alone cannot express it; `isIdle()` checks this
-    // flag too, and the snapshot carries `state.lifecycle: "destroyed"`. Nothing can answer an
-    // interaction after teardown, which is why this is the one place allowed to zero the derived
-    // count outright.
+    // flag too, and the snapshot carries `state.lifecycle: "destroyed"`.
+    //
+    // Nothing can answer an interaction after teardown, so the approvals are DENIED first: a
+    // `pending` row persisted here is what made a resumed session park on a question nobody asked
+    // (its turn is gone, and no pump path owns denying it). After the deny the derived count is
+    // consistent again, and this is still the one place allowed to zero it outright. A runtime with
+    // no chat controller has no transcript-level approval to deny (nothing was ever projected), so
+    // the zero below is the whole answer there.
+    this.denyPendingApprovalsForTeardown();
     this.pendingApprovalCount = 0;
     if (this.run.getError()) this.run.setError("");
     // Stop the fire-and-forget memory extraction loop (it writes through a manager this teardown

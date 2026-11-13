@@ -1,3 +1,5 @@
+import { isParkedStatus } from "../../runtime-types/agent-status.js";
+
 import type { AgentStatus } from "../../runtime-types";
 
 /**
@@ -11,7 +13,9 @@ import type { AgentStatus } from "../../runtime-types";
 export function shouldDeferMidRunQueue(options: { pumpDepth: number; status: AgentStatus }): boolean {
   if (options.pumpDepth > 0) return true;
   const { status } = options;
-  if (status === "waiting" || status === "awaiting_user") return true;
+  // `isParkedStatus`, not a literal pair: a parked session owes the user an answer, and the next
+  // wait kind must queue input here without a second spelling to remember.
+  if (isParkedStatus(status)) return true;
   // A manual `/compact` runs with no pump, but it is still work the user's next message must not
   // race: starting a turn here appends the summary checkpoint inside a half-finished turn (the
   // next model call then projects from a prefix that was replaced mid-turn) and resets the window

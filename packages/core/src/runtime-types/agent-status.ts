@@ -101,6 +101,37 @@ export function isBusyStatus(status: AgentStatus): boolean {
 }
 
 /**
+ * Sticky = a status a late stream chunk may not move.
+ *
+ * Derived from the axes rather than listed: a status is sticky because it is PARKED on a human, has
+ * already reached a verdict, or a compaction lease owns the run phase. A hand-written list here had
+ * to be kept in step with three separate concerns, and the next wait kind (an approval spelled
+ * differently, a new terminal reason) would have compiled clean while a trailing chunk resurrected
+ * `running` — with no pump left to settle it.
+ */
+export const STICKY_STATUSES: ReadonlySet<AgentStatus> = new Set(
+  ALL_STATUSES.filter((status) => {
+    const state = deriveAgentState(status);
+    return state.wait !== "none" || state.outcome !== "none" || state.run === "compacting";
+  })
+);
+
+export function isStickyStatus(status: AgentStatus): boolean {
+  return STICKY_STATUSES.has(status);
+}
+
+/**
+ * Parked = the session is waiting on the user (a tool approval or an `ask_user` question).
+ *
+ * The one predicate for "input is owed, not work": the status that must not be overwritten by a
+ * chunk, the status that defers mid-run queueing, and the status a pump must not blindly prepare
+ * over. Keyed on the axis so a new wait kind needs no new spelling here.
+ */
+export function isParkedStatus(status: AgentStatus): boolean {
+  return deriveAgentState(status).wait !== "none";
+}
+
+/**
  * Resolve the status to apply when an agent run finishes.
  *
  * Terminal/parked/compacting states are kept; otherwise the result is the run's error or success.

@@ -14,12 +14,20 @@ const events = [];
 const scopes = [];
 
 function fakeAgent(id, parentId) {
+  let denied = false;
   return {
     id,
     parentId,
     parentTaskId: parentId ? "task-parent" : undefined,
     childIds: [],
     updatedAt: 0,
+    // Teardown denies pending approvals BEFORE the scope is dropped, then `markDestroyed` repeats
+    // the call; the second one finds nothing (here: an idempotent flag).
+    denyPendingApprovalsForTeardown: () => {
+      if (denied) return;
+      denied = true;
+      events.push(`deny:${id}`);
+    },
     getMcpManager: () => ({ forceKill: () => events.push(`mcp:${id}`) }),
     // The synchronous teardown covers language servers too: a host that exits without settling the
     // async chain must not orphan them (`LspManager.forceKillAll`).
@@ -78,6 +86,11 @@ assert.deepEqual(scopes, ["root", "child", "grandchild"], "every agent scope is 
 for (const id of ["root", "child", "grandchild"]) {
   assert.ok(events.includes(`mcp:${id}`), `${id} MCP killed`);
   assert.ok(events.includes(`lsp:${id}`), `${id} LSP servers killed synchronously`);
+  assert.ok(events.includes(`deny:${id}`), `${id} pending approvals denied during teardown`);
+  assert.ok(
+    events.indexOf(`deny:${id}`) < events.indexOf(`mcp:${id}`),
+    `${id} approvals are denied before the scope/child-process teardown`
+  );
   assert.ok(events.includes(`abort:${id}:Agent destroyed`), `${id} aborted`);
 }
 assert.ok(events.includes("event:child:subagent:destroyed:child"), "child destruction is reported");

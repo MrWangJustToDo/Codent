@@ -8,7 +8,13 @@
  */
 
 import { deriveAgentState, projectAgentStatus, transition } from "../../runtime-types/agent-state.js";
-import { isActiveStatus, isBusyStatus, isTerminalStatus } from "../../runtime-types/agent-status.js";
+import {
+  isActiveStatus,
+  isBusyStatus,
+  isParkedStatus,
+  isStickyStatus,
+  isTerminalStatus,
+} from "../../runtime-types/agent-status.js";
 import {
   countPendingToolApprovals,
   firstPendingInteraction,
@@ -96,14 +102,9 @@ function applyChunkStatus(
   // A compaction lease owns the run phase: a late chunk must not promote `run` to streaming/tooling,
   // or the lease's restore guard (`status === "compacting"`) stops matching and the phase is
   // abandoned by `finish()` without ever being restored.
-  if (
-    current === "waiting" ||
-    current === "awaiting_user" ||
-    current === "aborted" ||
-    current === "error" ||
-    current === "completed" ||
-    current === "compacting"
-  ) {
+  // The set itself lives in `agent-status.ts` (`STICKY_STATUSES`), derived from the axes: a local
+  // list had to be kept in step with parked waits, verdicts and the lease by hand.
+  if (isStickyStatus(current)) {
     return;
   }
 
@@ -170,14 +171,10 @@ export class AgentStatusController {
     if (firstPendingInteraction(messages)) return;
 
     const status = this.deps.getStatus();
-    if (
-      status === "waiting" ||
-      status === "awaiting_user" ||
-      status === "idle" ||
-      status === "completed" ||
-      status === "error" ||
-      status === "aborted"
-    ) {
+    // Anything that is not actively working may start a pump: a settled verdict, a parked wait and
+    // `idle` all need the same prepare. Derived (`!isBusyStatus`) so a new busy phase — or a new
+    // parked kind — is classified once, in `agent-status.ts`, instead of in a literal list here.
+    if (!isBusyStatus(status)) {
       this.dispatch({ type: "prepare" });
     }
   }
@@ -186,7 +183,7 @@ export class AgentStatusController {
     this.deps.setFinishReason?.(null);
     const status = this.deps.getStatus();
     if (status === "aborted" || status === "compacting") return;
-    if (status !== "waiting" && status !== "awaiting_user") {
+    if (!isParkedStatus(status)) {
       this.dispatch({ type: "prepare" });
     }
     this.deps.setError("");
@@ -203,7 +200,7 @@ export class AgentStatusController {
     this.deps.setFinishReason?.(finishReason ?? null);
     const current = this.deps.getStatus();
     // A parked/terminal turn, or a compaction that owns the run phase, is not a stream finish.
-    if (isTerminalStatus(current) || current === "waiting" || current === "awaiting_user" || current === "compacting") {
+    if (isTerminalStatus(current) || isParkedStatus(current) || current === "compacting") {
       return;
     }
     // A tool_calls finish is a tool phase, not the turn: the pump continues. Settling here made
@@ -358,8 +355,9 @@ export class AgentStatusController {
    */
   clearUnbackedWait(kind: "question" | "any" = "any"): void {
     const status = this.deps.getStatus();
-    const matches =
-      kind === "question" ? status === "awaiting_user" : status === "waiting" || status === "awaiting_user";
+    // `any` means "whichever wait is standing", so it asks the derived predicate; `question` names
+    // ONE wait and stays a literal.
+    const matches = kind === "question" ? status === "awaiting_user" : isParkedStatus(status);
     if (!matches) return;
     const messages = this.deps.getMessages?.() ?? [];
     if (firstPendingInteraction(messages)) return;
@@ -386,7 +384,7 @@ export class AgentStatusController {
       this.dispatch({ type: "pause", wait: "question" });
       return;
     }
-    if (this.deps.getStatus() === "waiting" || this.deps.getStatus() === "awaiting_user") {
+    if (isParkedStatus(this.deps.getStatus())) {
       if (whenClear === "running") this.dispatch({ type: "resume" });
       else if (whenClear === "completed") this.dispatch({ type: "settle", result: "completed", clearWait: true });
       else this.dispatch({ type: "reset" });
@@ -408,7 +406,7 @@ export class AgentStatusController {
     this.reconcileFromUIMessages(messages, { whenClear: "completed" });
 
     const status = this.deps.getStatus();
-    if (status === "waiting" || status === "awaiting_user") return;
+    if (isParkedStatus(status)) return;
     if (needsToolPhaseContinue(messages)) return;
     if (needsAgentResponseAfterTools(messages)) return;
     if (isTerminalStatus(status)) return;
@@ -525,7 +523,7 @@ export class AgentStatusController {
 
   private forceDetachedTerminal(): void {
     const status = this.deps.getStatus();
-    if (status === "waiting" || status === "awaiting_user") {
+    if (isParkedStatus(status)) {
       // Subagent run is over — do not linger as "active" for the task panel.
       this.dispatch({ type: "settle", result: this.deps.getError() ? "error" : "completed", clearWait: true });
       return;

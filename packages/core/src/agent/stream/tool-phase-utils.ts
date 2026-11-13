@@ -1,3 +1,4 @@
+import { isParkedStatus } from "../../runtime-types/agent-status.js";
 import { parseToolArguments } from "../../utils/parse-tool-arguments.js";
 import { BUILTIN_TOOL_NAMES, CLIENT_TOOL_NAMES } from "../tools/catalog/tool-names.js";
 
@@ -279,7 +280,9 @@ export function hasApprovalRespondedToolsPendingExecution(messages: UIMessage[])
  * - last message is not `user` — tool-phase or approval continuation within the same turn
  */
 export function isToolContinuationPrepare(status: AgentStatus, messages?: Array<UIMessage | ModelMessage>): boolean {
-  if (status === "waiting" || status === "awaiting_user") return true;
+  // `isParkedStatus` rather than a literal pair: a parked session is exactly "a turn is open and
+  // owed an answer", and the next wait kind must qualify without a second spelling here.
+  if (isParkedStatus(status)) return true;
   if (!messages?.length) return false;
   return messages[messages.length - 1].role !== "user";
 }

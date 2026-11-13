@@ -16,6 +16,8 @@ import {
   deriveAgentState,
   INITIAL_AGENT_STATE,
   isActiveState,
+  isParkedStatus,
+  isStickyStatus,
   isTerminalState,
   projectAgentStatus,
   resolveFinishStatus,
@@ -63,7 +65,6 @@ const idle = deriveAgentState("idle");
 assert.equal(projectAgentStatus(transition(idle, { type: "prepare" })), "running");
 assert.equal(projectAgentStatus(transition(idle, { type: "stream-chunk", stream: "thinking" })), "thinking");
 assert.equal(projectAgentStatus(transition(idle, { type: "pause", wait: "approval" })), "waiting");
-assert.equal(projectAgentStatus(transition(idle, { type: "settle", result: "completed" })), "completed");
 assert.equal(projectAgentStatus(transition(idle, { type: "fail", error: "x" })), "error");
 assert.equal(projectAgentStatus(transition(idle, { type: "interrupt" })), "aborted");
 assert.equal(projectAgentStatus(transition(idle, { type: "compaction-start" })), "compacting");
@@ -232,6 +233,125 @@ assert.equal(projectAgentStatus(transition(idle, { type: "reset" })), "idle");
 
   controller.resetToIdle();
   assert.equal(projectAgentStatus(state), "idle");
+}
+
+// --- `settle` needs a real turn --------------------------------------------
+// A fresh agent has no run phase and no wait, so it has nothing to settle: reporting `completed`
+// there published a verdict for a turn that never existed and skipped `reconcileAfterRun` (which
+// returns early on `completed`).
+{
+  const fresh = deriveAgentState("idle");
+  assert.throws(() => transition(fresh, { type: "settle", result: "completed" }), /settle requires a started run/);
+  assert.throws(
+    () => transition(initState(), { type: "settle", result: "completed" }),
+    /settle requires a started run/
+  );
+
+  const rejected = [];
+  const same = transition(
+    fresh,
+    { type: "settle", result: "completed" },
+    { strict: false, onReject: (reason) => rejected.push(reason) }
+  );
+  assert.equal(same, fresh, "a rejected settle leaves the axes untouched");
+  assert.equal(rejected.length, 1);
+
+  // A WAIT is something to settle even with no run phase: `clearUnbackedWait` depends on it.
+  let parked = deriveAgentState("awaiting_user");
+  parked = transition(parked, { type: "settle", result: "completed", clearWait: true });
+  assert.equal(projectAgentStatus(parked), "completed");
+
+  // A run that already settled may settle again (every reconcile path does this).
+  let settled = transition(transition(deriveAgentState("idle"), { type: "prepare" }), {
+    type: "stream-end",
+    result: "completed",
+  });
+  assert.equal(settled.run, "finalizing");
+  settled = transition(settled, { type: "settle", result: "completed" });
+  assert.equal(projectAgentStatus(settled), "completed");
+
+  // A wait established before any chunk and then answered leaves `busy + run: idle`: `onRunFinish`
+  // must still be able to settle it (the `isBusyStatus`-derived reconcile paths cannot — they
+  // require `run !== idle`), or the projection stays `running` forever.
+  let residual = transition(deriveAgentState("idle"), { type: "pause", wait: "question" });
+  residual = transition(residual, { type: "resume" });
+  assert.equal(residual.lifecycle, "busy");
+  assert.equal(residual.run, "idle");
+  assert.equal(projectAgentStatus(transition(residual, { type: "settle", result: "completed" })), "completed");
+}
+
+// --- an approval wait needs a verdict-free run ------------------------------
+// A late `onToolPhaseComplete` used to park an already-settled turn: `waiting` is an ACTIVE status,
+// so `shouldDeferMidRunQueue` stayed true with no pump left to drain the queue.
+{
+  for (const status of ["completed", "error", "aborted"]) {
+    const state = deriveAgentState(status, status === "error" ? "boom" : "");
+    assert.throws(
+      () => transition(state, { type: "pause", wait: "approval" }),
+      /pause requires a live run/,
+      `${status} cannot park on an approval`
+    );
+    // A QUESTION is deliberately exempt: an unanswered `ask_user` outlives the verdict.
+    assert.equal(
+      projectAgentStatus(transition(state, { type: "pause", wait: "question" })),
+      "awaiting_user",
+      `${status} can still be parked on a question`
+    );
+  }
+  // A live run can still park, and re-asserting the same wait is idempotent.
+  let running = transition(deriveAgentState("idle"), { type: "prepare" });
+  running = transition(running, { type: "pause", wait: "approval" });
+  assert.equal(projectAgentStatus(running), "waiting");
+  assert.equal(projectAgentStatus(transition(running, { type: "pause", wait: "approval" })), "waiting");
+}
+
+// --- sticky / parked are derived from the axes, not hand lists --------------
+// Asserted as literal sets: a hand-maintained list that merely happens to match today would pass any
+// assertion phrased as the same expression the implementation uses.
+{
+  const expectedSticky = ["aborted", "awaiting_user", "compacting", "completed", "error", "waiting"];
+  assert.deepEqual(STATUSES.filter((status) => isStickyStatus(status)).sort(), expectedSticky.slice().sort());
+  assert.deepEqual(STATUSES.filter((status) => isParkedStatus(status)).sort(), ["awaiting_user", "waiting"]);
+}
+
+// --- a late approval sync must not reopen a settled turn -------------------
+// `syncApprovals` runs from `onToolPhaseComplete`, which can land after the turn ended (a retry, a
+// pump unwinding). Pausing there projected `waiting` — an ACTIVE status — with no pump left, so
+// every later message queued behind `shouldDeferMidRunQueue` and nothing drained it.
+{
+  let state = deriveAgentState("idle");
+  const rejected = [];
+  const controller = createAgentStatusController({
+    getStatus: () => projectAgentStatus(state),
+    getAgentState: () => state,
+    transition: (event) => {
+      state = transition(state, event, { strict: false, onReject: (reason) => rejected.push(reason) });
+      return projectAgentStatus(state);
+    },
+    getError: () => state.errorMessage ?? "",
+    setError: () => {},
+    setPendingApprovalCount: () => {},
+    setFinishReason: () => {},
+    emitEvent: () => {},
+  });
+  const approval = { toolCallId: "call-1", toolName: "run_command", approvalId: "approval-1", input: {} };
+
+  controller.onRunStart();
+  controller.onRunFinish("stop");
+  assert.equal(projectAgentStatus(state), "completed");
+  controller.syncApprovals([approval]);
+  assert.equal(projectAgentStatus(state), "completed", "a settled turn is not parked by a late approval");
+  assert.equal(rejected.length, 1, "the rejected pause is reported, not silently dropped");
+
+  // The same call on a LIVE run still parks it: this is the gate the pause exists for.
+  controller.onRunStart();
+  controller.syncApprovals([approval]);
+  assert.equal(projectAgentStatus(state), "waiting");
+
+  // A failed turn is equally closed to a late approval, and stays `error` rather than `waiting`.
+  controller.onRunError("provider down");
+  controller.syncApprovals([approval]);
+  assert.equal(projectAgentStatus(state), "error");
 }
 
 // --- initial state is the zero value ---------------------------------------
