@@ -90,11 +90,6 @@ export class ProviderManager {
     return this.apiKeys.get(name);
   }
 
-  /** Brave API key from the last {@link configure} call (not CoreEnv). */
-  getBraveApiKey(): string | undefined {
-    return this.getApiKey("brave");
-  }
-
   /**
    * Set the session id used to spread selection across free providers. A single
    * conversation keeps the same provider across calls.

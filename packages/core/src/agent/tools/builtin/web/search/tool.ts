@@ -61,8 +61,6 @@ export const websearchOutputSchema = z.object({
   ...toolOutputBaseSchema.shape,
 });
 
-export type WebsearchOutput = z.infer<typeof websearchOutputSchema>;
-
 // ============================================================================
 // Tool Factory
 // ============================================================================

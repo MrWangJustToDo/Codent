@@ -82,8 +82,6 @@ export const webfetchOutputSchema = z.object({
   ...toolOutputBaseSchema.shape,
 });
 
-export type WebfetchOutput = z.infer<typeof webfetchOutputSchema>;
-
 // ============================================================================
 // Tool Factory
 // ============================================================================

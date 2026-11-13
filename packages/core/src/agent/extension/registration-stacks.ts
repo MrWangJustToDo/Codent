@@ -112,12 +112,6 @@ export class ExtensionRegistrationStacks {
     return { existed: true, live: pickTopByRank(remaining).cmd };
   }
 
-  /** The live command for a name (highest rank). */
-  liveCommand(name: string): ExtensionCommand | undefined {
-    const stack = this.commands.get(name);
-    return stack && stack.length > 0 ? pickTopByRank(stack).cmd : undefined;
-  }
-
   /** The live owner of a name, or undefined when nobody holds it. */
   commandOwner(name: string): string | undefined {
     const stack = this.commands.get(name);

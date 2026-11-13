@@ -1184,11 +1184,6 @@ export class ExtensionRunner {
       }));
   }
 
-  /** The command dispatch would run for a name (the highest-ranked registration). */
-  private liveCommand(name: string): ExtensionCommand | undefined {
-    return this.stacks.liveCommand(name);
-  }
-
   /** The resolved dispatch position for an extension id, defaulting for an unloaded id. */
   private rankOf(id: string): DispatchRank {
     return this.ranks.get(id) ?? { order: resolveExtensionOrder(undefined), seq: Number.MAX_SAFE_INTEGER };
