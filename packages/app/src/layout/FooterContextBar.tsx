@@ -87,7 +87,7 @@ export const FooterContextBar = ({
   return (
     <Box flexDirection="column" paddingX={1} gap={0}>
       <Box gap={2}>
-        <Box gap={2} flexShrink={0}>
+        <Box gap={2} flexShrink={0} height={1}>
           {/* Status indicator */}
           {status === "running" && (!retry || retry.strategy === "reactive_compact") && <Spinner text="Running..." />}
           {status === "thinking" && (!retry || retry.strategy === "reactive_compact") && <Spinner text="Thinking..." />}
