@@ -42,6 +42,7 @@ import type {
   CoreEnvExecResult,
   CommandResult,
   FileEntry,
+  McpStdioTransportConfig,
   ResolvedCoreEnv,
   RunCommandOptions,
   StartCommandOptions,
@@ -600,16 +601,41 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
     ...(fallback.startCommand
       ? { startCommand: (c: string, o?: StartCommandOptions) => fallback.startCommand!(c, o) }
       : {}),
-    // LSP, MCP stdio transports and the isolate driver need a local process runtime that the
-    // client cannot provide. Omitting them keeps every feature-detect on its degrade path
-    // (`createIsolateDriver` is the one member whose contract is to return `null`).
     ...(fallback.getMimeType ? { getMimeType: (p: string) => fallback.getMimeType!(p) } : {}),
     ...(fallback.commandExists ? { commandExists: (c: string) => fallback.commandExists!(c) } : {}),
+
+    // DELIBERATELY ABSENT: LSP and the code-mode isolate driver. A local process is not enough for
+    // either — they also answer from a local VIEW of the workspace, and the one this env serves is the
+    // client's. So both stay undefined and every feature-detect keeps its degrade path
+    // (`createIsolateDriver` is the member whose contract is to return `null`).
     ...(fallback.locateTreeSitterGrammar
       ? { locateTreeSitterGrammar: (g: string) => fallback.locateTreeSitterGrammar!(g) }
       : {}),
     ...(fallback.resizeImage
       ? { resizeImage: (b: Uint8Array, o: { maxWidth?: number }) => fallback.resizeImage!(b, o) }
+      : {}),
+    // MCP stdio is NOT in the LSP group above. There the member's absence degrades a feature; here it
+    // removed one: every configured stdio server failed at connect with "Stdio MCP transport is not
+    // available in this environment", so `--client-env` silently disabled MCP entirely while `/mcp`
+    // still listed the server as configured.
+    //
+    // `--client-env` borrows the client's fs/terminal ROUTING; it does not move process ownership,
+    // and this env already says so — free-text commands and background jobs run on `fallback`. An MCP
+    // stdio server needs that same runtime plus something ACP cannot give: a duplex pipe (requests
+    // go to the child's stdin, replies come back on its stdout, while `terminal/*` has no stdin
+    // write). So the spawner is the local one, and `getMCPTransportProcess` below stays the matching
+    // handle — both sides name the same child process.
+    //
+    // `codent acp` runs on the machine that launched it (over SSH or in a dev container that is not
+    // necessarily the editor's), so "local" means that machine. The one case this does not serve is a
+    // client whose workspace lives on ANOTHER machine: the server is then spawned here and sees this
+    // disk. That is a property of the deployment, which this env cannot detect — and withholding the
+    // member everywhere does not fix that case either, it only removes the capability from every
+    // deployment that could have used it.
+    ...(fallback.createMCPStdioTransport
+      ? {
+          createMCPStdioTransport: (config: McpStdioTransportConfig) => fallback.createMCPStdioTransport!(config),
+        }
       : {}),
     ...(fallback.getMCPTransportProcess
       ? { getMCPTransportProcess: (t: unknown) => fallback.getMCPTransportProcess!(t) }

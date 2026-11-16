@@ -169,4 +169,67 @@ function makeEnv(root, { bindImmediately = false } = {}) {
   check("routesWriteToClient is side-effect free", JSON.stringify(env.fallbackCounts) === JSON.stringify(before));
 }
 
+// ===========================================================================
+// 5. MCP stdio survives `--client-env`: the server is spawned by THIS process
+// ===========================================================================
+
+{
+  // The reported failure: with `--client-env`, every configured stdio MCP server failed at connect
+  // with "Stdio MCP transport is not available in this environment" — the member was simply absent
+  // from the env, and core refuses a stdio transport rather than degrading it. The real spawn path
+  // is the only decisive evidence, so this section runs a real fixture server end to end.
+  const root = await makeWorkspace("acp-e2e-mcp-");
+  const { env, clientRequests } = makeEnv(root);
+  check("the client-backed env can spawn a stdio MCP server", typeof env.createMCPStdioTransport === "function");
+
+  const agent = await CodentAgent.create({ env });
+  try {
+    check(
+      "…and the runtime env keeps it after `resolveCoreEnv`",
+      typeof agent.getEnv().createMCPStdioTransport === "function"
+    );
+
+    const statuses = [];
+    agent.getManager()?.on("session:mcp", (event) => {
+      const payload = event?.payload ?? event;
+      for (const server of payload?.servers ?? []) statuses.push(server);
+    });
+
+    const { session } = await agent.host.create({
+      name: "mcp",
+      model: "gpt-4o",
+      mcpServers: {
+        fixture: {
+          transport: "stdio",
+          command: process.execPath,
+          args: [path.join(import.meta.dirname, "mcp-stdio-fixture.mjs")],
+        },
+      },
+      // The ACP layer supplies this when the client can render a form; core's half is that it reaches
+      // the manager (which is what makes the MCP client ADVERTISE `elicitation` at the handshake).
+      mcpElicit: async () => "decline",
+    });
+    check("a session can be created with an explicit stdio server", Boolean(session));
+
+    const fixture = statuses.find((s) => s.name === "fixture");
+    check("the stdio server CONNECTED (not refused by the env)", fixture?.status === "connected");
+    check("its tool was registered through the manager", fixture?.toolCount === 1);
+    check("spawning it needed ZERO client requests", clientRequests.length === 0);
+
+    // `isElicitationAvailable()` is what `/mcp` prints and what decided the MCP handshake: if the
+    // option had been dropped on the way to `ManagedAgentConfig`, every server would see a client that
+    // cannot ask the user, which is the fail-closed default rather than an error.
+    const managed = agent.getManager()?.getAgent(session.getSnapshot().agentId);
+    check(
+      "the session-supplied elicit hook reached the MCP manager",
+      managed?.getMcpManager()?.isElicitationAvailable() === true
+    );
+  } finally {
+    // In `finally`, not on the happy path: the fixture child was spawned inside `host.create`, and a
+    // throw after that would leave it holding this process's stdio pipes open — the validator would
+    // HANG instead of printing the failure above.
+    await agent.dispose();
+  }
+}
+
 finish(checker.failures);

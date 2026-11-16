@@ -689,8 +689,12 @@ function fakeSession(id, diskId) {
 }
 
 // ===========================================================================
-// 8. Optional members the sink and the job registry depend on are forwarded
+// 8. Optional members are forwarded — always-local state and MCP stdio
 // ===========================================================================
+//
+// Two families, distinguished by what ABSENCE would cost: a pure regression (the sink/job registry
+// read `.agents/**` here, so a dropped member fails silently) and the removal of a capability (core
+// refuses a stdio mode it cannot spawn). The second is section 8b's MCP block below.
 
 {
   // These never serve a client path (`.agents/**` and outside-root both stay local), so dropping
@@ -721,6 +725,46 @@ function fakeSession(id, diskId) {
   // And a sink built over this env really does attach, which is the property that matters.
   const sinkEnv = { ...env, fs: { ...env.fs } };
   check("the env the sink sees still has appendFile", typeof sinkEnv.fs.appendFile === "function");
+
+  // MCP stdio is forwarded too — with the one caveat the opposite of "pure regression": leaving it
+  // absent does not degrade a feature, it removes one. Core refuses a stdio server outright when
+  // the member is missing (`Stdio MCP transport is not available in this environment`), so
+  // `--client-env` used to disable every configured stdio server while `/mcp` still listed it.
+  check("MCP stdio is absent when the fallback cannot spawn one", !("createMCPStdioTransport" in makeEnv()));
+  {
+    const transport = { kind: "fake-mcp-transport" };
+    const handle = { killed: false, kill: () => true };
+    const spawner = {
+      ...fallbackEnv,
+      createMCPStdioTransport: (config) => {
+        fallbackCalls.push(["createMCPStdioTransport", config]);
+        return transport;
+      },
+      getMCPTransportProcess: (t) => (t === transport ? handle : undefined),
+    };
+    const spawnerEnv = createAcpClientEnv({
+      client: recordingClient,
+      sessionId,
+      rootPath: "/ws",
+      fallback: spawner,
+      caps: fullCaps,
+    });
+    reset();
+    const config = { command: "npx", args: ["@browsermcp/mcp@latest"], env: { TOKEN: "x" } };
+    const spawned = spawnerEnv.createMCPStdioTransport(config);
+    check("MCP stdio is forwarded from the fallback", typeof spawnerEnv.createMCPStdioTransport === "function");
+    check(
+      "the spawn reaches the fallback",
+      fallbackCalls.some((c) => c[0] === "createMCPStdioTransport")
+    );
+    check(
+      "the config is passed through untouched (command/args/env)",
+      fallbackCalls.find((c) => c[0] === "createMCPStdioTransport")?.[1] === config
+    );
+    check("spawning one makes ZERO client requests", requests.length === 0);
+    check("the transport is the fallback's own object (a wrapper would lose the kill handle)", spawned === transport);
+    check("so getMCPTransportProcess still recognises it", spawnerEnv.getMCPTransportProcess(spawned) === handle);
+  }
 }
 
 // ===========================================================================
