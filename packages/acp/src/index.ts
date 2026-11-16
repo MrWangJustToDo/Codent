@@ -61,8 +61,20 @@ export {
   mapPermissionOutcome,
   buildElicitationRequest,
   mapElicitationResponse,
+  // MCP server questions: the ACP form built from a server's `elicitation/create` and the answer
+  // mapped back. Exported so a validator (or a sibling host) can exercise them without a transport.
+  buildMcpElicitationRequest,
+  mapMcpElicitResult,
   type ApprovalDecision,
   type AskUserInteraction,
   type ElicitedAnswer,
 } from "./permissions.js";
+export {
+  createMcpElicitation,
+  type McpElicitation,
+  type McpElicitationOptions,
+  // Exported because `bind()` takes one, not as an interface to implement: it is a structural view of
+  // the host's own session bridge (`acpId` / `pending` / `closed`), whose owner is `agent.ts`.
+  type McpElicitationSession,
+} from "./mcp-elicitation.js";
 export { DEFAULT_INTERACTION_TIMEOUT_MS, approvalPolicyKey } from "./interactions.js";

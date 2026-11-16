@@ -4,6 +4,8 @@
  * - approvals  ↔ `session/request_permission` (four option kinds → `respondApproval`)
  * - `ask_user` ↔ `elicitation/create` (form), degrading to an agent message when
  *   the client did not advertise the `elicitation` capability.
+ * - an MCP server's `elicitation/create` ↔ the same ACP request, one form for one question
+ *   (`buildMcpElicitationRequest` / `mapMcpElicitResult`; the driver is `mcp-elicitation.ts`).
  */
 
 import type {
@@ -11,7 +13,9 @@ import type {
   RequestPermissionResponse,
   CreateElicitationRequest,
   CreateElicitationResponse,
+  ElicitationSchema,
 } from "@agentclientprotocol/sdk";
+import type { McpElicitResult } from "@codent/core";
 
 /** The four standard permission options, in the order ACP clients expect. */
 export function permissionOptions(): PermissionOption[] {
@@ -140,4 +144,94 @@ export function mapElicitationResponse(response: CreateElicitationResponse): Eli
   const text = value == null ? "" : String(value);
   if (!text.trim()) return null;
   return { answer: text };
+}
+
+/**
+ * Build an ACP form elicitation from an MCP server's `elicitation/create` request, or `undefined`
+ * when the request is one this host does not relay.
+ *
+ * Both protocols describe the same interaction — a message plus a flat JSON Schema of primitive
+ * fields — so the server's schema travels as-is: rewriting it would only cost its titles and
+ * descriptions. Two fields DO get rewritten, because ACP validates them more strictly than MCP and a
+ * rejected request means the user sees no form at all:
+ * - an unknown `format` is dropped (ACP defines `email`/`uri`/`date`/`date-time`), and
+ * - MCP's `enumNames` becomes the equivalent `oneOf` const/title list, so labels survive.
+ *
+ * The server's own `message` is the prompt; when it is missing the message names the server, because
+ * a form with no text leaves the user no way to know who is asking.
+ *
+ * `toolCallId` is deliberately omitted: the hook is not told which tool call the server is serving,
+ * so the request is scoped to the session rather than inventing an id the client would then attach to
+ * the wrong row (ACP documents the session scope as the same thing without a specific call).
+ *
+ * `undefined` is returned for MCP's URL mode, where the server sends the user to a URL and answers
+ * out of band: an ACP form cannot express it, and rendering it as an empty form would ask the user
+ * for values nobody reads. Core advertises only form elicitation, so a compliant server cannot send
+ * it — this is what keeps a non-compliant one from producing a meaningless dialog.
+ */
+export function buildMcpElicitationRequest(
+  sessionId: string,
+  server: string,
+  params: unknown
+): CreateElicitationRequest | undefined {
+  const payload = (params ?? {}) as { mode?: unknown; message?: unknown; requestedSchema?: unknown };
+  if (payload.mode === "url") return undefined;
+  const message =
+    typeof payload.message === "string" && payload.message.trim().length > 0
+      ? payload.message
+      : `The MCP server "${server}" needs your input.`;
+  const schema = payload.requestedSchema;
+  // `type` last so a server that sent its own (malformed) one cannot turn the form into something
+  // ACP will not render; everything else is passed through except the two fields above.
+  const requestedSchema: ElicitationSchema =
+    schema !== null && typeof schema === "object" && !Array.isArray(schema)
+      ? ({ ...normalizeElicitationProperties(schema as Record<string, unknown>), type: "object" } as ElicitationSchema)
+      : { type: "object", properties: {} };
+  return { mode: "form", sessionId, message, requestedSchema };
+}
+
+/** The string formats ACP defines; a `format` outside this set fails the client's own validation. */
+const ACP_STRING_FORMATS = new Set(["email", "uri", "date", "date-time"]);
+
+/** Apply the two schema rewrites {@link buildMcpElicitationRequest} documents, per property. */
+function normalizeElicitationProperties(schema: Record<string, unknown>): Record<string, unknown> {
+  const properties = schema.properties;
+  if (properties === null || typeof properties !== "object" || Array.isArray(properties)) return schema;
+  const normalized: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(properties as Record<string, unknown>)) {
+    normalized[name] = normalizeElicitationProperty(value);
+  }
+  return { ...schema, properties: normalized };
+}
+
+function normalizeElicitationProperty(value: unknown): unknown {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
+  const property = { ...(value as Record<string, unknown>) };
+  if (typeof property.format === "string" && !ACP_STRING_FORMATS.has(property.format)) delete property.format;
+  const { enum: values, enumNames } = property;
+  if (Array.isArray(values) && Array.isArray(enumNames) && values.length === enumNames.length) {
+    property.oneOf = values.map((option, index) => ({ const: String(option), title: String(enumNames[index]) }));
+    delete property.enum;
+    delete property.enumNames;
+  }
+  return property;
+}
+
+/**
+ * Map an ACP elicitation response onto the MCP result.
+ *
+ * The three MCP actions are the three standard ACP ones; a custom action (allowed on the wire for
+ * future variants) becomes `decline`, because MCP's own client rejects a value outside its three and
+ * inventing one is worse than refusing. `content` is dropped unless the action is `accept` — a client
+ * that submits a form and then declines must not hand the server values it never agreed to.
+ *
+ * The bare-string form is core's own vocabulary: `McpElicitResult` accepts `"decline"` / `"cancel"`
+ * as strings (its object member is narrowed to `accept`), and the manager normalizes them.
+ */
+export function mapMcpElicitResult(response: CreateElicitationResponse): McpElicitResult {
+  if (response.action === "accept") {
+    const content = (response as { content?: Record<string, unknown> }).content;
+    return content ? { action: "accept", content } : { action: "accept" };
+  }
+  return response.action === "cancel" ? "cancel" : "decline";
 }

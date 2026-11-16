@@ -12,17 +12,24 @@
 /**
  * Build a checker whose `check()` prints each verdict and tallies failures.
  *
- * @returns {{ check: (label: string, cond: unknown) => void, failures: number }}
+ * @returns {{ check: (label: string, cond: unknown, detail?: unknown) => void, failures: number }}
  */
 export function createChecker() {
   const state = { failures: 0 };
   return {
-    check(label, cond) {
+    /**
+     * @param label - What is being asserted, phrased as the fact that must hold.
+     * @param cond - The verdict; anything falsy is a failure.
+     * @param detail - Optional diagnostic, printed ONLY on failure — the reason (a mismatch, an issue
+     *   list) is worth nothing when the check passes and is the first thing to look at when it does not.
+     */
+    check(label, cond, detail) {
       if (cond) {
         console.log(`PASS  ${label}`);
       } else {
         state.failures += 1;
         console.log(`FAIL  ${label}`);
+        if (detail !== undefined) console.log(`      ${typeof detail === "string" ? detail : JSON.stringify(detail)}`);
       }
     },
     get failures() {

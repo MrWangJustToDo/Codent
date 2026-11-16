@@ -114,8 +114,10 @@ export type { SessionMeta, SessionData, ResumeResult, ToolApprovalRecord } from 
 // able to NAME the config it passes, so the union is public even though the manager is not.
 export type { McpServerConfig, McpServerConfigStdio, McpServerConfigHttp } from "./agent/mcp";
 // A host's opt-in for the `elicitation` capability: supplying this hook (through
-// `AgentSessionCreateOptions.mcpElicit`) is what makes the MCP client advertise it.
-export type { McpElicitAnswer, McpElicitHook } from "./agent/mcp";
+// `AgentSessionCreateOptions.mcpElicit`) is what makes the MCP client advertise it. The RESULT type is
+// public as well, so a host that implements the hook can name what it returns — `"decline"` /
+// `"cancel"` may be the bare string (`McpElicitResult`).
+export type { McpElicitAnswer, McpElicitHook, McpElicitResult } from "./agent/mcp";
 export type { McpConfigSourceKind, McpServerStatus } from "./runtime-types/mcp-status.js";
 export type {
   BackgroundJobKind,

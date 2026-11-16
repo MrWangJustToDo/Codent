@@ -12,6 +12,7 @@ export {
   type McpConfig,
   type McpElicitAnswer,
   type McpElicitHook,
+  type McpElicitResult,
   type McpServerConfig,
   type McpServerConfigStdio,
   type McpServerConfigHttp,

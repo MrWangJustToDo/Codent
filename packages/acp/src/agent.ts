@@ -28,6 +28,7 @@ import { createChildProjector, type ChildProjectorHandle } from "./child-project
 import { commandsFromSnapshot, dispatchSlashCommand, parseSlashCommand } from "./commands.js";
 import { promptBlocksToContent, type PromptCaps } from "./content.js";
 import { createInteractionHandlers, hasPendingTextAsk, type InteractionHandlers } from "./interactions.js";
+import { createMcpElicitation, type McpElicitation } from "./mcp-elicitation.js";
 import { mapAcpMcpServers } from "./mcp.js";
 import { resolveRoot } from "./paths.js";
 import { AcpProjector } from "./projector.js";
@@ -58,6 +59,7 @@ import type {
 } from "@agentclientprotocol/sdk";
 import type {
   AgentToolConfig,
+  McpElicitHook,
   McpServerConfig,
   AgentSession,
   AgentSessionHost,
@@ -143,6 +145,14 @@ interface SessionBridge {
    * fall back to the workspace file and silently change its tool set.
    */
   mcpServers?: McpServer[];
+  /**
+   * This session's MCP elicitation channel, when the client can render a form.
+   *
+   * Bound to the bridge ITSELF, not to an id: the hook reads `acpId` on every call, so a fork — the
+   * one place the outgoing handle changes (`bridge.acpId = newId`) — carries the clone's handle
+   * without re-binding, and a question raised mid-fork cannot be scoped to the source's conversation.
+   */
+  mcpElicitation?: McpElicitation;
   /** `closeBridge` is idempotent: `conn.closed` and `session/close` can race. */
   closed: boolean;
   /**
@@ -468,6 +478,8 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       deferEmits?: boolean;
       /** Raw ACP MCP server list, retained for a fork's source re-attach. */
       mcpServers?: McpServer[];
+      /** The session's MCP elicitation channel (absent when the client cannot render a form). */
+      mcpElicitation?: McpElicitation;
     }
   ): SessionBridge => {
     const bridge: SessionBridge = {
@@ -506,9 +518,14 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       replayed: false,
       mcpKey: opts.mcpKey ?? "",
       ...(opts.mcpServers ? { mcpServers: opts.mcpServers } : {}),
+      // Bound to the bridge: the hook reads `acpId` per call, so `/new` (same handle) and
+      // `session/fork` (re-keyed handle) need no re-binding.
+      ...(opts.mcpElicitation ? { mcpElicitation: opts.mcpElicitation } : {}),
       closed: false,
       projector: undefined as unknown as AcpProjector,
     };
+    // The hook asks through the handle this bridge emits under — the only id a client can address.
+    bridge.mcpElicitation?.bind(bridge);
     bridge.projector = new AcpProjector(session, {
       rootPath: opts.rootPath,
       emit: (update) => emit(bridge.acpId, update),
@@ -772,7 +789,9 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
 
   const createOptions = (
     mcpServers?: Record<string, McpServerConfig>,
-    systemPrompt = options.defaults.systemPrompt
+    systemPrompt = options.defaults.systemPrompt,
+    /** Answers MCP `elicitation/create` for this session; absent ⇒ core advertises none. */
+    mcpElicit?: McpElicitHook
   ): Parameters<AgentSessionHost["create"]>[0] => {
     sessionSeq += 1;
     return {
@@ -795,8 +814,35 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       // Session-supplied servers REPLACE the workspace `.agents/mcp.json` (see
       // `AgentSessionCreateOptions.mcpServers`); absent ⇒ the file is the source, as before.
       ...(mcpServers ? { mcpServers } : {}),
+      // An MCP server's question is answered through the client, so the capability exists exactly
+      // when the client advertised form elicitation — see `mcp-elicitation.ts` for why the decision
+      // belongs here (MCP connects inside `host.create`, after the ACP handshake).
+      ...(mcpElicit ? { mcpElicit } : {}),
     };
   };
+
+  /**
+   * This session's MCP elicitation channel, or `undefined` when nothing can answer one.
+   *
+   * Two independent reasons to withhold the hook, and both must hold for one to exist:
+   * - the client advertised form elicitation (a hook claims "the user can be asked"), and
+   * - the host accepts one at all — a remote session host refuses it, because a hook is executable
+   *   code that cannot cross the wire (see `AgentSessionHost.acceptMcpElicit`). Supplying it there
+   *   made every `session/new`/`load`/`resume` throw instead of merely losing elicitation.
+   *
+   * The hook is built BEFORE the session (MCP servers connect during `host.create`) and bound by
+   * `attach`, because the bridge it must address does not exist yet.
+   */
+  const mcpElicitationFor = (
+    caps: ClientCapabilities | undefined,
+    host: AgentSessionHost
+  ): McpElicitation | undefined =>
+    host.acceptMcpElicit === false
+      ? undefined
+      : createMcpElicitation(caps, {
+          client,
+          ...(options.interactionTimeoutMs !== undefined ? { timeoutMs: options.interactionTimeoutMs } : {}),
+        });
 
   /**
    * Refuse a request that asks for `additionalDirectories`.
@@ -838,11 +884,14 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     // rather than borrowed from the process-wide host.
     const runtime = await createRuntime(sessionRoot);
     let session: AgentSession;
+    // Built BEFORE the session: MCP servers connect inside `host.create`, and supplying the hook is
+    // what makes core advertise `elicitation` at that handshake. Bound after it, when the bridge exists.
+    const elicit = mcpElicitationFor(initCaps, runtime.host);
     try {
       // Built inside the try: a prompt-build failure would otherwise discard the per-session
       // runtime (`--client-env` env / a foreign root's agent) with nothing left to release it.
       const systemPrompt = await sessionSystemPrompt(sessionRoot, runtime);
-      ({ session } = await runtime.host.create(createOptions(mapped.servers, systemPrompt)));
+      ({ session } = await runtime.host.create(createOptions(mapped.servers, systemPrompt, elicit?.hook)));
     } catch (error) {
       // The runtime owns a per-session env; if the session never came to exist, nothing else will
       // ever release it (only `closeBridge` disposes, and there is no bridge yet).
@@ -857,6 +906,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       diskSessionId: acpId,
       mcpKey: mcpKeyOf(mapped.servers),
       ...(ctx.params.mcpServers ? { mcpServers: ctx.params.mcpServers } : {}),
+      ...(elicit ? { mcpElicitation: elicit } : {}),
       // The response frame must carry the id before ANY update keyed by it arrives. `start()` queues
       // the retained values and the seed, and the tick below flushes them after the response.
       deferEmits: true,
@@ -957,12 +1007,15 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     const runtime = await createRuntime(sessionRoot);
     runtime.bind(sessionId);
     let session: AgentSession;
+    // Same ordering as `session/new`: the hook must exist before `host.create` (MCP connects there),
+    // and each resumed session gets its own channel, bound to its own bridge.
+    const elicit = mcpElicitationFor(clientCaps, runtime.host);
     try {
       // Built inside the try for the same reason as `session/new`: a prompt-build failure must not
       // orphan the per-session runtime.
       const systemPrompt = await sessionSystemPrompt(sessionRoot, runtime);
       ({ session } = await runtime.host.create({
-        ...createOptions(mapped.servers, systemPrompt),
+        ...createOptions(mapped.servers, systemPrompt, elicit?.hook),
         resumeSessionId: sessionId,
       }));
     } catch (error) {
@@ -979,6 +1032,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       diskSessionId: diskSessionId(session),
       mcpKey: mcpKeyOf(mapped.servers),
       ...(mcpServers ? { mcpServers } : {}),
+      ...(elicit ? { mcpElicitation: elicit } : {}),
       replay,
       // Both `load` and `resume` are reconnects: an already-announced child must not replay its
       // history. A child created after this attach is new and does replay.
@@ -1147,6 +1201,8 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     bridge.acpId = newId;
     bridge.diskSessionId = newId;
     bridge.runtime.bind(newId);
+    // No elicitation re-binding: the channel reads `bridge.acpId` on every question, so the clone
+    // answers on `newId` by construction (a re-bind here would be the second place to remember).
     bridge.replayed = false;
     sessionRoots.set(newId, bridge.rootPath);
     // A fork is a new conversation: approvals/answers from the source do not carry over.

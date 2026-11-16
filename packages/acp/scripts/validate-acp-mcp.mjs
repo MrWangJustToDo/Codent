@@ -92,11 +92,12 @@ check("an empty list yields no servers", mapAcpMcpServers([]).servers === undefi
 // ============================================================================
 
 /** Captures what the host was asked to create, and reports a session-shaped double. */
-function makeHost() {
+function makeHost(overrides = {}) {
   const createCalls = [];
   const session = makeFakeSession("agent_m", "ses_mcp");
 
   const host = {
+    ...overrides,
     async create(options) {
       createCalls.push(options);
       return { session };
@@ -500,6 +501,176 @@ function makeFakeSession(id, diskId, overrides = {}) {
   const mcp = snapshot.mcp;
   check("the MCP summary lists the session's servers", mcp?.servers?.length === 1);
   check("the summary carries no path-like placeholder", !JSON.stringify(mcp).includes("session-options"));
+}
+
+// ============================================================================
+// E. An MCP server's question reaches the client (and only when it can answer)
+// ============================================================================
+//
+// `mcpElicit` is core's whole opt-in for the MCP `elicitation` capability: with a hook core
+// advertises it at the MCP handshake and registers the handler; without one it declares nothing (a
+// server that asks anyway gets a protocol error, which core's own `validate:mcp-client` covers). MCP
+// servers connect inside `host.create`, which runs after the ACP `initialize` handshake, so the
+// client's capability is knowable at the moment the hook would be supplied — and both halves of the
+// decision are asserted here, because "no hook" and "a hook that always declines" look the same from
+// the tool's side but only one is honest about the handshake.
+
+{
+  const asked = [];
+  const { host, createCalls } = makeHost();
+  // A short deadline keeps the post-close case below a millisecond-scale check: with the default
+  // (five minutes) a request that never settles would read as a hung validator, not as a failure.
+  const app = createAcpAgent({ host, defaults: { model: "fake-model" }, rootPath: "/ws", interactionTimeoutMs: 50 });
+  const client = createClient({ name: "elicit-client" }).onRequest(methods.client.elicitation.create, (ctx) => {
+    asked.push(ctx.params);
+    return { action: "accept", content: { profile: "work" } };
+  });
+
+  let hook;
+  await client.connectWith(app, async (cx) => {
+    await cx.request(methods.agent.initialize, {
+      protocolVersion: 1,
+      clientCapabilities: { elicitation: { form: {} } },
+    });
+    const created = await cx.request(methods.agent.session.new, { cwd: "/ws", mcpServers: [] });
+    hook = createCalls.at(-1)?.mcpElicit;
+    check("the session's create options carry an elicit hook", typeof hook === "function");
+
+    const answer = await hook({
+      server: "browsermcp",
+      params: {
+        message: "Which profile?",
+        requestedSchema: { type: "object", properties: { profile: { type: "string", enum: ["work", "personal"] } } },
+      },
+    });
+    check("the question reaches the client as a form", asked[0]?.mode === "form");
+    check("…scoped to the session the client created", asked[0]?.sessionId === created.sessionId);
+    check("…carrying the server's own message", asked[0]?.message === "Which profile?");
+    check(
+      "…and the server's schema (enum/title) survives the hop",
+      asked[0]?.requestedSchema?.properties?.profile?.enum?.[0] === "work"
+    );
+    check(
+      "the accepted form comes back as MCP content",
+      JSON.stringify(answer) === JSON.stringify({ action: "accept", content: { profile: "work" } })
+    );
+  });
+
+  // The connection is gone (this is what a client quitting mid-question looks like). The hook must
+  // still ANSWER: a server's tool call parked on a request nobody will send is the failure mode.
+  // `decline` and not `cancel`: closing the connection closed this session, so the question is
+  // refused up front instead of being sent to a peer that can no longer receive it.
+  const late = await hook({ server: "browsermcp", params: { message: "still there?" } });
+  check("a question after the connection closed is declined, not left hanging", late === "decline", String(late));
+}
+
+{
+  // The host cannot carry the hook (the remote session host refuses one: a hook is executable code,
+  // so it cannot cross the wire). Supplying it anyway made every `session/new`/`load`/`resume` throw
+  // for any client that advertises form elicitation — a working configuration turned into a broken
+  // one. The client capability is therefore only HALF the condition.
+  const { host, createCalls } = makeHost({ acceptMcpElicit: false });
+  const app = createAcpAgent({ host, defaults: { model: "fake-model" }, rootPath: "/ws" });
+  const client = createClient({ name: "refusing-host-client" });
+  await client.connectWith(app, async (cx) => {
+    await cx.request(methods.agent.initialize, {
+      protocolVersion: 1,
+      clientCapabilities: { elicitation: { form: {} } },
+    });
+    const created = await cx.request(methods.agent.session.new, { cwd: "/ws", mcpServers: [] });
+    check("a host that refuses the hook still creates the session", typeof created.sessionId === "string");
+    check("…without being handed one", createCalls.at(-1)?.mcpElicit === undefined);
+  });
+}
+
+{
+  // `load`/`resume` reconnect MCP servers inside `host.create` too, so the hook has to be supplied on
+  // every path that starts a session — not only the first one.
+  const { host, createCalls } = makeHost();
+  const app = createAcpAgent({ host, defaults: { model: "fake-model" }, rootPath: "/ws" });
+  const client = createClient({ name: "restore-elicit-client" });
+  await client.connectWith(app, async (cx) => {
+    await cx.request(methods.agent.initialize, {
+      protocolVersion: 1,
+      clientCapabilities: { elicitation: { form: {} } },
+    });
+    await cx.request(methods.agent.session.new, { cwd: "/ws", mcpServers: [] });
+    check("session/new supplies the hook", typeof createCalls.at(-1)?.mcpElicit === "function");
+    await cx.request(methods.agent.session.resume, { sessionId: "ses_r1", cwd: "/ws", mcpServers: [] });
+    check("session/resume supplies it too", typeof createCalls.at(-1)?.mcpElicit === "function");
+    await cx.request(methods.agent.session.load, { sessionId: "ses_l1", cwd: "/ws", mcpServers: [] });
+    check("…and so does session/load", typeof createCalls.at(-1)?.mcpElicit === "function");
+  });
+}
+
+{
+  // Same session, client without form elicitation: no hook at all, so core never tells a server
+  // "you may ask the user" — the documented fail-closed-by-absence path.
+  const { host, createCalls } = makeHost();
+  const app = createAcpAgent({ host, defaults: { model: "fake-model" }, rootPath: "/ws" });
+  const client = createClient({ name: "no-elicit-client" });
+  await client.connectWith(app, async (cx) => {
+    await cx.request(methods.agent.initialize, { protocolVersion: 1, clientCapabilities: {} });
+    await cx.request(methods.agent.session.new, { cwd: "/ws", mcpServers: [] });
+  });
+  check("no elicit hook without the client capability", createCalls.at(-1)?.mcpElicit === undefined);
+}
+
+{
+  // A fork re-keys the SAME bridge (`bridge.acpId = newId`) and the channel reads that field on every
+  // question, so the clone's dialog is scoped to the clone without a re-bind to forget. `session.fork`
+  // is the only place the outgoing handle changes; the source conversation keeps its own channel.
+  const asked = [];
+  const forkedId = "ses_forked";
+  let snapshot = baseSnapshot("agent_fork", { activeSessionId: "ses_src" });
+  const session = {
+    id: "agent_fork",
+    getSnapshot: () => snapshot,
+    getAgentStreamSnapshot: () => null,
+    subscribe: () => () => {},
+    async dispatch(command) {
+      if (command?.type === "session.clone") {
+        snapshot = baseSnapshot("agent_fork", { activeSessionId: forkedId });
+        return { ok: true, data: { sessionId: forkedId } };
+      }
+      return { ok: true };
+    },
+  };
+  const createCalls = [];
+  const host = {
+    async create(options) {
+      createCalls.push(options);
+      return { session };
+    },
+    connect: () => null,
+    list: () => [],
+    async destroy() {},
+  };
+  const app = createAcpAgent({ host, defaults: { model: "fake-model" }, rootPath: "/ws" });
+  const client = createClient({ name: "fork-elicit-client" }).onRequest(methods.client.elicitation.create, (ctx) => {
+    asked.push(ctx.params);
+    return { action: "accept", content: { ok: true } };
+  });
+
+  await client.connectWith(app, async (cx) => {
+    await cx.request(methods.agent.initialize, {
+      protocolVersion: 1,
+      clientCapabilities: { elicitation: { form: {} } },
+    });
+    const created = await cx.request(methods.agent.session.new, { cwd: "/ws", mcpServers: [] });
+    const hook = createCalls.at(-1)?.mcpElicit;
+    check("the forked session's hook exists", typeof hook === "function");
+
+    const forked = await cx.request(methods.agent.session.fork, { sessionId: created.sessionId, cwd: "/ws" });
+    check("the fork produced a new session", forked.sessionId === forkedId);
+
+    await hook({ server: "browsermcp", params: { message: "after the fork" } });
+    check(
+      "a question after a fork is scoped to the CLONE's handle",
+      asked.at(-1)?.sessionId === forkedId,
+      JSON.stringify(asked.at(-1)?.sessionId)
+    );
+  });
 }
 
 finish(checker.failures);

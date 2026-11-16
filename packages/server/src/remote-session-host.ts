@@ -57,6 +57,9 @@ export function createRemoteAgentSessionHost(options: RemoteAgentSessionHostOpti
   };
 
   return {
+    // The hook is executable code, so this host cannot carry it — and refusing it up front (rather
+    // than dropping it) is what lets a caller decide not to build one. See `acceptMcpElicit`.
+    acceptMcpElicit: false,
     async create(createOptions) {
       if (createOptions.extensions?.length) {
         // ExtensionFactory is executable code, not serializable state. Dropping it would
@@ -69,7 +72,8 @@ export function createRemoteAgentSessionHost(options: RemoteAgentSessionHostOpti
       if (createOptions.mcpElicit) {
         // A hook is executable code too. The server advertises no `elicitation` capability without
         // one, so silently dropping it here would make every MCP server that asks a question fail
-        // with a protocol error while the caller believed the hook had crossed the wire.
+        // with a protocol error while the caller believed the hook had crossed the wire. Callers
+        // read `acceptMcpElicit: false` first; this guard catches the ones that do not.
         throw new Error(
           "mcpElicit is not supported by a remote session host; create the session in-process to supply the hook."
         );

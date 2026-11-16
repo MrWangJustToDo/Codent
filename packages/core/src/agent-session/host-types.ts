@@ -201,6 +201,17 @@ export interface AgentSessionHost {
    * that ownership set.
    */
   create(options: AgentSessionCreateOptions): Promise<AgentSessionCreateResult>;
+  /**
+   * Whether {@link create} accepts `mcpElicit` (a hook the caller supplies so an MCP server's
+   * question reaches its user).
+   *
+   * Absent means yes. A host that cannot carry the hook declares `false`, because the hook is
+   * executable code: a remote host would have to ship it over the wire, and silently dropping it
+   * would leave the server believing its question reached a user who never saw it. Consumers that
+   * own the hook (the ACP host builds one from client capabilities) read this BEFORE constructing
+   * it, so "this plane cannot ask" degrades to "no hook" instead of a throwing `create`.
+   */
+  acceptMcpElicit?: boolean;
   /** Bind an AgentSession to an existing agent id (root or subagent). */
   connect(agentId: string): AgentSession | null;
   /** List live agents currently owned by this host (roots and children). */
