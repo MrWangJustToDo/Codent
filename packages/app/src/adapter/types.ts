@@ -24,6 +24,11 @@ export interface AppConfig {
   maxIterations: number;
   /** Max concurrent `task` subagents under this agent (core default 4). */
   maxConcurrentTasks?: number;
+  /**
+   * Idle budget (ms) while a model response has a tool call waiting for its arguments; `0`
+   * disables the guard. Core default 120 s. Tool execution and a slow first token are never timed.
+   */
+  streamStallTimeoutMs?: number;
   mcpConfigPath: string;
   /**
    * Extra extension directories (comma-separated on CLI as `--extension-dirs`).

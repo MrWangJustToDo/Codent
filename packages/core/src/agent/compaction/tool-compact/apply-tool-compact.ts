@@ -1,6 +1,7 @@
 import { isSyntheticCancelOutput, syntheticCancelMessage } from "../../../runtime-types/abort.js";
 import { formatExtensionDeniedOutput, isExtensionDeniedOutput } from "../../../runtime-types/tool-denial.js";
 import { isBareToolErrorResult } from "../../../runtime-types/tool-error.js";
+import { interruptedToolMessage, isInterruptedToolOutput } from "../../../runtime-types/tool-truncation.js";
 import { pairToolResults } from "../tool-call-pairing.js";
 
 import {
@@ -131,6 +132,19 @@ export async function applyToolCompact(
     if (isSyntheticCancelOutput(rawOutput)) {
       const normalized = normalizeModelToolContent([
         { type: "text" as const, content: syntheticCancelMessage(rawOutput) },
+      ]);
+      cache.set(cacheKey, { source: message.content, projected: normalized });
+      setContent(target.messageIndex, normalized);
+      continue;
+    }
+
+    // A call that never ran (truncated arguments, or a run-level interruption) is the same class:
+    // a shared marker, not any tool's output. Without this branch the tool's own formatter read
+    // absent fields and the MODEL saw a fabricated result — `write_file` said
+    // "Overwrote file: undefined", `run_command` said "Exit code: undefined", `todo` threw.
+    if (isInterruptedToolOutput(rawOutput)) {
+      const normalized = normalizeModelToolContent([
+        { type: "text" as const, content: interruptedToolMessage(rawOutput) },
       ]);
       cache.set(cacheKey, { source: message.content, projected: normalized });
       setContent(target.messageIndex, normalized);

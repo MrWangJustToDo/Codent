@@ -67,16 +67,35 @@ assert.deepEqual(counts, {
   commands: 0,
   tasks: 0,
   other: 0,
+  interrupted: 0,
   errors: 0,
 });
 
 assert.equal(formatToolActivitySummary(counts), "2 reads, 1 edit, 1 search");
 assert.equal(
-  formatToolActivitySummary({ reads: 1, edits: 0, searches: 0, commands: 0, tasks: 0, other: 0, errors: 0 }),
+  formatToolActivitySummary({
+    reads: 1,
+    edits: 0,
+    searches: 0,
+    commands: 0,
+    tasks: 0,
+    other: 0,
+    interrupted: 0,
+    errors: 0,
+  }),
   "1 read"
 );
 assert.equal(
-  formatToolActivitySummary({ reads: 0, edits: 0, searches: 0, commands: 0, tasks: 0, other: 0, errors: 0 }),
+  formatToolActivitySummary({
+    reads: 0,
+    edits: 0,
+    searches: 0,
+    commands: 0,
+    tasks: 0,
+    other: 0,
+    interrupted: 0,
+    errors: 0,
+  }),
   null
 );
 assert.equal(summarizeToolActivity([]), null);
@@ -94,9 +113,49 @@ assert.deepEqual(withErrors, {
   commands: 0,
   tasks: 0,
   other: 0,
+  interrupted: 0,
   errors: 2,
 });
 assert.equal(formatToolActivitySummary(withErrors), "2 errors");
+
+// A call that never ran is counted in its own bucket, never named as a tool the turn used, and its
+// path is not claimed as explored.
+{
+  const interrupted = {
+    success: false,
+    error: "The response ended before this tool call's arguments were complete. It did not run.",
+    reason: "The response ended before this tool call's arguments were complete. It did not run.",
+    interrupted: true,
+    argumentsIncomplete: true,
+  };
+  const mixed = [
+    { id: "o1", name: "my_tool", type: "tool-call", state: "complete", output: { ok: true } },
+    { id: "o2", name: "my_tool", type: "tool-call", state: "complete", output: interrupted },
+  ];
+  assert.deepEqual(collectOtherToolNames(mixed), [{ name: "my_tool", count: 1 }]);
+  const mixedCounts = countToolActivity(mixed);
+  assert.equal(mixedCounts.other, 1);
+  assert.equal(mixedCounts.interrupted, 1);
+  assert.equal(
+    formatToolActivitySummary(mixedCounts, collectOtherToolNames(mixed)),
+    "my_tool, 1 interrupted call",
+    "the interrupted call is counted separately from the tool names that actually ran"
+  );
+  assert.equal(
+    formatExploredActivitySummary([
+      {
+        id: "o3",
+        name: "read_file",
+        type: "tool-call",
+        state: "complete",
+        arguments: JSON.stringify({ path: "packages/app/src/foo.ts" }),
+        output: interrupted,
+      },
+    ]),
+    "1 interrupted call",
+    "an interrupted read contributes no explored-path label"
+  );
+}
 
 assert.equal(
   extractActivityLabel({

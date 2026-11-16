@@ -86,6 +86,9 @@ export function createRemoteAgentSessionHost(options: RemoteAgentSessionHostOpti
           systemPrompt: createOptions.systemPrompt,
           maxIterations: createOptions.maxIterations,
           maxConcurrentTasks: createOptions.maxConcurrentTasks,
+          // Model-stream idle guard (0 disables). `JSON.stringify` drops `undefined`, so an
+          // omitted option never becomes an explicit null on the server.
+          streamStallTimeoutMs: createOptions.streamStallTimeoutMs,
           mcpConfigPath: createOptions.mcpConfigPath,
           ...(createOptions.mcpServers ? { mcpServers: createOptions.mcpServers } : {}),
           extensionDirs: createOptions.extensionDirs,

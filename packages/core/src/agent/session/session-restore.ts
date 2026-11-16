@@ -8,7 +8,7 @@ import { normalizeSessionApprovals } from "../approval/tool-approval-table.js";
 import { SESSION_END_CANCELLED_MESSAGE } from "../jobs/background-work.js";
 import { isActivePlanPhase } from "../plan/plan-mode-controller.js";
 import { readPlanFileAtRelativePath } from "../plan/plan-store.js";
-import { settleInterruptedToolCalls } from "../stream/incomplete-tool-calls.js";
+import { settleInterruptedToolCalls, toolSchemaRequiresArguments } from "../stream/incomplete-tool-calls.js";
 import { cancelInterruptedBackgroundTasks } from "../subagent/task-background.js";
 import {
   cancelInterruptedBackgroundCommands,
@@ -200,7 +200,19 @@ export async function restoreManagedSession(
         );
   const taskMessages =
     options.repairRuntime === false ? restoredMessages : cancelInterruptedBackgroundTasks(restoredMessages);
-  const uiMessages = options.repairRuntime === false ? taskMessages : settleInterruptedToolCalls(taskMessages);
+  // The same classification the live boundary uses, so an `{}` call for a required-args tool reads
+  // as "arguments never arrived" after a resume too — not as a user cancellation.
+  //
+  // Call through `host`, not a detached reference: `getToolInputSchema` is a prototype method that
+  // reads `this.toolService`, so `const getSchema = host.getToolInputSchema` lost `this` and threw
+  // on the very shape this lookup exists for (`{}` with no output).
+  const requiresArguments = host.getToolInputSchema
+    ? (toolName: string) => toolSchemaRequiresArguments(host.getToolInputSchema?.(toolName))
+    : undefined;
+  const uiMessages =
+    options.repairRuntime === false
+      ? taskMessages
+      : settleInterruptedToolCalls(taskMessages, undefined, requiresArguments);
   // The repairs happen after `readSessionForRestore` wrote the canonical form, and `tracker.reset`
   // below is given the REPAIRED array — so without this write the settled transcript would only
   // ever exist in memory (the tracker would consider it persisted and every later save a no-op),

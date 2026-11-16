@@ -291,18 +291,44 @@ export {
   shouldFlagEmptyModelStream,
 } from "../agent/stream/empty-model-stream.js";
 export {
+  TOOL_APPROVAL_ABANDONED_MESSAGE,
   TOOL_CANCELLED_MESSAGE,
+  TOOL_RUN_ENDED_MESSAGE,
   INTERRUPTED_RUN_MESSAGE,
+  TOOL_BATCH_REPEAT_THRESHOLD,
   cancelIncompleteToolCalls,
   cancelInFlightToolCalls,
   settleToolCalls,
+  settleToolCallsAs,
+  settleTruncatedToolCalls,
+  settleChatToolCalls,
+  settleInterruptedRunToolCalls,
   settleInterruptedToolCalls,
+  describeToolCallBatch,
   hasCancellableIncompleteToolCalls,
   hasInFlightToolCalls,
+  hasTruncatedToolArguments,
+  hasTruncatedToolCalls,
   hasValidToolArguments,
   isCancellableIncompleteToolCall,
   isInFlightToolCall,
+  isTruncatedToolCall,
+  toolSchemaRequiresArguments,
 } from "../agent/stream/incomplete-tool-calls.js";
+export {
+  TRUNCATED_TOOL_CALL_MESSAGE,
+  TRUNCATED_TOOL_CALL_SUMMARY,
+  interruptedToolMessage,
+  isInterruptedToolOutput,
+  isTruncatedToolOutput,
+} from "../runtime-types/tool-truncation.js";
+export {
+  DEFAULT_MODEL_STREAM_STALL_MS,
+  MODEL_STREAM_STALL_MESSAGE,
+  TRUNCATED_MODEL_STREAM_MESSAGE,
+  isTruncatedModelStream,
+  observeModelStream,
+} from "../agent/run/model-stream-observer.js";
 export {
   MULTIMODAL_OMITTED_PLACEHOLDER,
   chatMessagesHaveMultimodal,

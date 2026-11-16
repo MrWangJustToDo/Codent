@@ -43,11 +43,13 @@ const part = (name, output) => ({
       parts: [{ type: "tool-call", id: `call-${name}`, name, state: "input-complete", arguments: '{"path":"a.ts"}' }],
     },
   ];
+  // A payload cut mid-object is the truncation marker's job now; this pass still owns a
+  // finalize-promoted payload that is not JSON at all.
   const truncated = (name) => [
     {
       id: `m-${name}`,
       role: "assistant",
-      parts: [{ type: "tool-call", id: `call-${name}`, name, state: "input-streaming", arguments: '{"pa' }],
+      parts: [{ type: "tool-call", id: `call-${name}`, name, state: "input-complete", arguments: "not json" }],
     },
   ];
 

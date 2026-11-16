@@ -126,6 +126,8 @@ const createBodySchema = z.object({
   systemPrompt: z.string().optional(),
   maxIterations: z.number().int().positive().optional(),
   maxConcurrentTasks: z.number().optional(),
+  /** Model-stream idle guard while a tool call waits for its arguments; `0` disables it. */
+  streamStallTimeoutMs: z.number().int().nonnegative().optional(),
   // Loose here on purpose: `AgentConfigSchema` owns the bounds/enums, and a violation is mapped to
   // a 400 below. Duplicating them in this schema would be a second source of truth.
   temperature: z.number().optional(),
@@ -467,6 +469,7 @@ export const agentSessionRoutes = new Hono()
       // server itself wrote through `model.set`, so that is the intended choice.
       maxIterations: body.maxIterations,
       ...(body.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: body.maxConcurrentTasks } : {}),
+      ...(body.streamStallTimeoutMs !== undefined ? { streamStallTimeoutMs: body.streamStallTimeoutMs } : {}),
       mcpConfigPath: body.mcpConfigPath,
       ...(body.mcpServers ? { mcpServers: body.mcpServers as Record<string, McpServerConfig> } : {}),
       extensionDirs: body.extensionDirs,

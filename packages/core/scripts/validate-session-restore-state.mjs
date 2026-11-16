@@ -24,7 +24,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { SessionService, SessionStore, TodoManager, UsageTracker } from "../dist/dev.mjs";
+import { SessionService, SessionStore, TodoManager, UsageTracker, TRUNCATED_TOOL_CALL_MESSAGE } from "../dist/dev.mjs";
 import { AgentManager, createLocalAgentSessionHost, registerCoreEnv } from "../dist/index.mjs";
 
 import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
@@ -479,6 +479,48 @@ let sessionId;
     .find((part) => part.type === "tool-call" && part.id === "call_bg");
   assert.notEqual(persistedPart?.output?.status, "running", "the repaired background handle is on disk");
   assert.equal(persistedPart?.output?.status, "killed", "…settled as killed, the same status the job record uses");
+}
+
+// ============================================================================
+// 4.5 A resume settles an `{}` call against the live tool schema
+//
+// `getToolInputSchema` is a ManagedAgent PROTOTYPE method that reads `this.toolService`. The
+// restore path used to detach it (`const getSchema = host.getToolInputSchema`) and call it as a
+// free function, so the one shape this lookup exists for — `{}` with no output — threw
+// `Cannot read properties of undefined (reading 'toolService')` and took the whole resume down.
+// ============================================================================
+{
+  const manager = new AgentManager();
+  const host = createLocalAgentSessionHost({ manager });
+  const created = await host.create({ name: "truncated-restore", model: "default-model", modelStyle: "openai" });
+  const managed = manager.getAgent(created.session.getSnapshot().agentId);
+  const id = managed.getSessionData().id;
+  const store = managed.getSessionStore();
+
+  const data = managed.getSessionData();
+  data.uiMessages = [
+    userMessage("tr-u1", "keep going"),
+    {
+      id: "tr-a1",
+      role: "assistant",
+      parts: [{ type: "tool-call", id: "call_read", name: "read_file", arguments: "{}", state: "input-complete" }],
+      createdAt: 2,
+    },
+  ];
+  await store.save(data);
+  manager.releaseSessionOwnership(id, managed.id);
+
+  const manager2 = new AgentManager();
+  const host2 = createLocalAgentSessionHost({ manager: manager2 });
+  await host2.create({ name: "truncated-resume", model: "default-model", modelStyle: "openai", resumeSessionId: id });
+
+  const persisted = await new SessionStore().load(id);
+  const part = persisted.uiMessages
+    .flatMap((message) => message.parts)
+    .find((entry) => entry.type === "tool-call" && entry.id === "call_read");
+  assert.equal(part?.output?.interrupted, true, "the `{}` call is settled as interrupted");
+  assert.equal(part?.output?.argumentsIncomplete, true, "and classified as truncated");
+  assert.equal(part?.output?.error, TRUNCATED_TOOL_CALL_MESSAGE, "not `Cancelled by user.`");
 }
 
 await fs.promises.rm(rootPath, TEMP_RM_OPTIONS);

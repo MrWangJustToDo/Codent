@@ -184,6 +184,7 @@
     "validate:extension-disable-notice": "pnpm run build && node scripts/validate-extension-disable-notice.mjs",
     "validate:extension-ui-notices": "pnpm run build && node scripts/validate-extension-ui-notices.mjs",
     "validate:incomplete-tool-calls": "pnpm run build && node scripts/validate-incomplete-tool-calls.mjs",
+    "validate:truncated-tool-call-settlement": "pnpm run build && node scripts/validate-truncated-tool-call-settlement.mjs",
     "validate:tool-compact": "pnpm run build && node scripts/validate-tool-compact.mjs",
     "validate:tool-denial-reason": "pnpm run build && node scripts/validate-tool-denial-reason.mjs",
     "validate:tool-run-agentid": "pnpm run build && node scripts/validate-tool-run-agentid.mjs",

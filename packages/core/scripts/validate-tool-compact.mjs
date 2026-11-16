@@ -506,4 +506,50 @@ assert.doesNotMatch(errorText, /Overwrote file: undefined/);
   assert.equal(compactedTwice[1].content, payload, "a cache hit keeps the identity projection");
 }
 
+// ---------------------------------------------------------------------------
+// An interruption marker (arguments never arrived / run failed) must never reach the tool's own
+// formatter either: `run_command` would render "Exit code: undefined" and `write_file` would claim
+// it overwrote a path that is not there.
+// ---------------------------------------------------------------------------
+{
+  const message = "The response ended before this tool call's arguments were complete. It did not run.";
+  const wire = [
+    {
+      role: "assistant",
+      content: null,
+      toolCalls: [{ id: "call-trunc", type: "function", function: { name: "explode", arguments: "" } }],
+    },
+    {
+      role: "tool",
+      toolCallId: "call-trunc",
+      content: JSON.stringify({
+        success: false,
+        error: message,
+        reason: message,
+        interrupted: true,
+        argumentsIncomplete: true,
+      }),
+    },
+  ];
+  const out = await applyToolCompact(wire, {
+    config: {},
+    registry: {
+      get: () => () => {
+        throw new Error("the tool formatter must not run for an interruption marker");
+      },
+    },
+    cache: new ToolCompactCache(),
+  });
+  const projected = out.find((m) => m.role === "tool" && m.toolCallId === "call-trunc");
+  const projectedText = JSON.stringify(projected?.content);
+  assert.ok(projectedText.includes(message), "the model sees the interruption notice");
+  // Assert the PROJECTION SHAPE, not just that the notice appears somewhere: the marker's own JSON
+  // carries `error: message`, so a `.includes(message)` check still passed after the branch was
+  // removed (the formatter throws and the raw object becomes the fallback). A real projection is the
+  // text content part and carries none of the marker's bookkeeping fields.
+  assert.ok(Array.isArray(projected?.content), "the projection is a text content part, not the marker JSON");
+  assert.equal(projectedText.includes("argumentsIncomplete"), false, "marker bookkeeping never reaches the model");
+  assert.equal(projectedText.includes("interrupted"), false);
+}
+
 console.log("tool-compact validation passed");

@@ -160,9 +160,19 @@ export type ToolEventPayloads = {
     /** The boundary that ran the settle pass — NOT necessarily a user cancel. */
     cause: "pump-start" | "pre-send" | "turn-end" | "abort" | "stream-error" | "engine";
     includeInFlight: boolean;
+    /** Calls settled as a cancellation (incomplete / in-flight work the boundary stopped). */
     calls: ToolCallRef[];
-    /** Scalar count for the persisted report (arrays are summarized in `data`). */
+    /** Scalar count of `calls` — the cancelled group only (arrays are summarized in `data`). */
     count: number;
+    /**
+     * Calls that never ran: arguments never arrived (truncation notice) or the run itself failed
+     * (interruption notice). Separate from `calls` on purpose: neither is work the user cancelled,
+     * and merging the two is how one broken response produced 143 "Cancelled by user." rows.
+     *
+     * The field names are historical; the notice on each part says which case it was.
+     */
+    truncatedCalls?: ToolCallRef[];
+    truncatedCount?: number;
   };
   /** A parked batch's held siblings were added to the approval resume map and will run. */
   "tool:resume": {

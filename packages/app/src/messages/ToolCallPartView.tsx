@@ -23,7 +23,13 @@ import {
   LIVE_DURATION_THRESHOLD_MS,
 } from "../utils/format.js";
 import { isTaskRowLive } from "../utils/task-subagent.js";
-import { getUiToolState, isCancelledToolCall, isToolExecuting, parseToolInput } from "../utils/tool-part.js";
+import {
+  getUiToolState,
+  isCancelledToolCall,
+  isInterruptedToolOutput,
+  isToolExecuting,
+  parseToolInput,
+} from "../utils/tool-part.js";
 import { isBuiltinTool } from "../utils/tool-presentation.js";
 
 import { StreamingOutputView } from "./StreamingOutputView.js";
@@ -182,10 +188,14 @@ export const ToolCallPartView = memo(({ part, streamingThrottleMs }: ToolCallPar
   // "stopped" instead. See `isCancelledToolCall`. Only a settled output can carry the
   // marker, which is what `hasOutput` gates.
   const stoppedByCancel = hasOutput && isCancelledToolCall(part);
+  // A call the upstream cut off (or the run failed under) never ran. It is not a tool failure and
+  // not a success: the header says "interrupted" and the icon is neutral, so 143 placeholder rows
+  // do not paint as 143 red crosses.
+  const interrupted = hasOutput && isInterruptedToolOutput(part.output);
   const durationMs = hasOutput ? getDurationMs(part.output) : null;
   const showDuration = durationMs !== null && durationMs >= DURATION_THRESHOLD_MS;
 
-  const errorText = extractErrorText(part);
+  const errorText = interrupted ? null : extractErrorText(part);
   // The header summary travels with the part (core renders it at completion), so a host
   // without the tool registry still shows it; the local formatter is the fallback for
   // parts written before core started attaching the payload.
@@ -195,17 +205,18 @@ export const ToolCallPartView = memo(({ part, streamingThrottleMs }: ToolCallPar
   const inlineSummary = errorText
     ? null
     : ((part as { display?: { summary?: string } }).display?.summary ??
+        (interrupted ? "interrupted" : null) ??
         cancelledSummary ??
         (isBuiltin ? getInlineSummary(part, toolName) : null)) ||
       null;
-  const outputFailed = (part.output as { success?: boolean } | undefined)?.success === false;
+  const outputFailed = !interrupted && (part.output as { success?: boolean } | undefined)?.success === false;
   // Density compact: skip success one-liners; keep failure hints. A cut-off task
   // is treated as a failure hint: it must not read as a clean finish.
   const stateColor = errorText || outputFailed || stoppedByLimit ? COLORS.danger : getToolCallColor(uiState);
   // A user cancel is neither failure nor success: the header keeps its state color but the
   // row's parenthetical already says "cancelled" (via getInlineSummary), and the icon turns
   // the neutral warning glyph.
-  const headerColor = stoppedByCancel ? COLORS.warning : stateColor;
+  const headerColor = stoppedByCancel || interrupted ? COLORS.warning : stateColor;
 
   // Compact display: errored/denied tools are handled by the compact projection
   // (errors fold into an activity summary count; denied rows are filtered). This
@@ -296,6 +307,7 @@ export const ToolCallPartView = memo(({ part, streamingThrottleMs }: ToolCallPar
             toolName={toolName}
             stoppedByLimit={stoppedByLimit}
             stoppedByCancel={stoppedByCancel}
+            interrupted={interrupted}
           />
         </Box>
         <Text wrap="wrap">{headerText}</Text>

@@ -7,7 +7,7 @@ import { useSize } from "../hooks";
 import { BG, COLORS } from "../theme/colors.js";
 import { formatToolOutput } from "../utils/format";
 import { hasDetailedOutputBlock, keepsCompactRow } from "../utils/tool-display.js";
-import { isCancelledToolCall } from "../utils/tool-part.js";
+import { isCancelledToolCall, isInterruptedToolOutput } from "../utils/tool-part.js";
 import { isBuiltinTool, resolveToolPresentation } from "../utils/tool-presentation.js";
 
 import { TodoToolOutputView } from "./TodoToolOutputView.js";
@@ -78,6 +78,9 @@ export const ToolOutputView = ({ part, uiState }: { part: ToolCallPart; uiState:
   }
 
   const hasCanceld = isCancelledToolCall(part);
+  // A call the upstream cut off carries `success: false` but is neither a tool failure nor a
+  // cancel: the header shows the neutral warning, so the body must not contradict it in danger red.
+  const interrupted = isInterruptedToolOutput(part.output);
 
   const outputLines = splitStreamingLines(output);
   // Structured tools (row-keeping, no result renderer) keep their full block in both
@@ -93,7 +96,8 @@ export const ToolOutputView = ({ part, uiState }: { part: ToolCallPart; uiState:
     isBuiltinTool(toolName) &&
     toolName === BUILTIN_TOOL_NAMES.runCommand &&
     (part.output as { success?: boolean } | undefined)?.success === false &&
-    !hasCanceld;
+    !hasCanceld &&
+    !interrupted;
   const lineColor = failed ? COLORS.danger : COLORS.muted;
 
   return (

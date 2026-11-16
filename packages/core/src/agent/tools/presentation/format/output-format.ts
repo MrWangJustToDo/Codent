@@ -2,6 +2,7 @@ import { isSyntheticCancelOutput, syntheticCancelMessage } from "../../../../run
 import { promptTokensOf } from "../../../../runtime-types/token-usage.js";
 import { formatExtensionDeniedOutput, isExtensionDeniedOutput } from "../../../../runtime-types/tool-denial.js";
 import { isBareToolErrorResult } from "../../../../runtime-types/tool-error.js";
+import { interruptedToolMessage, isInterruptedToolOutput } from "../../../../runtime-types/tool-truncation.js";
 import { formatByteSize } from "../../../../utils/byte-size.js";
 import { truncateText } from "../../../../utils/text-truncation.js";
 import { AGENT_CACHE_DIR } from "../../../../utils/workspace-paths.js";
@@ -344,6 +345,11 @@ export function formatToolOutput(
   // marker that is no tool's schema. Without this short-circuit every formatter read fields that
   // cannot be there (`todo` threw on `stats.total`, `run_command` printed `Exit code: undefined`).
   if (isExtensionDeniedOutput(output)) return formatExtensionDeniedOutput(output);
+
+  // A call whose arguments never arrived is the third shared marker: no tool's schema, and the
+  // notice is the whole body. It is deliberately before `isBareToolErrorResult` (which would return
+  // an empty body) and before the per-tool dispatch (`todo` has no `stats` to read).
+  if (isInterruptedToolOutput(output)) return interruptedToolMessage(output);
 
   // A tool that THREW settles as `{ error: string }`, which is not any tool's output schema.
   // Every formatter below reads its own fields, so without this the commonest failure

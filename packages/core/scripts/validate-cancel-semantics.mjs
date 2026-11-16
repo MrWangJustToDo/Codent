@@ -104,11 +104,13 @@ assert.ok(
       parts: [{ type: "tool-call", id: `call-${name}`, name, state: "input-complete", arguments: '{"path":"a.ts"}' }],
     },
   ];
+  // `cancelIncompleteToolCalls` no longer owns a payload that stopped mid-object (that is the
+  // truncation marker's job); it still owns a finalize-promoted payload that is not JSON at all.
   const truncated = (name) => [
     {
       id: `m-${name}`,
       role: "assistant",
-      parts: [{ type: "tool-call", id: `call-${name}`, name, state: "input-streaming", arguments: '{"pa' }],
+      parts: [{ type: "tool-call", id: `call-${name}`, name, state: "input-complete", arguments: "not json" }],
     },
   ];
 

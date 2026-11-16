@@ -42,6 +42,20 @@ export const AgentConfigSchema = z.object({
     .optional()
     .describe("Max concurrent `task` subagents per parent (default 4; values below 1 treated as 1)"),
   maxTokens: z.number().int().min(1).optional().describe("Maximum tokens per response"),
+  /**
+   * Idle budget (ms) after a model response announced a tool call.
+   *
+   * A response that sends no chunk for this long after its first `TOOL_CALL_START` is treated as a
+   * stalled stream (terminal error) instead of parking until the user aborts. Only armed after a
+   * tool-call start, so a long reasoning phase before the first token is unaffected. `0` disables
+   * the guard; omitted uses the runtime default.
+   */
+  streamStallTimeoutMs: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("Abort a model stream with no chunk this long after a tool call starts (0 disables)"),
   // Sampling knobs, forwarded from `AgentSessionCreateOptions` (no CLI flag). Consumed one layer
   // down (`run-agent.ts` → `AgentRunner`).
   temperature: z.number().min(0).max(2).optional().describe("Sampling temperature"),

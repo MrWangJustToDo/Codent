@@ -370,6 +370,58 @@ for (const output of [
   );
 }
 
+// A truncated call is a shared marker, not any tool's schema: `todo`'s formatter would read
+// `stats.total` and throw, and a bare-error short-circuit would leave an empty body. The notice is
+// the whole body, and the row must not read as a user cancellation.
+{
+  const truncated = {
+    success: false,
+    error: dev.TRUNCATED_TOOL_CALL_MESSAGE,
+    reason: dev.TRUNCATED_TOOL_CALL_MESSAGE,
+    interrupted: true,
+    argumentsIncomplete: true,
+  };
+  assert.equal(
+    core.formatToolOutput(truncated, "todo"),
+    dev.TRUNCATED_TOOL_CALL_MESSAGE,
+    "the truncation notice is rendered before the per-tool formatter"
+  );
+  assert.equal(
+    core.getUiToolState({ type: "tool-call", id: "call_trunc", name: "todo", state: "complete", output: truncated }),
+    "output-error"
+  );
+  assert.equal(
+    dev.isTruncatedToolOutput(truncated),
+    true,
+    "and the marker is recognizable to the settlement/presentation layers"
+  );
+  assert.equal(core.isCancelledToolCall({ output: truncated }), false, "a truncated row is not a user cancellation");
+  assert.deepEqual(
+    core.computeToolDisplay("todo", truncated),
+    { text: dev.TRUNCATED_TOOL_CALL_MESSAGE, summary: dev.TRUNCATED_TOOL_CALL_SUMMARY },
+    "the host-facing display payload carries the notice, so a remote/ACP host is not left with marker JSON"
+  );
+  assert.equal(dev.isInterruptedToolOutput(truncated), true);
+}
+
+// The marker's key set is exclusive. `truncated: true` is a LEGITIMATE success field on several
+// built-ins (a clipped file/tree/page/search result); keying the marker on that word made a large
+// successful read render as "did not run".
+{
+  const clippedRead = {
+    type: "text",
+    path: "src/big.ts",
+    content: "line 1\n",
+    totalLines: 4000,
+    truncated: true,
+  };
+  assert.equal(dev.isTruncatedToolOutput(clippedRead), false, "a clipped result is not an interruption marker");
+  assert.match(core.formatToolOutput(clippedRead, "read_file"), /src\/big\.ts|line 1|4000/i);
+  assert.notEqual(
+    core.getUiToolState({ type: "tool-call", id: "c", name: "read_file", state: "complete", output: clippedRead }),
+    "output-error"
+  );
+}
 // An `error` field ALONGSIDE a payload is a legitimate MCP/extension result, not the framework's
 // bare error shape. The local formatter already rendered it; blanking the cross-process
 // `part.display` made the same row show a body locally and nothing on a remote/ACP host.

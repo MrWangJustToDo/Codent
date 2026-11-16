@@ -424,10 +424,15 @@ console.log("\n-- decisions (engine diagnostics) ------------------------");
   const resumed = root.entries.filter((entry) => entry.event === "tool:resume");
   const resumedCalls = resumed.reduce((n, entry) => n + scalar(entry.data?.count), 0);
   const settled = root.entries.filter((entry) => entry.event === "tool:settle");
+  // `count` is the CANCELLED group; interruption/truncation rows are reported separately, so a
+  // placeholder response does not read as "0 calls settled" (the metric this file exists to stop).
   const settledCalls = settled.reduce((n, entry) => n + scalar(entry.data?.count), 0);
+  const truncatedCalls = settled.reduce((n, entry) => n + scalar(entry.data?.truncatedCount), 0);
   console.log(`  tool phases          ${phases.length} row(s), ${held} held, ${approvals} awaiting approval`);
   console.log(`  resumed after gate   ${resumed.length} row(s), ${resumedCalls} call(s)`);
-  console.log(`  settled unrun        ${settled.length} row(s), ${settledCalls} call(s)`);
+  console.log(
+    `  settled unrun        ${settled.length} row(s), ${settledCalls} cancelled, ${truncatedCalls} interrupted`
+  );
   const ctx = root.entries.filter((entry) => entry.event === "context:inject");
   const ctxSources = new Map();
   for (const entry of ctx) {

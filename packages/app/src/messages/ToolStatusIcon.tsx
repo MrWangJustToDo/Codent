@@ -27,6 +27,8 @@ export interface ToolStatusIconProps {
    * `isCancelledToolCall` for the two output shapes.
    */
   stoppedByCancel?: boolean;
+  /** The call never ran (truncated arguments / run-level interruption): neutral, not a failure. */
+  interrupted?: boolean;
 }
 
 /** Get status icon for tool invocation */
@@ -35,6 +37,7 @@ export const ToolStatusIcon = ({
   toolName,
   stoppedByLimit = false,
   stoppedByCancel = false,
+  interrupted = false,
 }: ToolStatusIconProps) => {
   // Lifecycle states render a spinner or a question mark rather than a status
   // glyph, so they never reach the glyph table.
@@ -53,12 +56,16 @@ export const ToolStatusIcon = ({
       break;
   }
 
-  const glyph = getToolStatusGlyph(state, stoppedByLimit, stoppedByCancel);
+  const glyph = getToolStatusGlyph(state, stoppedByLimit, stoppedByCancel || interrupted);
   if (!glyph) return null;
 
   // A cutoff or a user cancel outranks the underlying state: neither failed, but
   // neither may wear the success colour either.
   const color =
-    stoppedByLimit || stoppedByCancel ? COLORS.warning : state === "output-available" ? COLORS.success : COLORS.danger;
+    stoppedByLimit || stoppedByCancel || interrupted
+      ? COLORS.warning
+      : state === "output-available"
+        ? COLORS.success
+        : COLORS.danger;
   return <Text color={color}>{glyph}</Text>;
 };

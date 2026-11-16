@@ -1,4 +1,5 @@
 import { isBareToolErrorResult } from "../../../../runtime-types/tool-error.js";
+import { TRUNCATED_TOOL_CALL_SUMMARY, isInterruptedToolOutput } from "../../../../runtime-types/tool-truncation.js";
 import { BUILTIN_TOOL_NAMES } from "../../catalog/tool-names.js";
 import { isCancelledToolCall } from "../state.js";
 
@@ -35,6 +36,11 @@ export function getInlineSummary(part: ToolCallPart, toolName: string): string |
   // settles the part as `error` (the guard would bail) and a cancelled run_command would
   // otherwise render as a clean finish with an `(error)` body.
   if (isCancelledToolCall(part)) return "cancelled";
+
+  // A truncated call is not a user cancellation and has no result to summarize: name the
+  // interruption instead of falling through to the bare-error `null` (which would leave the row
+  // reading as an anonymous failure).
+  if (isInterruptedToolOutput(output)) return TRUNCATED_TOOL_CALL_SUMMARY;
 
   // A thrown tool is not a success: without this, `write_file` reported "updated" and
   // `edit_file` "applied" for calls that failed. No summary is the correct verdict — the row's

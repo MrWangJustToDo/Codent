@@ -19,7 +19,7 @@
 
 import assert from "node:assert/strict";
 
-import { AgentLog, ManagedAgent } from "../dist/dev.mjs";
+import { AgentLog, ManagedAgent, SESSION_END_CANCELLED_MESSAGE } from "../dist/dev.mjs";
 import { AgentManager, registerCoreEnv } from "../dist/index.mjs";
 
 // A minimal env: nothing here touches the filesystem or runs commands.
@@ -392,6 +392,11 @@ registerCoreEnv({
   // so a count assertion alone would pass even if nothing was written to the transcript.
   const part = chat.getMessages().find((message) => message.id === "a1")?.parts[0];
   assert.equal(part?.approval?.approved, false, "the gate carries a recorded decision (policy: denied)");
+  assert.equal(
+    part?.approval?.reason,
+    SESSION_END_CANCELLED_MESSAGE,
+    "teardown is a session end, not a user cancellation"
+  );
   assert.equal(agent.getL1State().pendingApprovalCount, 0);
 }
 

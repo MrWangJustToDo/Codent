@@ -114,6 +114,8 @@ export interface SessionHost {
   session: SessionService;
   getApprovals: () => ToolApprovalTable;
   getToolCompactCache: () => ToolCompactCache;
+  /** Input schema of a registered tool (restore classifies `{}` against it). */
+  getToolInputSchema?: (toolName: string) => unknown;
   resolveTextAdapter?: () => Promise<TextAdapterConfig | null>;
   emitEvent: EmitAgentTelemetryFn;
   /** Update the agent's display name (broadcast via the state channel). */

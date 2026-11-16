@@ -624,7 +624,27 @@ console.log("approval request + resolution bridged: OK");
       event: "tool:settle",
       level: "info",
       category: "tool",
-      match: /^Tool settle \(turn-end, in-flight\): tree$/,
+      match: /^Tool settle \(turn-end, in-flight\): cancelled tree$/,
+    },
+    {
+      label: "tool:settle (interruption group)",
+      emit: () =>
+        bus.emit(
+          "tool:settle",
+          {
+            cause: "stream-error",
+            includeInFlight: true,
+            calls: [],
+            count: 0,
+            truncatedCalls: [{ id: "call_read", name: "read_file" }],
+            truncatedCount: 1,
+          },
+          { agentId: "agent-1" }
+        ),
+      event: "tool:settle",
+      level: "info",
+      category: "tool",
+      match: /^Tool settle \(stream-error, in-flight\): interrupted read_file$/,
     },
     {
       label: "tool:resume",

@@ -206,8 +206,7 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
   "session:save-error": {
     level: "warn",
     category: "system",
-    // `target` names what failed ("session", "agent log", …); the old wording prefixed every row with
-    // "save session", so a failed LOG write read as a failed session save.
+    // `target` names what failed; the old prefix made a failed LOG write read as a session save.
     formatMessage: (event) => `Failed to save ${p(event).target ?? "data"}: ${p(event).error ?? "unknown"}`,
   },
   "session:persist": {
@@ -380,11 +379,10 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
       return `Extension ${phase}failed${id}: ${d.error ?? "unknown"}`;
     },
   },
-  // Append-only counterpart of the `session:extensions` snapshot (which is suppressed).
   "agent:extension-state": {
     level: "info",
     category: "system",
-    // Startup load is already in `session:bootstrap-summary`; only runtime transitions belong here.
+    // Startup load is in `session:bootstrap-summary`; runtime transitions only.
     suppress: (event) => p(event).bootstrap === true,
     formatMessage: (event) => {
       const d = p(event);
@@ -550,8 +548,10 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
     formatMessage: (event) => {
       const d = p(event);
       const calls = toolRefNames(d.calls);
+      const truncated = toolRefNames(d.truncatedCalls);
       const scope = d.includeInFlight === true ? "in-flight" : "incomplete";
-      return `Tool settle (${d.cause ?? "engine"}, ${scope}): ${calls || "no calls"}`;
+      const parts = [calls ? `cancelled ${calls}` : "", truncated ? `interrupted ${truncated}` : ""].filter(Boolean);
+      return `Tool settle (${d.cause ?? "engine"}, ${scope}): ${parts.join("; ") || "no calls"}`;
     },
   },
   "tool:resume": {

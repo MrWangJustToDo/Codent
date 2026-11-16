@@ -9,7 +9,16 @@
 import { toError } from "../../utils/errors.js";
 import { formatAgentStreamError } from "../stream/assert-async-iterable.js";
 import { EMPTY_MODEL_STREAM_MESSAGE, shouldFlagEmptyModelStream } from "../stream/empty-model-stream.js";
+import { hasTruncatedToolCalls, toolSchemaRequiresArguments } from "../stream/incomplete-tool-calls.js";
+import { hasPendingInteraction } from "../stream/tool-phase-utils.js";
 
+import {
+  DEFAULT_MODEL_STREAM_STALL_MS,
+  TRUNCATED_MODEL_STREAM_MESSAGE,
+  isTruncatedModelStream,
+  observeModelStream,
+  type ModelStreamObservation,
+} from "./model-stream-observer.js";
 import { ensureUIChannel, runAgentOnce } from "./run-agent-skeleton.js";
 
 import type { RunAgentOnceOptions, RunAgentOnceResult } from "./run-agent-skeleton.js";
@@ -20,6 +29,14 @@ export interface RunManagedSpanOptions extends RunAgentOnceOptions {
   flagEmptyStream?: boolean;
   /** Treat an abort-shaped error as a cancellation (child worker behavior). */
   abortErrorAsCancel?: boolean;
+  /**
+   * Treat a returned attempt that never reached its terminal event while a tool call was still
+   * incomplete as a stream failure (default true). A stalled attempt is always surfaced as an
+   * error by the observer, independently of this flag.
+   */
+  flagTruncatedStream?: boolean;
+  /** Override the idle budget after the first tool-call start; `0` disables it. */
+  stallTimeoutMs?: number;
   /** Called when the run ends because of an abort. */
   onAbort?: (messages: UIMessage[]) => void;
   /** Called for a non-abort stream failure. The helper still returns the normalized message. */
@@ -35,6 +52,10 @@ export interface ManagedSpanResult {
   aborted: boolean;
   /** A stream failure normalized for the host. */
   errorMessage?: string;
+  /** The failure is a truncated/stalled tool-call response; the caller settles the rows. */
+  truncated?: boolean;
+  /** The failure was the idle guard firing while a tool call waited for its arguments. */
+  stalled?: boolean;
 }
 
 export async function runManagedSpan(
@@ -43,11 +64,14 @@ export async function runManagedSpan(
   const {
     parentTaskToolCallId,
     flagEmptyStream,
+    flagTruncatedStream = true,
+    stallTimeoutMs,
     abortErrorAsCancel = false,
     onAbort,
     onError,
     onAbortError,
     onEmpty,
+    transformStream: callerTransform,
     ...runOptions
   } = options;
   const managed = runOptions.manager.getAgent(runOptions.agentId);
@@ -63,11 +87,35 @@ export async function runManagedSpan(
     return { messages, aborted: true, channel };
   };
 
+  // The schema fact comes from the registered tool's input schema; an unknown schema stays "not
+  // truncated". Optional call: a host double may expose no tool service at all.
+  const requiresArguments = (toolName: string): boolean | undefined =>
+    toolSchemaRequiresArguments(managed.getToolInputSchema?.(toolName));
+  const observation: ModelStreamObservation = {
+    sawTerminal: false,
+    toolStarts: 0,
+    openToolCalls: 0,
+    stalled: false,
+  };
+  const stallMs = stallTimeoutMs ?? managed.config?.streamStallTimeoutMs ?? DEFAULT_MODEL_STREAM_STALL_MS;
+  const truncated = (messages: UIMessage[]): boolean =>
+    flagTruncatedStream &&
+    isTruncatedModelStream({
+      sawTerminal: observation.sawTerminal,
+      toolStarts: observation.toolStarts,
+      hasTruncatedToolCalls: hasTruncatedToolCalls(messages, requiresArguments),
+      hasPendingInteraction: hasPendingInteraction(messages),
+    });
+
   try {
     const result = await runAgentOnce({
       ...runOptions,
       channel,
       parentTaskToolCallId,
+      transformStream: (stream) =>
+        observeModelStream(callerTransform ? callerTransform(stream) : stream, observation, {
+          stallTimeoutMs: stallMs,
+        }),
     });
 
     if (isAbortedNow()) return abortedSpan(result.messages);
@@ -85,6 +133,17 @@ export async function runManagedSpan(
       }
     }
 
+    if (truncated(result.messages)) {
+      onError?.(TRUNCATED_MODEL_STREAM_MESSAGE, new Error(TRUNCATED_MODEL_STREAM_MESSAGE));
+      return {
+        messages: result.messages,
+        aborted: false,
+        errorMessage: TRUNCATED_MODEL_STREAM_MESSAGE,
+        truncated: true,
+        channel: result.channel,
+      };
+    }
+
     return { messages: result.messages, aborted: false, channel: result.channel };
   } catch (err) {
     const messages = channel.getMessages();
@@ -99,7 +158,26 @@ export async function runManagedSpan(
       onAbortError?.(message, error);
       return { messages, aborted: false, errorMessage: message, channel };
     }
+    // A stall / terminal-less failure that left a tool call without arguments is the same class as
+    // the returned shape above: the caller must settle those rows as truncated, not cancelled.
+    const isTruncated = truncated(messages);
     onError?.(message, error);
-    return { messages, aborted: false, errorMessage: message, channel };
+    if (observation.stalled) {
+      // The stalled read is still open on the network; aborting the run's controller closes it.
+      // Detach the abort listener FIRST: it rewrites an active run's status to `aborted`, which
+      // would turn a stall into a user cancellation (and, for a subagent, report `aborted` instead
+      // of `failed`). The status was already decided by `onError`; this only closes the transport.
+      // Optional: a host double may carry no RunCoordinator.
+      managed.run?.cancelAbortController();
+      managed.run?.currentAbortController?.abort(error);
+    }
+    return {
+      messages,
+      aborted: false,
+      errorMessage: message,
+      ...(isTruncated ? { truncated: true } : {}),
+      ...(observation.stalled ? { stalled: true } : {}),
+      channel,
+    };
   }
 }

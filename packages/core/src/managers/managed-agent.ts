@@ -67,7 +67,12 @@ import {
   ToolBeforeHookLedger,
   type ToolBeforeHookOutcome,
 } from "../agent/extension/tool-before-hook.js";
-import { backgroundWakeCause, TASK_JOB_KIND, type BackgroundWakeCause } from "../agent/jobs/background-work.js";
+import {
+  backgroundWakeCause,
+  SESSION_END_CANCELLED_MESSAGE,
+  TASK_JOB_KIND,
+  type BackgroundWakeCause,
+} from "../agent/jobs/background-work.js";
 import { ModeCoordinator } from "../agent/mode/mode-coordinator.js";
 import { ModeFacet } from "../agent/mode/mode-facet.js";
 import { SESSION_LOCK_TTL_MS } from "../agent/persistence/session-lock.js";
@@ -96,7 +101,6 @@ import { SessionFacet } from "../agent/session/session-facet.js";
 import { SessionLease } from "../agent/session/session-lease.js";
 import { SessionLifecycleService, type SessionLifecycleReason } from "../agent/session/session-lifecycle-service.js";
 import { createAgentStatusController, type AgentStatusController } from "../agent/state/agent-status-controller.js";
-import { TOOL_CANCELLED_MESSAGE } from "../agent/stream/incomplete-tool-calls.js";
 import { collectPendingInteractions } from "../agent/stream/tool-phase-utils.js";
 import { AgentStreamHub } from "../agent/stream-hub/agent-stream-hub.js";
 import {
@@ -2485,6 +2489,17 @@ export class ManagedAgent {
     return this.toolCompactCache;
   }
 
+  /**
+   * Input schema of a registered tool.
+   *
+   * The restore path classifies a persisted call against it: an `{}` payload for a tool that
+   * requires a property is a truncated call, and without the schema the same shape was read as
+   * "session interrupted" (a different verdict for the same row than the live boundary).
+   */
+  getToolInputSchema(toolName: string): unknown {
+    return this.toolService.getToolsRecord()[toolName]?.inputSchema;
+  }
+
   getSystemPrompt(): string | undefined {
     return this.turnContext.getSystemPrompt();
   }
@@ -3201,7 +3216,10 @@ export class ManagedAgent {
     const chat = this.getChatController();
     if (!chat) return;
     try {
-      chat.denyPendingApprovals(TOOL_CANCELLED_MESSAGE);
+      // Teardown is neither a user cancel nor an answered prompt: the session is going away while
+      // the approval is still pending. Naming that keeps the transcript from claiming the user
+      // rejected a question they never saw.
+      chat.denyPendingApprovals(SESSION_END_CANCELLED_MESSAGE);
     } catch (error) {
       this.emitDiagnostic("session", "Failed to deny pending approvals during teardown", {
         level: "warn",

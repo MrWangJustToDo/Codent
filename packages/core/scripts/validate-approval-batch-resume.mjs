@@ -388,12 +388,19 @@ assert.ok(
   );
   assert.match(
     controllerSrc,
-    /if \(outcomeKind !== "waiting" && !waitingForUser\) \{\s*this\.applyCancelledIncompleteTools\(true, \{ cause: "turn-end" \}\)/,
+    /if \(outcomeKind !== "waiting" && !waitingForUser\) \{\s*this\.applyCancelledIncompleteTools\(true, \{\s*cause: "turn-end",\s*\.\.\.\(outcomeKind === "error" \? \{ interrupted: true, reason: TOOL_RUN_ENDED_MESSAGE \} : \{\}\),\s*\}\)/,
     "every non-waiting terminal (error/aborted too) settles the calls the engine could not run"
+  );
+  // A run that failed is not a user cancel: the turn-end `error` branch above and the abort-shaped
+  // failure path must settle the rows with the interruption marker, not `Cancelled by user.`.
+  assert.match(
+    controllerSrc,
+    /onAbortError:[\s\S]{0,600}settleInterruptedFallback\(true\)/,
+    "an abort-shaped FAILURE (not a user abort) settles the rows as interrupted"
   );
   assert.match(
     controllerSrc,
-    /const stillWaiting = hasPendingInteraction\([\s\S]{0,120}if \(!stillWaiting\) this\.applyCancelledIncompleteTools\(true, \{ cause: "stream-error" \}\)/,
+    /const stillWaiting = hasPendingInteraction\([\s\S]{0,160}if \(!stillWaiting\) \{[\s\S]{0,160}cause: "stream-error"/,
     "the pump's catch path settles them too, but preserves a pending ask_user"
   );
   // A preserved question must also be named in the status on the abort path. That sync lives in

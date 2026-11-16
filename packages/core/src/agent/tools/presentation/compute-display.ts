@@ -1,5 +1,10 @@
 import { isSyntheticCancelOutput, syntheticCancelMessage } from "../../../runtime-types/abort.js";
 import { isBareToolErrorResult } from "../../../runtime-types/tool-error.js";
+import {
+  TRUNCATED_TOOL_CALL_SUMMARY,
+  interruptedToolMessage,
+  isInterruptedToolOutput,
+} from "../../../runtime-types/tool-truncation.js";
 
 import { getBuiltinToolPresentation } from "./builtin.js";
 
@@ -54,6 +59,14 @@ export function computeToolDisplay(
   // short-circuit (the marker carries `success: false`) and before the name-keyed formatter, which
   // is the only other place that knew how to render it.
   if (isSyntheticCancelOutput(output)) return { text: syntheticCancelMessage(output) };
+
+  // An interruption marker is the same kind of shared shape: the call never produced a result, so
+  // its display is the notice (and the "interrupted" summary), never a name-keyed renderer reading
+  // fields that are not there. Handled before the error short-circuit (the marker is
+  // `success: false`), because an empty display left remote/ACP hosts with the raw marker JSON.
+  if (isInterruptedToolOutput(output)) {
+    return { text: interruptedToolMessage(output), summary: TRUNCATED_TOOL_CALL_SUMMARY };
+  }
 
   // A failed call is rendered by the error path (the part's `errorText`), never by the
   // tool's success-shaped renderers: `{ error: "denied by user" }` used to summarize as

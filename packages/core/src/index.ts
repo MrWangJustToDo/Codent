@@ -405,6 +405,18 @@ export {
   isCancelledOutputMarker,
   isSyntheticCancelOutput,
 } from "./runtime-types/abort.js";
+export {
+  TRUNCATED_TOOL_CALL_MESSAGE,
+  TRUNCATED_TOOL_CALL_SUMMARY,
+  interruptedToolMessage,
+  isInterruptedToolOutput,
+  isTruncatedToolOutput,
+} from "./runtime-types/tool-truncation.js";
+export {
+  TOOL_APPROVAL_ABANDONED_MESSAGE,
+  TOOL_CANCELLED_MESSAGE,
+  TOOL_RUN_ENDED_MESSAGE,
+} from "./agent/stream/incomplete-tool-calls.js";
 export type {
   ToolActivityCategory,
   ToolPresentation,

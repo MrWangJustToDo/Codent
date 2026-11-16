@@ -1,5 +1,6 @@
 import { isAbortError, isCancelledOutputMarker } from "../../../runtime-types/abort.js";
 import { isExtensionDeniedOutput } from "../../../runtime-types/tool-denial.js";
+import { isInterruptedToolOutput } from "../../../runtime-types/tool-truncation.js";
 import { TOOL_CANCELLED_MESSAGE } from "../../stream/incomplete-tool-calls.js";
 
 import type { ImagePart, ToolCallPart, ToolCallState } from "@tanstack/ai";
@@ -72,6 +73,12 @@ export function getUiToolState(part: ToolCallPart): UiToolState {
   // summary, and made the same fact a "success" in the event log).
   if (isExtensionDeniedOutput(part.output)) {
     return "output-denied";
+  }
+  // A truncated call is also not a completed result, but it is not a cancellation either: the
+  // shared marker carries `success: false` and no `cancelled`, so it reads as a tool error with the
+  // truncation notice as its body (the summary says "interrupted").
+  if (isInterruptedToolOutput(part.output)) {
+    return "output-error";
   }
 
   // Output means the tool finished — don't keep showing the executing spinner.

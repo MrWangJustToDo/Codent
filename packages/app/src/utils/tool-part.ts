@@ -12,6 +12,7 @@ export {
   getUiToolState,
   isCancelledToolCall,
   isImagePart,
+  isInterruptedToolOutput,
   isPendingToolApproval,
   isToolCallPart,
   isToolExecuting,

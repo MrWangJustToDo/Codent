@@ -8,17 +8,23 @@ import { isParkedStatus, isTerminalStatus } from "../../runtime-types/agent-stat
 import { toError } from "../../utils/errors.js";
 import { ApprovalDecisionCoordinator } from "../approval/approval-decision-coordinator.js";
 import { assertNotCompactionSummaryInput } from "../compaction";
+import { SESSION_END_CANCELLED_MESSAGE, type BackgroundWakeCause } from "../jobs/background-work.js";
 import { shouldDeferMidRunQueue } from "../queue/defer-mid-run-queue.js";
 import { PendingMessageQueue, type QueueMode } from "../queue/pending-message-queue.js";
 import { deriveCancelVerdict } from "../state/agent-run-outcome.js";
 import { stripEmptyAssistantShells } from "../stream/empty-assistant-shell.js";
 import { extractAssistantText } from "../stream/extract-assistant-text.js";
 import {
+  TOOL_APPROVAL_ABANDONED_MESSAGE,
   TOOL_CANCELLED_MESSAGE,
-  settleToolCalls,
+  TOOL_RUN_ENDED_MESSAGE,
+  describeToolCallBatch,
+  settleChatToolCalls,
   hasCancellableIncompleteToolCalls,
   hasInFlightToolCalls,
+  hasTruncatedToolCalls,
   hasValidToolArguments,
+  toolSchemaRequiresArguments,
 } from "../stream/incomplete-tool-calls.js";
 import { isSettledToolCallPart, isToolCallPart } from "../stream/message-parts.js";
 import { findToolCallPart } from "../stream/suppress-replayed-tool-chunks.js";
@@ -45,7 +51,6 @@ import type { AgentStatus } from "../../runtime-types/agent-status.js";
 import type { AgentChatHost } from "../../runtime-types/chat-host.js";
 import type { AgentManager } from "../../runtime-types/hosts.js";
 import type { QueuedMessageContent, QueuedMessagesSnapshot } from "../../runtime-types/session-payloads.js";
-import type { BackgroundWakeCause } from "../jobs/background-work.js";
 import type { ContentPart, UIMessage } from "@tanstack/ai";
 
 const MAX_TOOL_PHASES = 40;
@@ -127,6 +132,14 @@ export class AgentChatController {
 
   private readonly steeringQueue = new PendingMessageQueue<QueuedMessageContent>();
   private readonly followUpQueue = new PendingMessageQueue<QueuedMessageContent>();
+  /**
+   * Assistant message ids whose malformed batch was already reported.
+   *
+   * Esc settles twice (the interrupt path and the fallback when the stale pump unwinds), and an
+   * already-settled batch stays in the transcript for every later turn. Without this key the same
+   * degeneracy wrote a warn row per call site and per later turn.
+   */
+  private readonly reportedMalformedBatches = new Set<string>();
   /** Channel/table/status/persist/repump transaction for approval decisions. */
   private readonly approvalDecisions: ApprovalDecisionCoordinator;
 
@@ -211,6 +224,8 @@ export class AgentChatController {
   clearTranscript(): void {
     this.advanceLifecycleEpoch();
     this.clearQueuedMessages();
+    // The dedupe key is an assistant message id; a cleared transcript can never re-report one.
+    this.reportedMalformedBatches.clear();
     this.channel.clearMessages();
     // "Clearing the transcript must invalidate the projection" belongs in the same place as the
     // clear, not only in the store's revision counter: a fingerprint that does not move would
@@ -368,13 +383,18 @@ export class AgentChatController {
     // Immediately clear loading tool rows; stream teardown may still finalize later. A pending
     // `ask_user` is preserved: it is a question addressed to the user, not work this abort owns,
     // and cancelling it here would make the park below a no-op (and discard the question).
-    this.applyCancelledIncompleteTools(true, { cause: "abort" });
+    // A switch/teardown is not an operator stop: the rows get the session-end text.
+    this.applyCancelledIncompleteTools(true, {
+      cause: "abort",
+      ...(options.userCancel === false ? { reason: SESSION_END_CANCELLED_MESSAGE } : {}),
+    });
     // An approval prompt is a question the interrupted turn no longer has. Leaving it pending
     // kept the part in `interactions.approvals` while the run was over: the next input was
     // admitted against a status that said `aborted`, then parked on the old question forever.
     // Deny here (channel write + table + derived count) so the turn ends with no unanswered
-    // interaction.
-    this.denyPendingApprovals(TOOL_CANCELLED_MESSAGE);
+    // interaction. A session switch / teardown is not an operator cancel: it gets the session-end
+    // text, so the transcript does not claim the user rejected a prompt they never saw.
+    this.denyPendingApprovals(options.userCancel === false ? SESSION_END_CANCELLED_MESSAGE : TOOL_CANCELLED_MESSAGE);
     // Turn finalize here: the invalidated token makes the in-flight pump skip its outcome path.
     // When this run actually had a pump, go through the SAME finalizer the pump uses — the abort
     // is then a first-class turn outcome (status + `finalizeRun` + one `turn:summary`), not a
@@ -1114,7 +1134,9 @@ export class AgentChatController {
         // approval, and returned from prepareRunPhase without ever calling the model — the
         // session looked dead until the stale prompt was answered or Esc was pressed.
         if (outcomeKind === "error" || outcomeKind === "aborted") {
-          this.approvalDecisions.denyPendingApprovals(TOOL_CANCELLED_MESSAGE);
+          this.approvalDecisions.denyPendingApprovals(
+            outcomeKind === "aborted" ? TOOL_CANCELLED_MESSAGE : TOOL_APPROVAL_ABANDONED_MESSAGE
+          );
           messages = this.channel.getMessages();
           waitingForUser = hasPendingInteraction(messages);
         }
@@ -1139,8 +1161,15 @@ export class AgentChatController {
         // This is not only a `finished` rule: an `error`/`aborted` turn has no later phase either,
         // and leaving a valid `input-complete` call behind meant the NEXT user turn continued that
         // tool phase — executing the failed turn's arguments (possibly a write).
+        //
+        // An `error` outcome is a failed run, not an operator stop: the held calls were never run
+        // and nobody cancelled them, so they take the run-ended notice. `aborted` keeps the cancel
+        // text (a user stop or a session switch ended the turn).
         if (outcomeKind !== "waiting" && !waitingForUser) {
-          this.applyCancelledIncompleteTools(true, { cause: "turn-end" });
+          this.applyCancelledIncompleteTools(true, {
+            cause: "turn-end",
+            ...(outcomeKind === "error" ? { interrupted: true, reason: TOOL_RUN_ENDED_MESSAGE } : {}),
+          });
           messages = this.channel.getMessages();
         }
 
@@ -1191,14 +1220,21 @@ export class AgentChatController {
           // produced two identical "Stream error: …" entries for one failure.
           this.managed.statusController.onRunError(message, normalized.stack);
           if (token !== null) {
-            // Same terminal rule as the normal path: an error is not a wait.
-            this.approvalDecisions.denyPendingApprovals(TOOL_CANCELLED_MESSAGE);
+            // Same terminal rule as the normal path: an error is not a wait, and it is not a user
+            // cancellation either — this catch is an internal/stream failure.
+            this.approvalDecisions.denyPendingApprovals(TOOL_APPROVAL_ABANDONED_MESSAGE);
             // …and it owes no tool result either. Without this the catch path finalized with a held
             // `input-complete` call still on the wire, so the next turn executed it. A pending
             // `ask_user` is the exception, exactly as on the normal path: the failure did not answer
             // the user's question, and cancelling it would make the session unanswerable.
             const stillWaiting = hasPendingInteraction(this.channel.getMessages());
-            if (!stillWaiting) this.applyCancelledIncompleteTools(true, { cause: "stream-error" });
+            if (!stillWaiting) {
+              this.applyCancelledIncompleteTools(true, {
+                cause: "stream-error",
+                interrupted: true,
+                reason: TOOL_RUN_ENDED_MESSAGE,
+              });
+            }
             this.managed.runFinalizer.finalizeChat({
               kind: "error",
               messages: this.channel.getMessages(),
@@ -1259,14 +1295,24 @@ export class AgentChatController {
     // COMMIT, which is exactly when writing here would hit the target transcript.
     const epoch = this.managed.captureEpoch();
     const isStaleSession = (): boolean => !epoch.isCurrent();
-    const applyAbortFallback = (): void => {
+    const settleInterruptedFallback = (interrupted: boolean): void => {
       if (isStaleSession()) return;
+      // Record the batch shape before the rows are settled: an abort of a degenerate response is
+      // exactly the case whose cause must be attributable from the log.
+      this.reportMalformedToolBatch(this.channel.getMessages());
       // `applyCancelledIncompleteTools` preserves a pending `ask_user` by default — the single
       // rule. This fallback used to pass no option and consequently undid the park the Esc path had
       // just established (status `awaiting_user` with no pending interaction, so every later
       // message was deferred to a pump that never started and Esc became a no-op).
-      this.applyCancelledIncompleteTools(true, { cause: "abort" });
+      //
+      // `interrupted` is for an abort-SHAPED failure (see `onAbortError`): the turn failed, so the
+      // rows were not work the user cancelled and must not be labelled that way.
+      this.applyCancelledIncompleteTools(true, {
+        cause: "abort",
+        ...(interrupted ? { interrupted: true, reason: TOOL_RUN_ENDED_MESSAGE } : {}),
+      });
     };
+    const applyAbortFallback = (): void => settleInterruptedFallback(false);
     // AbortController is created inside prepareForRun (via runAgentStream) and wired
     // directly into TanStack chat. Do not create a second controller here — that used
     // to leave ManagedAgent.abort() aborting a controller chat was not listening to.
@@ -1287,8 +1333,9 @@ export class AgentChatController {
         if (isStaleSession() || !token.isCurrent || this.managed.getStatus() === "aborted") return;
         // Abort-shaped does NOT mean the user aborted: `isAbortedNow` already ruled out our
         // signal/status, so this turn failed and must finalize as `error` (no memory extraction).
+        // The rows follow the same verdict: run-ended notice, never `Cancelled by user.`.
         this.managed.statusController.onExternalError(message);
-        applyAbortFallback();
+        settleInterruptedFallback(true);
       },
       onEmpty: (message) => {
         if (isStaleSession() || !token.isCurrent || this.managed.getStatus() === "error") return;
@@ -1321,13 +1368,56 @@ export class AgentChatController {
       return;
     }
     if (result.aborted) return; // onAbort already applied the framework fallback
+    // Record a degenerate response's shape on every surviving path (the abort path already did it
+    // inside `applyAbortFallback`; a stale session must not write into the target).
+    this.reportMalformedToolBatch(result.messages);
     if (result.errorMessage) {
       // onError / onAbortError / onEmpty already set the status and logged the fault. Reconciling
       // here would let a pending approval turn an empty-stream error back into `waiting`.
+      // A truncated/stalled response still owes its rows a settlement — as an interruption, never
+      // as a cancellation: the turn is ending as a failure no operator chose.
+      if (result.truncated || result.stalled) {
+        this.applyCancelledIncompleteTools(true, {
+          cause: "stream-error",
+          interrupted: true,
+          reason: TOOL_RUN_ENDED_MESSAGE,
+        });
+      }
       return;
     }
 
     this.managed.statusController.reconcileWithPolicy(result.messages, "during-run");
+  }
+
+  /**
+   * Emit one diagnostic when a response's tool-call batch looks malformed.
+   *
+   * A vendor-side placeholder response (dozens of `TOOL_CALL_START`s with no argument bytes, or one
+   * tool repeated far past what a turn needs) is invisible in the transcript once settled: the rows
+   * look like ordinary failures. The batch's size and names are the evidence an operator needs, and
+   * they are recorded without any arguments.
+   */
+  private reportMalformedToolBatch(messages: UIMessage[]): void {
+    const shape = describeToolCallBatch(messages, this.requiresArgumentsLookup());
+    if (!shape.malformed) return;
+    const key = shape.messageId;
+    if (key) {
+      if (this.reportedMalformedBatches.has(key)) return;
+      this.reportedMalformedBatches.add(key);
+      // Bounded: one entry per malformed response for the life of the controller.
+      if (this.reportedMalformedBatches.size > 64) {
+        const oldest = this.reportedMalformedBatches.values().next().value;
+        if (oldest !== undefined) this.reportedMalformedBatches.delete(oldest);
+      }
+    }
+    const names = shape.names.slice(0, 8).join(", ");
+    const more = shape.names.length > 8 ? ", …" : "";
+    this.managed.emitDiagnostic(
+      "stream",
+      `Malformed tool-call batch: ${shape.toolCalls} starts, ${shape.emptyArgs} with no arguments` +
+        `${shape.repeated ? ", repeated tool names" : ""}${names ? ` (${names}${more})` : ""}`,
+      { level: "warn", data: { toolCalls: shape.toolCalls, emptyArgs: shape.emptyArgs } }
+    );
   }
 
   /**
@@ -1343,11 +1433,21 @@ export class AgentChatController {
     // this cleanup owns. The option existed because the abort fallback and `interruptCurrentRun`
     // disagreed, and the fallback silently undid the park the Esc path had just established. A
     // caller that genuinely wants to withdraw the question must say so explicitly.
-    options: { preservePendingAskUser?: boolean; cause?: ToolSettleCause } = {}
+    options: {
+      preservePendingAskUser?: boolean;
+      cause?: ToolSettleCause;
+      /** Text written for the cancelled group (default: user cancel). */
+      reason?: string;
+      /** The run failed; settle the remainder with the interruption marker, not a cancel. */
+      interrupted?: boolean;
+    } = {}
   ): void {
     const current = this.channel.getMessages();
+    const requiresArguments = this.requiresArgumentsLookup();
     const hasCancellable =
-      hasCancellableIncompleteToolCalls(current) || (includeInFlight && hasInFlightToolCalls(current));
+      hasTruncatedToolCalls(current, requiresArguments) ||
+      hasCancellableIncompleteToolCalls(current, requiresArguments) ||
+      (includeInFlight && hasInFlightToolCalls(current, requiresArguments));
     if (!hasCancellable) {
       // An abort before the first content/tool chunk can leave an empty assistant shell even though
       // there is nothing to settle. The caller persists right after this, so strip it here (only on
@@ -1358,27 +1458,45 @@ export class AgentChatController {
       return;
     }
     // The settle itself reports which calls it changed: a second predicate copy here would decide
-    // against the pre-mutation snapshot and drift from `settleToolCalls` (it already had — the
+    // against the pre-mutation snapshot and drift from the settlement helper (it already had — the
     // abort path settled truncated calls the collector filtered out). These calls never produce
     // `agent:tool-end`/`agent:tool-error`, so this is the only timeline row that can explain a row
-    // that stopped loading as "cancelled" with no tool event.
-    const settled: ToolCallRef[] = [];
-    const cancelled = settleToolCalls(current, {
-      reason: TOOL_CANCELLED_MESSAGE,
+    // that stopped loading — and the two groups are reported separately, because a truncated
+    // upstream response is NOT work the user cancelled.
+    const settled = settleChatToolCalls(current, {
+      reason: options.reason ?? TOOL_CANCELLED_MESSAGE,
       includeInFlight,
+      requiresArguments,
+      ...(options.interrupted ? { interrupted: true } : {}),
       ...((options.preservePendingAskUser ?? true) ? { preservePendingAskUser: true } : {}),
-      onSettled: (part) => settled.push(part.name ? { id: part.id, name: part.name } : { id: part.id }),
     });
-    const cleaned = stripEmptyAssistantShells(cancelled);
+    const toRef = (part: { id: string; name?: string }): ToolCallRef =>
+      part.name ? { id: part.id, name: part.name } : { id: part.id };
+    const calls = settled.cancelled.map(toRef);
+    const truncatedCalls = settled.truncated.map(toRef);
+    const cleaned = stripEmptyAssistantShells(settled.messages);
     this.channel.setMessages(cleaned);
-    if (settled.length > 0) {
+    if (calls.length > 0 || truncatedCalls.length > 0) {
       this.managed.emitEvent("tool:settle", {
         cause: options.cause ?? "engine",
         includeInFlight,
-        calls: settled,
-        count: settled.length,
+        calls,
+        count: calls.length,
+        truncatedCalls,
+        truncatedCount: truncatedCalls.length,
       });
     }
+  }
+
+  /**
+   * Whether a tool's schema requires an input property, for `{}` truncation.
+   *
+   * Read from the live tool record (the registered definition, not a name table) through the same
+   * `inputSchema` the runner sends to the provider. `undefined` when the schema cannot be asked, so
+   * `{}` stays a valid call instead of being guessed at.
+   */
+  private requiresArgumentsLookup(): (toolName: string) => boolean | undefined {
+    return (toolName) => toolSchemaRequiresArguments(this.managed.toolService.getToolsRecord()[toolName]?.inputSchema);
   }
 
   /**

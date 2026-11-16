@@ -77,6 +77,15 @@ export interface AgentSessionCreateOptions {
   systemPrompt?: string;
   /** 1..`MAX_AGENT_ITERATIONS` (checked by `AgentConfigSchema`); omit for `DEFAULT_AGENT_MAX_ITERATIONS`. */
   maxIterations?: number;
+  /**
+   * Idle budget (ms) while a tool call waits for its arguments; `0` disables the guard.
+   *
+   * Defaults to `DEFAULT_MODEL_STREAM_STALL_MS` (120 s). It is a model-stream guard, not a tool
+   * timeout: the timer only runs between `TOOL_CALL_START` and `TOOL_CALL_END`, so a long
+   * `run_command` or `task` execution is never counted. Exposed so a host can raise or disable it
+   * without patching core.
+   */
+  streamStallTimeoutMs?: number;
   /** Max concurrent `task` subagents under this agent (default 4). */
   maxConcurrentTasks?: number;
   mcpConfigPath?: string;

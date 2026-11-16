@@ -1,3 +1,4 @@
+import { isInterruptedToolOutput } from "../../../runtime-types/tool-truncation.js";
 import { parseToolInput } from "../../../utils/parse-tool-arguments.js";
 import { truncateText } from "../../../utils/text-truncation.js";
 import { isBuiltinToolName } from "../catalog/tool-names.js";
@@ -19,12 +20,23 @@ export type ToolActivityCounts = {
   commands: number;
   tasks: number;
   other: number;
+  /** Calls that never ran because the response was cut off — neither work nor a tool fault. */
+  interrupted: number;
   errors: number;
 };
 
 export type ToolActivityBucket = keyof ToolActivityCounts;
 
-const BUCKET_ORDER: ToolActivityBucket[] = ["reads", "edits", "searches", "commands", "tasks", "other", "errors"];
+const BUCKET_ORDER: ToolActivityBucket[] = [
+  "reads",
+  "edits",
+  "searches",
+  "commands",
+  "tasks",
+  "other",
+  "interrupted",
+  "errors",
+];
 
 const BUCKET_LABEL: Record<ToolActivityBucket, { one: string; many: string }> = {
   reads: { one: "read", many: "reads" },
@@ -33,6 +45,7 @@ const BUCKET_LABEL: Record<ToolActivityBucket, { one: string; many: string }> = 
   commands: { one: "command", many: "commands" },
   tasks: { one: "task", many: "tasks" },
   other: { one: "other", many: "other" },
+  interrupted: { one: "interrupted call", many: "interrupted calls" },
   errors: { one: "error", many: "errors" },
 };
 
@@ -91,11 +104,14 @@ export function isErrorToolRow(part: ToolCallPart): boolean {
   // rendered with the neutral cancel marker. Counting it as an error made the compact
   // summary report failures the user never saw.
   if (isCancelledToolCall(part)) return false;
+  // A truncated call is not a tool failure either: the upstream response was cut off, and counting
+  // 143 of them as tool errors in the compact summary reports a fault the tools never had.
+  if (isInterruptedToolOutput(part.output)) return false;
   return getUiToolState(part) === "output-error";
 }
 
 export function emptyToolActivityCounts(): ToolActivityCounts {
-  return { reads: 0, edits: 0, searches: 0, commands: 0, tasks: 0, other: 0, errors: 0 };
+  return { reads: 0, edits: 0, searches: 0, commands: 0, tasks: 0, other: 0, interrupted: 0, errors: 0 };
 }
 
 /**
@@ -121,6 +137,12 @@ export function countToolActivity(
     const id = part.id ?? `${part.name}:${JSON.stringify(part.arguments ?? "")}`;
     if (seen.has(id)) continue;
     seen.add(id);
+    // A call the upstream cut off never ran: counting it in its own bucket reported work that did
+    // not happen ("35 commands, 31 reads" for one placeholder response).
+    if (isInterruptedToolOutput(part.output)) {
+      counts.interrupted += 1;
+      continue;
+    }
     if (isErrorToolRow(part)) {
       counts.errors += 1;
       continue;
@@ -147,6 +169,8 @@ export function collectOtherToolNames(
     const id = part.id ?? `${part.name}:${JSON.stringify(part.arguments ?? "")}`;
     if (seen.has(id)) continue;
     seen.add(id);
+    // A call that never ran is counted in its own bucket, never named as a tool the turn used.
+    if (isInterruptedToolOutput(part.output)) continue;
     if (isErrorToolRow(part)) continue;
     if (getToolActivityBucket(part.name, resolve) !== "other") continue;
     counts.set(part.name, (counts.get(part.name) ?? 0) + 1);
@@ -298,6 +322,9 @@ export function formatExploredActivitySummary(
   const labels: ActivityLabel[] = [];
   const seen = new Set<string>();
   for (const part of list) {
+    // A call the upstream cut off never touched the path it named; folding that label into the
+    // activity line claimed exploration that did not happen.
+    if (isInterruptedToolOutput(part.output)) continue;
     const label = extractActivityLabelInfo(part, resolve);
     if (!label || seen.has(label.text)) continue;
     seen.add(label.text);
@@ -314,6 +341,7 @@ export function formatExploredActivitySummary(
     counts.commands === 0 &&
     counts.tasks === 0 &&
     counts.other === 0 &&
+    counts.interrupted === 0 &&
     counts.errors === 0;
 
   const head = onlyReads ? (counts.reads === 1 ? "Explored 1 file" : `Explored ${counts.reads} files`) : countText;
