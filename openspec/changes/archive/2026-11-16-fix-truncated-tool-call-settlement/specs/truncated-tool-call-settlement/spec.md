@@ -59,9 +59,9 @@ presentation reports it as interrupted, and its summary names the truncation.
 - **THEN** its text is the truncation notice rather than an empty or cancelled body
 
 ### Requirement: A truncated tool-call stream ends the turn as a stream failure
-When a model response delivers one or more tool-call starts and then ends without its terminal events,
-the run SHALL be finalized as a stream failure at the stream boundary. It MUST NOT remain running until
-the user aborts, and the failure SHALL be observable in the run's event stream and status.
+A model response SHALL be finalized as a stream failure when it delivers one or more tool-call starts and
+then ends without its terminal events. It MUST NOT remain running until the user aborts, and the failure
+SHALL be observable in the run's event stream and status.
 
 #### Scenario: Stream ends after tool-call starts
 - **WHEN** a model response emits tool-call starts and the stream ends with no tool-call end, finish, or
