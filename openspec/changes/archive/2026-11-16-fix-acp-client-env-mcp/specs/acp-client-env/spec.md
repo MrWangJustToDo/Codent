@@ -17,9 +17,8 @@ MUST NOT 表现为「成员存在但失败」。回退 SHALL 覆盖 `CoreEnvFs` 
   写入，client 永远给不了；core 对缺失该成员的本地环境又是**直接拒绝**而不是降级，所以省略它会让
   `--client-env` 下所有 stdio MCP server 都无法连接，`/mcp` 报
   `Stdio MCP transport is not available in this environment`；
-- 省略只造成**降级或无关**时仍按既有规则取舍，本变更不改变这些：`readFileRange` 明确 MUST NOT
-  定义（core 自行用 `readFile` 区间裁剪）、`rename` 取决于写入路由、`imageToText` 服务终端预览面板
-  而本宿主不消费；
+- 省略只造成**降级或无关**时仍按既有规则取舍：`readFileRange` 明确 MUST NOT 定义（core 自行用
+  `readFile` 区间裁剪）、`rename` 取决于写入路由、`imageToText` 服务终端预览面板而本宿主不消费；
 - 该能力的答案依赖**本机对工作区的视图**时（LSP、code-mode isolate driver），成员 SHALL 保持缺席：
   它们会描述本机磁盘，而不是该 env 实际服务的那个工作区。
 
