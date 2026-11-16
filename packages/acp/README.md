@@ -197,6 +197,28 @@ What it does and does not change:
   back to their in-process implementation instead of reading partial output as "no matches". The
   capability matrix and every fallback decision are logged to stderr, each actionable one once
   rather than per request.
+- **MCP stdio servers are spawned by this process, not by the client.** `--client-env` moves fs and
+  argv *routing*; it does not move process ownership, and this env already said so — free-text
+  commands and background jobs run on the local env. A stdio server additionally needs a duplex pipe
+  (JSON-RPC goes to the child's stdin, replies come back on its stdout) and ACP's `terminal/*` has no
+  stdin write, so the client could never provide one. The member is therefore forwarded from the
+  local env instead of withheld: withholding it did not degrade a feature, it removed one — core
+  refuses a stdio transport outright, so every configured stdio server failed at connect and `/mcp`
+  listed it as `Stdio MCP transport is not available in this environment`. LSP and the code-mode
+  isolate driver stay absent for a different reason: a language server also has to *see* the
+  workspace it reports on.
+- **An MCP server's question is answered by the same form the client already renders.** A server's
+  `elicitation/create` becomes one ACP `elicitation/create` (`mcp-elicitation.ts`), supplied as the
+  session's `mcpElicit` hook. Supplying a hook is the whole opt-in — core advertises `elicitation`
+  to the server at the MCP handshake only when one exists — so it is decided from two facts known
+  before MCP connects (servers connect inside `host.create`, after the ACP `initialize` handshake):
+  the client advertises `elicitation.form`, and the host accepts a hook at all (a remote session
+  host cannot — a hook is executable code). A client without the capability, or such a host, gets no
+  hook, so a server that asks anyway gets the protocol error rather than a dialog nobody can answer.
+  The hook is bound to the session bridge and reads its handle per question, so a `session/fork`
+  question carries the clone's id at no extra bookkeeping, and every path answers: a question that
+  arrives after the session is gone is declined; one already out when the deadline passes or the
+  client cancels/rejects it ends as `cancel`.
 
 ## Use in-process
 
@@ -388,7 +410,7 @@ the model command (and to the `thought_level` selector above).
 | model selector (`configOptions`, `category: "model"`) | ✅ whenever a model catalog is readable: a single-model plane advertises one fixed value; `.agents/config/models.json` (or a multi-model provider) yields a switchable list. The legacy `models` field and `session/set_model` are still served for older pickers — `set_model` answers with the updated `models` + `configOptions`, and `load`/`resume` carry `models` too, so a picker cannot stay on the previous model |
 | thinking-depth selector (`configOptions`, `category: "thought_level"`) | ✅ for a model that advertises reasoning levels; absent otherwise |
 | `session/request_permission` | ✅ approvals → four-option round-trip; cancel/timeout/disconnect settle as a denial; `allow_always` / `reject_always` are remembered per session |
-| `elicitation/create` | ✅ `ask_user` (multi-select included); without form support the question is posted as text and the turn ends so the next prompt can answer it; decline/cancel/empty-accept/failure settle as a cancelled tool result |
+| `elicitation/create` | ✅ `ask_user` (multi-select included) **and** an MCP server's own question (gated on `elicitation.form` + a host that accepts a hook — see [Client env](#client-env)); without form support the question is posted as text and the turn ends so the next prompt can answer it; decline/cancel/empty-accept/failure settle as a cancelled tool result |
 | `compaction_update` / `compaction_summary_chunk` / `notice` | ✅ gated by the client capability (open as `in_progress`, stream the summary, close as `completed` / `failed` / `cancelled`) |
 | `subagent_update` + child sessions | ✅ gated by `subagents` (announce → patch; child transcripts under the child id; the parent `task` row is the formatted result) — see [Subagents](#subagents) |
 | child ownership | ✅ children are absent from `session/list`; `load` / `resume` / `prompt` / `fork` refuse a child id; `close` / `delete` are no-ops and never destroy one |
@@ -442,6 +464,7 @@ Full recipe and verification checklist:
 | `interactions.ts` | the two client round-trips: permission + elicitation |
 | `permissions.ts` | permission / elicitation request-response mapping |
 | `mcp.ts` | ACP `McpServer[]` → core `McpServerConfig` (with validation) |
+| `mcp-elicitation.ts` | an MCP server's `elicitation/create` → the client's form request (capability-gated, session resolved per call) |
 | `content.ts` | prompt `ContentBlock[]` ↔ `ContentPart` mapping |
 | `tools.ts` | tool kind / title / locations / structured diff |
 | `commands.ts` | slash-command parsing + dispatch |
@@ -466,15 +489,23 @@ The suites are an **in-process conformance run** — the official SDK's `client(
 our `agent()` app and drives real requests — alongside pure mapping units. `validate:acp:bootstrap`
 is the deliberate opposite shape: a real `createNodeEnv`, a real `CodentAgent` and a real
 `host.create`, because the class of failure it covers (work core does *before* a session exists) is
-invisible to a hand-built client env with a fake host. All of them run in CI through the repo-wide
-validator runner, which discovers `validate-*.mjs` by glob rather than by a list.
+invisible to a hand-built client env with a fake host. It also spawns a real stdio MCP server
+(`scripts/mcp-stdio-fixture.mjs`, a ~90-line JSON-RPC fixture) to prove `--client-env` really
+connects one, rather than only proving a spawn failure is not the "transport unavailable" guard. All
+of them run in CI through the repo-wide validator runner, which discovers `validate-*.mjs` by glob
+rather than by a list.
 
 ## Known limitations
 
 - stdio only (ACP remote HTTP/WS transports are still experimental).
 - Per-session `mcpServers` REPLACE `.agents/mcp.json` for that session; they are not merged, and an
   empty or absent list falls back to the file. The `acp` transport (a client-bridged server) has no
-  core entry point and is rejected explicitly rather than ignored.
+  core entry point and is rejected explicitly rather than ignored. A **stdio** server is spawned by
+  this process — that is the machine running `codent acp`, which over SSH or in a dev container is
+  not necessarily the editor's — under `--client-env` too. A client whose workspace lives on another
+  machine is the case that does not fit: the server is spawned here and sees this disk, which is a
+  property of the deployment rather than something the env can detect (and refusing stdio everywhere,
+  as `--client-env` used to, does not serve that case either).
 - `session/resume` / `session/load` accept `mcpServers` the same way `session/new` does (both build
   a fresh agent via `Host.create`). A live `load`/`resume` with a different list is refused, because
   a live session's servers are fixed at creation. `session/fork` rejects the field for a live source
