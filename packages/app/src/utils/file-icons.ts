@@ -31,7 +31,11 @@ const BINARY_EXTENSIONS = new Set([
   ".wasm",
 ]);
 
-/** Seti / VS Code–inspired colors for text-badge fallback. */
+/** Seti / VS Code–inspired colors for text-badge fallback.
+ *
+ * These are the file types' own brand colors, so they are theme-independent by design. Anything
+ * that should follow the palette reads `COLORS` at call time instead (see `getTextBadgeStyle`'s
+ * fallback) — a literal captured here would freeze the palette that was active at import. */
 const EXT_STYLES: Record<string, { glyph: string; color: string }> = {
   ts: { glyph: "TS", color: "#3178C6" },
   tsx: { glyph: "TS", color: "#3178C6" },
@@ -75,7 +79,6 @@ const EXT_STYLES: Record<string, { glyph: string; color: string }> = {
   gif: { glyph: "IMG", color: "#A074C4" },
   webp: { glyph: "IMG", color: "#A074C4" },
   pdf: { glyph: "PDF", color: "#E44D26" },
-  lock: { glyph: "LOCK", color: COLORS.muted },
   env: { glyph: "ENV", color: "#ECD53F" },
   gitignore: { glyph: "GIT", color: "#F05032" },
   dockerfile: { glyph: "DKR", color: "#2496ED" },
@@ -235,19 +238,18 @@ export function formatIconGlyph(style: FileIconStyle): string {
 }
 
 const FOLDER_CLOSED_COLOR = "#CBCB41";
-const FOLDER_OPEN_COLOR = COLORS.primary;
 
 function getTextFolderStyle(expanded: boolean): FolderIconStyle {
   return {
     chevron: expanded ? "▾" : "▸",
     glyph: expanded ? "DIR-" : "DIR+",
-    color: expanded ? FOLDER_OPEN_COLOR : COLORS.muted,
+    color: expanded ? COLORS.primary : COLORS.muted,
   };
 }
 
 function getNerdFolderStyle(name: string, expanded: boolean): FolderIconStyle {
   let icon = expanded ? icons["nf-md-folder_open"] : icons["nf-md-folder"];
-  let color = expanded ? FOLDER_OPEN_COLOR : FOLDER_CLOSED_COLOR;
+  let color = expanded ? COLORS.primary : FOLDER_CLOSED_COLOR;
 
   if (name === ".git") {
     icon = icons["nf-seti-git_folder"];

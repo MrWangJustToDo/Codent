@@ -5,13 +5,31 @@ import { COLORS } from "../theme/colors.js";
 import type { TodoItem, TodoPriority, TodoStatus } from "@codent/core";
 
 // ============================================================================
-// Visual constants — kept in sync with components/TodoList.tsx
+// Visual constants
 // ============================================================================
 
-const STATUS_COLORS: Record<TodoStatus, string> = {
-  pending: COLORS.muted,
-  in_progress: COLORS.warning,
-  completed: COLORS.success,
+/**
+ * Status → palette color, resolved per render.
+ *
+ * Deliberately a function: a module-level `Record<TodoStatus, string>` captures whatever palette
+ * was installed when this module was first imported, so `applyColorPalette` (which reassigns the
+ * shared `COLORS` object in place) could never repaint a todo row — a `claude`-themed session kept
+ * rendering the `gemini` status colors. Anything that reads `COLORS` must read it at render time.
+ *
+ * `in_progress` is `primary` ("active state"), not `warning` ("waiting, approval needed"): the amber
+ * is what the transcript already uses for an `ask_user` question and a pending approval, so reusing
+ * it for work in flight made "the agent is working" and "the agent is waiting for you" the same
+ * color.
+ */
+const statusColor = (status: TodoStatus): string => {
+  switch (status) {
+    case "in_progress":
+      return COLORS.primary;
+    case "completed":
+      return COLORS.success;
+    default:
+      return COLORS.muted;
+  }
 };
 
 const STATUS_ICONS: Record<TodoStatus, string> = {
@@ -42,7 +60,7 @@ export interface TodoToolOutputViewProps {
 
 const TodoRow = ({ item, stepIndex, showStep }: { item: TodoItem; stepIndex: number; showStep: boolean }) => {
   const icon = STATUS_ICONS[item.status];
-  const color = STATUS_COLORS[item.status];
+  const color = statusColor(item.status);
   const priorityLabel = PRIORITY_LABELS[item.priority];
 
   return (
