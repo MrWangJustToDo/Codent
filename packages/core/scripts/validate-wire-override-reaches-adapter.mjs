@@ -8,13 +8,13 @@
  * therefore applied to the first call of a run only and was overwritten from the
  * second call on. Three call sites assumed the old contract:
  *
- *   1. the pre-send capability strip (`messagesForModelCapabilities`)
+ *   1. the pre-send capability strip (`armCapabilityStrip` → `stripMultimodalFromChatMessages`)
  *   2. the widened strip retry after a multimodal API rejection
  *      (`tryCapabilitySanitizeRetry`)
  *   3. the `max_tokens` continuation prompt (`handleMaxTokensTruncation`)
  *
  * `validate-run-stream-recovery.mjs` asserted the *identity* behavior of the strip
- * helper (`messagesForModelCapabilities(managed, msgs) === msgs`, which is trivially
+ * helper (`stripMultimodalFromChatMessages(msgs, new Set()) === msgs`, which is trivially
  * true when nothing is dropped) and never observed the adapter. The fix moved all
  * three onto per-run state applied by the `wire-recovery` middleware, which runs
  * after the projection.

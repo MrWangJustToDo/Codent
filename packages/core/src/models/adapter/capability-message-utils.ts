@@ -16,17 +16,22 @@
  * part's own `metadata.imageIndex` / `metadata.filename`. Merging every dropped part into one
  * trailing placeholder (the previous behaviour) lost both the count and the position, leaving the
  * model unable to tell which `#N` was omitted.
+ *
+ * ## Where a strip actually happens
+ *
+ * This module owns the **rules**; the strip itself runs in `wire-recovery-middleware`, from the
+ * per-run drop set `armCapabilityStrip` / `tryCapabilitySanitizeRetry`
+ * (`managers/stream-recovery/capability-sanitize.ts`) put on the `RunCoordinator`. It must: the
+ * compaction projection rebuilds every wire call from the UI channel and discards
+ * `config.messages`, so editing the messages handed to the engine applies to the first call of a
+ * run and is overwritten from the second one on.
  */
 
 import { errorMessage } from "../../utils/errors.js";
-import {
-  MULTIMODAL_PART_TYPES,
-  isMultimodalPartType,
-  type MultimodalPartType,
-} from "../../utils/multimodal-part-types.js";
+import { isMultimodalPartType, type MultimodalPartType } from "../../utils/multimodal-part-types.js";
 
 import type { ModelCapability } from "../types.js";
-import type { ContentPart, ModelMessage, UIMessage } from "@tanstack/ai";
+import type { ContentPart, ModelMessage, TextPart, UIMessage } from "@tanstack/ai";
 
 /** Which {@link ModelCapability} is required to send each multimodal part on the wire. */
 export const MULTIMODAL_PART_CAPABILITY: Record<MultimodalPartType, ModelCapability> = {
@@ -39,10 +44,19 @@ export const MULTIMODAL_PART_CAPABILITY: Record<MultimodalPartType, ModelCapabil
 /**
  * Generic placeholder, used when a dropped part carries no identity to name.
  *
- * Kept as one constant (rather than inlined into the per-part form) because hosts and validators
- * match on it, and because a metadata-less part has nothing more specific to say. A part that does
- * carry `metadata.imageIndex` / `metadata.filename` gets {@link multimodalPartPlaceholder}
- * instead, which restates that identity so the omission stays ordered.
+ * Kept as one constant (rather than inlined into the per-part form) because a metadata-less part has
+ * nothing more specific to say, and because the wire-level validators assert on it —
+ * `validate-wire-override-reaches-adapter` checks that this exact string reached the provider, which
+ * only works if every capability drop produces the same one. Hosts do not match on it: they render
+ * whatever text part the strip leaves behind.
+ *
+ * **Not** the same diagnostic as `OMITTED_UNSENDABLE_MEDIA` in
+ * `lift-tool-media-for-chat-completions.ts`, even though both end up in a message the model reads.
+ * That one is about the **wire format** (a Chat Completions tool result is one string, so video and
+ * document parts cannot ride in it whatever the model supports) and collapses every dropped part
+ * into one line. This one is about the **model's capability** or a missing file, replaces each part
+ * in place, and names its `#index`/filename so the omission stays pairable with the text that
+ * mentions it. Two causes, two granularities — merging them would lose the identity.
  */
 export const MULTIMODAL_OMITTED_PLACEHOLDER =
   "[Media omitted — current model/API does not accept this content type. Use a provider with the matching capability, or describe the content in text.]";
@@ -175,23 +189,32 @@ export function isMultimodalUnsupportedError(error: unknown): boolean {
   return false;
 }
 
-function contentHasMultimodal(content: unknown, types?: Set<MultimodalPartType>): boolean {
-  if (!Array.isArray(content)) return false;
-  return content.some((part) => {
-    const type = (part as { type?: string })?.type;
+/**
+ * Whether any part in the array is a multimodal one (optionally narrowed to `types`).
+ *
+ * Tolerates a hole/`null` entry: the wire `content` array is derived data that has crossed JSON, and
+ * the caller of this scan (`capability-sanitize`) uses the answer to decide whether to emit a
+ * diagnostic — a malformed element must not throw out of that path. The strip that follows tolerates
+ * the same hole (`stripMultimodalContentParts`), so "this wire has media to drop" and "here is the
+ * strip" cannot disagree about which elements exist.
+ */
+function partsHaveMultimodal(
+  parts: Array<{ type?: string } | null | undefined>,
+  types?: Set<MultimodalPartType>
+): boolean {
+  return parts.some((part) => {
+    const type = part?.type;
     if (!isMultimodalPartType(type)) return false;
     return !types || types.has(type);
   });
 }
 
-function partsHaveMultimodal(parts: Array<{ type?: string }>, types?: Set<MultimodalPartType>): boolean {
-  return parts.some((part) => {
-    if (!isMultimodalPartType(part.type)) return false;
-    return !types || types.has(part.type);
-  });
-}
-
-/** True when messages carry any multimodal parts (optionally filtered by type). */
+/**
+ * True when messages carry any multimodal parts (optionally filtered by type).
+ *
+ * One scan for both message shapes — a channel message carries `parts`, a wire message carries
+ * `content` — because the predicate is the same for either container.
+ */
 export function chatMessagesHaveMultimodal(
   messages: Array<UIMessage | ModelMessage>,
   types?: Set<MultimodalPartType>
@@ -200,7 +223,9 @@ export function chatMessagesHaveMultimodal(
     if ("parts" in message && Array.isArray(message.parts)) {
       if (partsHaveMultimodal(message.parts, types)) return true;
     }
-    if ("content" in message && contentHasMultimodal(message.content, types)) return true;
+    if ("content" in message && Array.isArray(message.content)) {
+      if (partsHaveMultimodal(message.content, types)) return true;
+    }
   }
   return false;
 }
@@ -214,41 +239,42 @@ export function chatMessagesHaveMultimodal(
  * single trailing placeholder loses how many were dropped and where they sat relative to the
  * surviving content. The part's own position is what carries the ordering.
  *
+ * One loop for both part vocabularies — a wire `ContentPart[]` and a channel message's `parts`
+ * — because the rule is identical and a `text` part (what a placeholder becomes) is a member of
+ * both. The single cast is that fact: the placeholder is built shape-first and re-typed as the
+ * caller's part type, rather than written twice with two different annotations.
+ *
  * Exported for the seam that has to reach a tool result in its string form
  * (`wire-recovery-middleware`): Chat Completions accepts only string `tool` content, and the parser
  * that recognises that form is `agent/media/`'s, which this layer must not import
  * (`validate-layer-boundaries`). The rule stays here; only the recognition lives one layer up.
  */
-export function stripMultimodalContentParts(content: ContentPart[], drop: Set<MultimodalPartType>): ContentPart[] {
+export function stripMultimodalContentParts<T extends { type: string; metadata?: unknown }>(
+  content: T[],
+  drop: Set<MultimodalPartType>
+): T[] {
   let removed = 0;
-  const kept: ContentPart[] = [];
+  const kept: T[] = [];
   for (const part of content) {
+    // Tolerate a hole/`null` entry for the same reason `partsHaveMultimodal` does: the wire
+    // `content` array is derived data that has crossed JSON, and a strip that throws on one
+    // malformed element would fail the send it was armed to repair.
+    if (!part || typeof part !== "object") {
+      kept.push(part);
+      continue;
+    }
     if (isMultimodalPartType(part.type) && drop.has(part.type)) {
       removed++;
-      kept.push({ type: "text", content: multimodalPartPlaceholder(part.type, part) });
+      // Shape-first, then one cast: the placeholder is built as the wire vocabulary's `TextPart` —
+      // which is also a `text` part in a channel message's `parts` — so the literal is type-checked
+      // against the real shape instead of being spelled `as unknown as T` from an object literal.
+      const placeholder: TextPart = { type: "text", content: multimodalPartPlaceholder(part.type, part) };
+      kept.push(placeholder as unknown as T);
       continue;
     }
     kept.push(part);
   }
   if (removed === 0) return content;
-  return kept;
-}
-
-function stripUiParts(parts: UIMessage["parts"], drop: Set<MultimodalPartType>): UIMessage["parts"] {
-  let removed = 0;
-  const kept: UIMessage["parts"] = [];
-  for (const part of parts) {
-    if (isMultimodalPartType(part.type) && drop.has(part.type)) {
-      removed++;
-      kept.push({
-        type: "text",
-        content: multimodalPartPlaceholder(part.type, part as { metadata?: unknown }),
-      });
-      continue;
-    }
-    kept.push(part);
-  }
-  if (removed === 0) return parts;
   return kept;
 }
 
@@ -264,7 +290,7 @@ export function stripMultimodalFromChatMessages<T extends UIMessage | ModelMessa
 
   return messages.map((message) => {
     if ("parts" in message && Array.isArray(message.parts)) {
-      const parts = stripUiParts(message.parts, drop);
+      const parts = stripMultimodalContentParts(message.parts, drop);
       if (parts === message.parts) return message;
       return { ...message, parts } as T;
     }
@@ -279,30 +305,10 @@ export function stripMultimodalFromChatMessages<T extends UIMessage | ModelMessa
   });
 }
 
-/**
- * Pre-send sanitize: drop multimodal parts the model is known not to support.
- * Empty/unknown capabilities (probe returns true for all) → no strip.
- */
-export function sanitizeMessagesForCapabilities<T extends UIMessage | ModelMessage>(
-  messages: T[],
-  probe: CapabilityProbe | null | undefined
-): T[] {
-  const drop = unsupportedMultimodalPartTypes(probe);
-  if (drop.size === 0) return messages;
-  if (!chatMessagesHaveMultimodal(messages, drop)) return messages;
-  return stripMultimodalFromChatMessages(messages, drop);
-}
-
-/**
- * After a multimodal schema/API rejection: strip every multimodal part still present
- * and return a copy suitable for one retry. Returns null if nothing to strip.
- */
-export function trySanitizeForMultimodalRetry(
-  error: unknown,
-  messages: Array<UIMessage | ModelMessage>
-): Array<UIMessage | ModelMessage> | null {
-  if (!isMultimodalUnsupportedError(error)) return null;
-  const all = new Set<MultimodalPartType>(MULTIMODAL_PART_TYPES);
-  if (!chatMessagesHaveMultimodal(messages, all)) return null;
-  return stripMultimodalFromChatMessages(messages, all);
-}
+// (No `sanitizeMessagesForCapabilities` / `trySanitizeForMultimodalRetry` here: both edited the
+// message array handed to the engine, which the compaction projection overwrites from the second
+// call of a run onward. The production path arms a per-run drop set instead — `armCapabilityStrip`
+// / `tryCapabilitySanitizeRetry` in `managers/stream-recovery/` — and the strip above runs inside
+// the wire projection for every call. Those two helpers outlived their call site by one refactor
+// and were only exercised by a validator, so they were removed rather than kept as a second way to
+// spell one decision.)

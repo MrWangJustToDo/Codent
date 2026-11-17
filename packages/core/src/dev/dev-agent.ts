@@ -331,14 +331,16 @@ export {
 } from "../agent/run/model-stream-observer.js";
 export {
   MULTIMODAL_OMITTED_PLACEHOLDER,
+  MULTIMODAL_PART_CAPABILITY,
   chatMessagesHaveMultimodal,
   isMultimodalUnsupportedError,
-  sanitizeMessagesForCapabilities,
+  stripMultimodalContentParts,
   stripMultimodalFromChatMessages,
-  trySanitizeForMultimodalRetry,
   unsupportedMultimodalPartTypes,
 } from "../models/adapter/capability-message-utils.js";
 export type { CapabilityProbe } from "../models/adapter/capability-message-utils.js";
+export { MODALITY_CAPABILITY } from "../provider/models-dev/parse.js";
+export { MULTIMODAL_PART_TYPES } from "../utils/multimodal-part-types.js";
 export {
   hasDeferredToolExecution,
   hasApprovedToolsPendingExecution,

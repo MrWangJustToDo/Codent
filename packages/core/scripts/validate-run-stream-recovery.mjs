@@ -13,6 +13,7 @@ import {
   isTransientRetryableError,
   retryDelayMs,
   runStreamWithRecovery,
+  tryCapabilitySanitizeRetry,
 } from "../dist/dev.mjs";
 
 // --- detectors ---
@@ -241,6 +242,53 @@ assert.equal(
   "a fully capable model arms no strip"
 );
 assert.equal(fullRun.getWireDropPartTypes(), null, "no drop set is stored when nothing is unsupported");
+
+// --- the widened, one-shot retry after a multimodal rejection ------------------
+//
+// The declared capabilities are a prediction. When the endpoint rejects a part anyway, the run
+// widens to every modality for ONE retry — and the one-shot guard is what keeps a persistently
+// failing request from retrying forever. Nothing exercised this function before, so its four
+// observable effects are asserted here: the return value, the widened set, the cleared error, and
+// the diagnostic.
+
+const widenRun = makeRunCoordinatorStub();
+const widenErrors = [];
+const widenDiagnostics = [];
+const widenManaged = {
+  parentId: undefined,
+  run: widenRun,
+  usage: { hasCapability: () => true },
+  setError: (value) => widenErrors.push(value),
+  emitDiagnostic: (category, message) => widenDiagnostics.push({ category, message }),
+};
+
+assert.equal(
+  tryCapabilitySanitizeRetry(widenManaged, new Error("network timeout"), false),
+  false,
+  "an unrelated error does not widen the strip"
+);
+assert.equal(widenRun.getWireDropPartTypes(), null, "no drop set for an unrelated error");
+assert.deepEqual(widenErrors, [], "nothing is cleared when nothing is retried");
+
+assert.equal(
+  tryCapabilitySanitizeRetry(widenManaged, new Error("unknown variant `image_url`, expected `text`"), false),
+  true,
+  "a multimodal rejection widens the strip"
+);
+assert.deepEqual(
+  [...widenRun.getWireDropPartTypes()].sort(),
+  ["audio", "document", "image", "video"],
+  "the widened set drops every modality, not just the predicted one"
+);
+assert.deepEqual(widenErrors, [""], "the stale error is cleared, so the retry does not surface as a failure");
+assert.equal(widenDiagnostics.length, 1, "the widening is reported once");
+assert.equal(widenDiagnostics[0].category, "capability");
+
+assert.equal(
+  tryCapabilitySanitizeRetry(widenManaged, new Error("unknown variant `image_url`, expected `text`"), true),
+  false,
+  "the widened retry is one-shot: an attempted strip does not retry again"
+);
 
 const out = [];
 for await (const chunk of runStreamWithRecovery({

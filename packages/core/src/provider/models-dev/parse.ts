@@ -57,8 +57,12 @@ function resolveStyleFromModelsDevVendor(vendorId: string): ModelStyle {
  * multimedia capabilities. `attachment` is a single boolean that means "accepts some
  * non-text input" — it cannot say WHICH — so it is only a fallback for entries with no
  * `modalities` array, and even then it grants `vision` only.
+ *
+ * Exported to the dev surface (`src/dev.ts`) for one assertion: the capability that gates a part
+ * type in `models/adapter/capability-message-utils.ts` must be one this table can grant, or the gate
+ * never opens and that media is stripped for every model. Not part of the published API.
  */
-const MODALITY_CAPABILITY: Record<string, ModelCapability> = {
+export const MODALITY_CAPABILITY: Record<string, ModelCapability> = {
   image: "vision",
   audio: "audio",
   video: "video",
