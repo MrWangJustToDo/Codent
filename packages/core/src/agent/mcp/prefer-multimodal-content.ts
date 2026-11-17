@@ -194,6 +194,12 @@ export function mcpContentToTanstack(content: McpContentBlock[] | undefined): st
             type: "text",
             content: describeNotInlined({ kind: "resource", uri, mimeType: resource.mimeType, value: resource.blob }),
           });
+          // A malformed block (spec says `text` XOR `blob`) can still carry a readable half. It is
+          // kept here too: sending an unsendable payload must cost the bytes, not the text that
+          // explains them. Same order as the sendable branch — identity line, then text.
+          if (typeof resource.text === "string" && resource.text.length > 0) {
+            parts.push({ type: "text", content: resource.text });
+          }
           break;
         }
 

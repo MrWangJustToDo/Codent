@@ -204,6 +204,21 @@ assert.match(bothForms[0].content, /file:\/\/\/r\.pdf/);
 assert.equal(bothForms[1].content, "caption", "the text half survives next to the media part");
 assert.equal(bothForms[2].type, "document");
 
+// …and the text half survives next to an UNSENDABLE blob too: an unsupported payload costs the
+// bytes, not the readable explanation of what the file is.
+const bothFormsUnsendable = mcpContentToTanstack([
+  {
+    type: "resource",
+    resource: { uri: "file:///b.zip", mimeType: "application/zip", text: "release bundle", blob: ZIP_B64 },
+  },
+]);
+assert.ok(Array.isArray(bothFormsUnsendable));
+assert.equal(bothFormsUnsendable.length, 2);
+assert.equal(bothFormsUnsendable[0].type, "text");
+assert.match(bothFormsUnsendable[0].content, /file:\/\/\/b\.zip/);
+assert.equal(bothFormsUnsendable[1].content, "release bundle", "the text half survives an unsendable blob");
+assert.equal(JSON.stringify(bothFormsUnsendable).includes(ZIP_B64), false, "the unsendable bytes stay out");
+
 // An error result must not smuggle the base64 into the thrown message — that message is the tool's
 // persisted error string, so it is exactly where the bytes must not end up.
 let binaryErrorThrown = false;
