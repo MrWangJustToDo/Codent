@@ -17,8 +17,12 @@ import type { CoreEnv } from "../../../../../env";
  * can inspect the result: `{a..t}` repeated six times is 20^6 strings. `max` bounds the frontier
  * while it is built (a single group with 100k alternatives is refused by the same check), so a
  * pathological pattern can never allocate more than ~max entries.
+ *
+ * Exported because callers must REFUSE an `overflowed` expansion rather than search with a prefix
+ * of it: a prefix is a silently wrong answer, not a smaller one (`glob` states the failure, `grep`
+ * does the same for `include`).
  */
-const MAX_BRACE_EXPANSIONS = 1024;
+export const MAX_BRACE_EXPANSIONS = 1024;
 
 export interface BraceExpansion {
   patterns: string[];

@@ -15,7 +15,6 @@ import { ExecutionError } from "../../../../../env/types";
 import { toPosixPath } from "../../../../../utils/posix-path.js";
 import { canExecArgs, execArgs } from "../../shell/exec-args.js";
 
-import { expandBraceGlobs } from "./glob-pattern.js";
 import { isCommandNotFound, quoteForShell, SEARCH_COMMAND_TIMEOUT, truncateLines } from "./search-command.js";
 import { isGitWorkTree, type SearchPolicy } from "./search-policy.js";
 
@@ -37,6 +36,8 @@ function buildRgArgs(
   options: {
     ignoreCase: boolean;
     include: string | undefined;
+    /** Brace-expanded alternatives of `include`, computed ONCE by the caller. */
+    includePatterns: readonly string[];
     outputMode: string;
     context: number;
     searchPathIsFile: boolean;
@@ -79,8 +80,8 @@ function buildRgArgs(
   // single file to avoid conflicts between the glob and the file path.
   // Brace groups like `*.{ts,tsx}` are expanded to one --glob per alternative
   // since rg does not brace-expand its own --glob values.
-  if (options.include && !options.searchPathIsFile) {
-    for (const glob of expandBraceGlobs(options.include).patterns) {
+  if (options.includePatterns.length > 0 && !options.searchPathIsFile) {
+    for (const glob of options.includePatterns) {
       // ripgrep, like fd, matches a path glob from the search root/cwd; a caller's
       // `nested/*.ts` would match nothing unless it can start at any depth. The JS
       // include filter applies the exact relative semantics afterwards.
@@ -115,6 +116,8 @@ function buildGrepArgs(
   options: {
     ignoreCase: boolean;
     include: string | undefined;
+    /** Brace-expanded alternatives of `include`, computed ONCE by the caller. */
+    includePatterns: readonly string[];
     outputMode: string;
     context: number;
     searchPathIsFile: boolean;
@@ -155,11 +158,11 @@ function buildGrepArgs(
   // searching a single file to avoid conflicts. Brace groups are expanded to one --include
   // per alternative since grep does not brace-expand its own --include values.
   const needsJsIncludeFilter = includeNeedsJsFilter(options.include);
-  if (options.include && !options.searchPathIsFile) {
+  if (options.includePatterns.length > 0 && !options.searchPathIsFile) {
     // GNU grep's --include is basename-only. For a path glob, still give it the basename
     // as a cheap pre-filter (e.g. `nested/*.ts` → `*.ts`); the exact path semantics are
     // applied in JS after the command returns.
-    for (const glob of expandBraceGlobs(options.include).patterns) {
+    for (const glob of options.includePatterns) {
       args.push("--include", needsJsIncludeFilter ? includeBasename(glob) : glob);
     }
   }
@@ -201,6 +204,8 @@ function buildGitGrepArgs(
   options: {
     ignoreCase: boolean;
     include: string | undefined;
+    /** Brace-expanded alternatives of `include`, computed ONCE by the caller. */
+    includePatterns: readonly string[];
     outputMode: string;
     context: number;
     searchPathIsFile: boolean;
@@ -229,8 +234,8 @@ function buildGitGrepArgs(
   // the search root rather than the repository, so it stays a JS filter (same split as the grep
   // path above).
   const pathspecs: string[] = [];
-  if (options.include && !options.searchPathIsFile && !includeNeedsJsFilter(options.include)) {
-    pathspecs.push(...expandBraceGlobs(options.include).patterns);
+  if (options.includePatterns.length > 0 && !options.searchPathIsFile && !includeNeedsJsFilter(options.include)) {
+    pathspecs.push(...options.includePatterns);
   }
   pathspecs.push(searchPath);
   // The policy's build/data directories are not necessarily in `.gitignore` (a fixture repo, a
@@ -269,6 +274,13 @@ export async function runGrepSearch(
   options: {
     ignoreCase: boolean;
     include: string | undefined;
+    /**
+     * Brace-expanded alternatives of `include`, expanded ONCE by the caller (`grep-tool`), which
+     * also refuses an `overflowed` expansion. Passing them in keeps every engine rung (`rg` /
+     * `git grep` / `grep`) on the same list — a second expansion here had no way to report a
+     * prefix, so an over-limit `include` silently became a narrower search.
+     */
+    includePatterns: readonly string[];
     outputMode: string;
     context: number;
     fetchCount: number;

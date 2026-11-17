@@ -8,7 +8,13 @@ import { OUTPUT_LIMITS } from "../../shared/output-limits.js";
 import { grepOutputSchema } from "../../shared/schemas.js";
 import { withDuration } from "../../shared/tool-result.js";
 
-import { expandBraceGlobs, isWithinSearchPath, matchesGlobPath, normalizeSearchPath } from "./search/glob-pattern.js";
+import {
+  expandBraceGlobs,
+  isWithinSearchPath,
+  matchesGlobPath,
+  MAX_BRACE_EXPANSIONS,
+  normalizeSearchPath,
+} from "./search/glob-pattern.js";
 import { parseCountLine, parseGrepLine, runGrepSearch } from "./search/grep-search.js";
 import { formatSearchModelOutput, resolveSearchPath } from "./search/search-command.js";
 import { activeExcludeDirs, defaultSearchPolicy, searchTargetBypassesIgnore } from "./search/search-policy.js";
@@ -167,9 +173,28 @@ export const createGrepTool = () => {
           signal: abortSignal,
         });
 
+        // `include` is model-controlled text and brace expansion is a cartesian product, so it is
+        // expanded exactly ONCE here, before any backend runs. An overflow is REFUSED rather than
+        // searched with the first N alternatives: a prefix is a silently narrower answer, and both
+        // the command-side flags and the JS include filter would inherit it. Same contract as
+        // `glob` (which also refuses instead of running a partial fan-out).
+        const includeExpansion =
+          include && !searchPathIsFile ? expandBraceGlobs(include) : { patterns: [] as string[], overflowed: false };
+        if (includeExpansion.overflowed) {
+          return {
+            matches: [] as { file: string; lineNumber: number; content: string }[],
+            content: `include expands to more than ${MAX_BRACE_EXPANSIONS} brace alternatives (the limit). Narrow the brace groups or run separate grep calls.`,
+            offset: skip,
+            limit: take,
+            cachedOutputPath: null,
+          };
+        }
+        const includePatterns = includeExpansion.patterns;
+
         const searchOptions = {
           ignoreCase: ignoreCase ?? false,
           include,
+          includePatterns,
           outputMode: mode,
           context: contextLines,
           fetchCount,
@@ -225,10 +250,9 @@ export const createGrepTool = () => {
 
         // `include` is omitted from the grep fallback when it contains a path glob
         // (GNU grep's --include is basename-only). Apply the same segment-aware filter
-        // here for both backends; brace alternatives include `*.{ts,tsx}`.
+        // here for both backends; the alternatives were brace-expanded once above.
         // A single-file path already names the file; include flags are ignored by the
         // backend in that case, so do not filter the one result away here either.
-        const includePatterns = include && !searchPathIsFile ? expandBraceGlobs(include).patterns : [];
         const includeMatch = (file: string): boolean =>
           includePatterns.length === 0 ||
           includePatterns.some((pattern) => matchesGlobPath(file, searchPath, pattern, coreEnv.rootPath));
