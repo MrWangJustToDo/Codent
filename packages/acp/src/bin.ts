@@ -9,7 +9,7 @@ import { createRequire } from "node:module";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 
 import { bootstrapAcpAgent, type AcpModelOverride } from "./bootstrap.js";
-import { runAcpAgentStdio } from "./stdio.js";
+import { runAcpAgentStdio } from "./transport/stdio.js";
 
 const requireFromBin = createRequire(import.meta.url);
 

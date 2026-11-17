@@ -34,14 +34,6 @@ const ALLOWLIST = new Map([
     "core/agent/run/chat-controller.ts",
     "Chat run orchestration: pump admission/continuation, mid-run queue, session-switch refusal contract, approval answering, stream-outcome finalization. Their ORDER is the invariant, so a split has to carry it; the refusal gate and queue drain helpers are the next unit.",
   ],
-  [
-    "acp/agent.ts",
-    "ACP agent surface: one handler per protocol method plus the session runtime and config-option advertisement. The projector, child projector, interactions and session config options are already separate modules.",
-  ],
-  [
-    "acp/projector.ts",
-    "ACP session/update projector: one method per protocol update kind plus transcript/message mapping. Split is tracked separately.",
-  ],
 ]);
 
 const over = [];

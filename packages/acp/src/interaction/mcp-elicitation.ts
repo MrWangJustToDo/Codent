@@ -40,7 +40,7 @@ import type { McpElicitHook } from "@codent/core";
 /**
  * The parts of a live session this hook touches.
  *
- * A structural view of the host's session bridge (`SessionBridge` in `agent.ts`), not an interface to
+ * A structural view of the host's session bridge (`SessionBridge` in `agent/session-bridge.ts`), not an interface to
  * implement: `acpId` is read per call and `pending`/`closed` are owned by the host.
  */
 export interface McpElicitationSession {

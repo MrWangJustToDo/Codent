@@ -17,7 +17,7 @@
 
 import { isUserVisibleTaskRow } from "@codent/core";
 
-import type { StateUpdate, SubagentProjection } from "./types.js";
+import type { StateUpdate, SubagentProjection } from "../wire/types.js";
 import type { SubagentUpdate } from "@agentclientprotocol/sdk";
 import type { AgentSessionSubagentSummary } from "@codent/core";
 

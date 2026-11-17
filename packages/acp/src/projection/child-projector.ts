@@ -19,7 +19,7 @@
 
 import { AcpProjector } from "./projector.js";
 
-import type { SessionUpdate } from "./types.js";
+import type { SessionUpdate } from "../wire/types.js";
 import type { AgentSession, AgentSessionChannel } from "@codent/core";
 
 /**

@@ -22,8 +22,8 @@ import { applyModel, applyThoughtLevel, THOUGHT_LEVEL_DEFAULT } from "./session-
 import { formatUsageReport } from "./usage-report.js";
 
 import type { ModelSwitchOutcome } from "./session-config-options.js";
-import type { AcpCommands } from "./types.js";
 import type { UsageHistoryPayload } from "./usage-report.js";
+import type { AcpCommands } from "../wire/types.js";
 import type { AgentSession, AgentSessionSnapshot, ModelCatalogRead } from "@codent/core";
 
 /**

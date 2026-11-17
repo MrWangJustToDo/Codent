@@ -9,8 +9,8 @@
 
 import { BUILTIN_TOOL_NAMES, formatToolInput, getBuiltinToolPresentation } from "@codent/core";
 
-import { textBlock } from "./content.js";
-import { toWirePath } from "./paths.js";
+import { textBlock } from "../wire/content.js";
+import { toWirePath } from "../wire/paths.js";
 
 import type { ToolCallContent, ToolKind } from "@agentclientprotocol/sdk";
 import type { ToolActivityCategory, ToolPresentation } from "@codent/core";

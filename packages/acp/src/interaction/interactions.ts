@@ -19,6 +19,8 @@ import {
   resolvePendingInteractions,
 } from "@codent/core";
 
+import { toolCallInfo } from "../projection/tools.js";
+
 import { shouldSuppressApproval, toolInputFor, toolPartFor } from "./approvals.js";
 import {
   buildElicitationRequest,
@@ -26,10 +28,9 @@ import {
   mapPermissionOutcome,
   permissionOptions,
 } from "./permissions.js";
-import { toolCallInfo } from "./tools.js";
 
-import type { AcpClientEnv } from "./client-env.js";
-import type { SessionUpdate } from "./types.js";
+import type { AcpClientEnv } from "../client-env/environment.js";
+import type { SessionUpdate } from "../wire/types.js";
 import type { AgentContext, RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import type { AgentSession, PendingInteractionEntry } from "@codent/core";
 

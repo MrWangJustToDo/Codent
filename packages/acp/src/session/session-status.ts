@@ -90,7 +90,7 @@ export function stopReasonFor(bridge: {
   const snapshot = bridge.session.getSnapshot();
   if (bridge.cancelled || snapshot.status === "aborted") return "cancelled";
   // A failed run has no ACP error stop reason; the host reports the error as a notice/message
-  // before resolving (see `agent.ts`), so the turn itself still ends normally.
+  // before resolving (see `agent/prompt-turns.ts`), so the turn itself still ends normally.
   if (snapshot.status === "error") return "end_turn";
   // The model's own stop reason is authoritative. `length` means the response hit the output
   // limit; `tool_calls` at the iteration ceiling means the loop budget ran out while it still

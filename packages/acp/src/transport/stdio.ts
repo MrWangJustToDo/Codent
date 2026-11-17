@@ -8,9 +8,9 @@
 
 import { ndJsonStream } from "@agentclientprotocol/sdk";
 
-import { createAcpAgent } from "./agent.js";
+import { createAcpAgent } from "../agent/app.js";
 
-import type { AcpAgentOptions } from "./agent.js";
+import type { AcpAgentOptions } from "../agent/options.js";
 import type { AgentConnection } from "@agentclientprotocol/sdk";
 
 /**

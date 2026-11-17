@@ -20,7 +20,7 @@
  * Everything else stays local, and each for a reason:
  *
  * - `run_command` / `exec` are free text and still run on our own shell, so their approval is still
- *   ours to ask (`packages/acp/src/client-env.ts` routes them to the fallback).
+ *   ours to ask (`packages/acp/src/client-env/environment.ts` routes them to the fallback).
  * - `delete_file` has no ACP method at all: `fs/*` covers read and write text, nothing else. The
  *   write capability must not be read as "the client can also delete", or a destructive action
  *   loses its prompt — the one case where a wrong answer here is unrecoverable.
@@ -30,7 +30,7 @@
 
 import { BUILTIN_TOOL_NAMES, parseToolInput } from "@codent/core";
 
-import type { AcpClientCapabilities } from "./client-env.js";
+import type { AcpClientCapabilities } from "../client-env/environment.js";
 
 /** A pending approval, as the session reports it. */
 export interface PendingApproval {

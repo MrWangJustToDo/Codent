@@ -3,7 +3,7 @@
  *
  * `session/list` enumerates the workspace's PERSISTED sessions (not the live agents a host
  * happens to own), which is what a client's session picker needs. The disk id is the ACP
- * session id throughout (see `diskSessionId` in `agent.ts`), so an id taken from a list row can
+ * session id throughout (see `diskSessionId` in `session/session-status.ts`), so an id taken from a list row can
  * be handed straight back to `session/load` / `session/resume` / `session/delete`.
  *
  * Cursor semantics: the cursor is a row's `(updatedAt, id)` and a page resumes STRICTLY AFTER

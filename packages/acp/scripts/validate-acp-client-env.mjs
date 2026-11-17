@@ -937,7 +937,7 @@ function fakeSession(id, diskId) {
 
   // Both entries are pinned at the source: the agent entry's root is only observable through a
   // session listing (a store fixture), and the defect here is a raw fallback written AT an entry.
-  for (const file of ["../src/bootstrap.ts", "../src/agent.ts"]) {
+  for (const file of ["../src/bootstrap.ts", "../src/agent/app.ts"]) {
     const source = await fs.readFile(new URL(file, import.meta.url), "utf8");
     check(`${path.basename(file)} normalizes its root through resolveRoot`, source.includes("resolveRoot("));
     check(

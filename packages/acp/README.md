@@ -81,7 +81,7 @@ the resolved defaults, which is what an embedding host builds its `AcpAgentOptio
 
 ACP has **no `session/set_model`** — model selection is a `configOptions` entry with
 `category: "model"`, and its write-back is `session/set_config_option`. Declaration and write path
-are therefore one contract, and they live together in `src/session-config-options.ts`:
+are therefore one contract, and they live together in `src/session/session-config-options.ts`:
 
 - the option is advertised whenever a model catalog is readable. A `.agents/config/models.json`
   catalog (or a multi-model remote provider) yields a **switchable** list; the explicit-flags and
@@ -156,7 +156,7 @@ What it does and does not change:
   this is the one layer that hands the filesystem to someone else, so it owes them a usable path.
 - **One path resolution, and an atomic rewrite knows whose disk it is on.** A `tool_call.location` and
   the `fs/*` request that follows it describe the same file, so both come from one helper
-  (`src/paths.ts`) — two implementations spelled the same file differently, and a client that followed
+  (`src/wire/paths.ts`) — two implementations spelled the same file differently, and a client that followed
   a location could ask for a path the file is not at. Absoluteness is judged platform-aware (a Windows
   or UNC path is absolute, not relative), and an empty root returns the path unchanged rather than
   silently resolving against `process.cwd()`.
@@ -208,7 +208,7 @@ What it does and does not change:
   isolate driver stay absent for a different reason: a language server also has to *see* the
   workspace it reports on.
 - **An MCP server's question is answered by the same form the client already renders.** A server's
-  `elicitation/create` becomes one ACP `elicitation/create` (`mcp-elicitation.ts`), supplied as the
+  `elicitation/create` becomes one ACP `elicitation/create` (`interaction/mcp-elicitation.ts`), supplied as the
   session's `mcpElicit` hook. Supplying a hook is the whole opt-in — core advertises `elicitation`
   to the server at the MCP handshake only when one exists — so it is decided from two facts known
   before MCP connects (servers connect inside `host.create`, after the ACP `initialize` handshake):
@@ -448,30 +448,62 @@ Full recipe and verification checklist:
 
 ## Package layout
 
+Source is grouped by subject; a directory is one plane of the host, and every module inside it owns
+one thing that plane does. `src/index.ts` is the only public surface (`package.json#exports`); nothing
+below is reachable by deep import.
+
+```
+src/
+  index.ts            public surface (the export list is the contract)
+  bin.ts              the standalone `codent-acp` entry (flag parsing + stdio)
+  bootstrap.ts        local CoreEnv + model provider + runtime; builds `AcpAgentOptions`
+  agent/              the request plane: who answers what, and the per-session bridge
+  projection/         what goes OUT on `session/update`
+  interaction/        the client round-trips (permission / question)
+  session/            session semantics shared by both planes
+  client-env/         the client-backed CoreEnv
+  wire/               the ACP vocabulary: structural types, content blocks, wire paths
+  transport/          stdio
+```
+
 | Module | Responsibility |
 |---|---|
-| `agent.ts` | the ACP app: handler registration, the session-id → bridge map, prompt turns, stop reasons, bridge lifecycle |
-| `stdio.ts` | the stdio transport (stdin backpressure, stdout EPIPE/flush) |
-| `bootstrap.ts` | local CoreEnv + model provider + runtime; builds `AcpAgentOptions` |
-| `bin.ts` | the standalone `codent-acp` entry (flag parsing + stdio) |
-| `projector.ts` | `AgentSession` channels → `session/update` (per-message / per-tool cursors; replay) |
-| `session-config-options.ts` | the `mode` / `model` / `thought_level` selects and their write paths (`applyMode` / `applyModel` / `applyThoughtLevel`) |
-| `session-status.ts` | what a client is told about a session's state: the legacy `modes` field, the disk session id, and the `StopReason` for a finished turn |
-| `session-runtime.ts` | per-session runtime + late binding of the disk id (`--client-env`) |
-| `sessions.ts` | disk catalog → ACP `SessionInfo`, cursor paging |
-| `client-env.ts` | the client-backed `CoreEnv` |
-| `approvals.ts` | which pending approvals the client already owns |
-| `interactions.ts` | the two client round-trips: permission + elicitation |
-| `permissions.ts` | permission / elicitation request-response mapping |
-| `mcp.ts` | ACP `McpServer[]` → core `McpServerConfig` (with validation) |
-| `mcp-elicitation.ts` | an MCP server's `elicitation/create` → the client's form request (capability-gated, session resolved per call) |
-| `content.ts` | prompt `ContentBlock[]` ↔ `ContentPart` mapping |
-| `tools.ts` | tool kind / title / locations / structured diff |
-| `commands.ts` | slash-command parsing + dispatch |
-| `types.ts` | the small structural types the projector reads |
-
-`src/index.ts` is the public surface (`package.json#exports`); nothing above is reachable by deep
-import.
+| `agent/app.ts` | `createAcpAgent` — the composition root: connection, capabilities, session map, and the registration of every handler module |
+| `agent/context.ts` | the shared per-app state those modules are handed |
+| `agent/options.ts` | `AcpAgentOptions` / `AcpAgentDefaults` / `AcpClientEnvFactoryContext` / `AcpSessionRuntime` — the host-facing contract |
+| `agent/session-bridge.ts` | the session map: attach / close / re-key / lookup, and the child projectors (announce first, attach after) |
+| `agent/session-creation.ts` | one request → one runtime: `cwd` as workspace root, system prompt, MCP servers, MCP elicitation gate |
+| `agent/session-requests.ts` | `new` / `load` / `resume` / `close` and the disk catalog (`list` / `delete`) |
+| `agent/session-fork.ts` | `fork` — clone while the source thread stays usable |
+| `agent/prompt-turns.ts` | `prompt` / `cancel`: when a turn is over, and the waits that decide it |
+| `agent/config-options.ts` | the `mode` / `model` / `thought_level` selectors' write paths and their advertisement mirrors |
+| `agent/capabilities.ts` | `initialize` / `authenticate` / `logout` — what this agent claims it can do |
+| `agent/notice.ts` | `notice` when the client advertises it, one agent message otherwise |
+| `agent/identity.ts`, `agent/trace.ts` | the name/version this host reports; the `CODENT_ACP_TRACE=1` stderr narration |
+| `projection/projector.ts` | the subscription, the `session/new` deferral queue, the replay/prime walk, and the child-roster bookkeeping |
+| `projection/message-projection.ts` | text / thinking cursors, one ACP message id per turn, the replayed user turn |
+| `projection/message-text.ts` | the shared text extraction every projection reads: a message/part's text, its thinking, and the `task` result's two persisted shapes |
+| `projection/tool-projection.ts` | tool rows, streamed output, the parent-facing `task` report |
+| `projection/compaction-projection.ts` | the compaction row and its three closing signals |
+| `projection/session-state-projection.ts` | `plan` / mode / usage / title / available-commands frames |
+| `projection/subagent-projection.ts` | `subagents` snapshot → announce / patch / close, user-visible rows only |
+| `projection/child-projector.ts` | one projector per announced child, emitting under the child id |
+| `projection/tools.ts` | tool kind / title / locations / structured diff |
+| `projection/media.ts` | images out of tool parts and results |
+| `interaction/interactions.ts` | the two client round-trips: permission + elicitation |
+| `interaction/approvals.ts` | which pending approvals the client already owns |
+| `interaction/permissions.ts` | permission / elicitation request-response mapping |
+| `interaction/mcp-elicitation.ts` | an MCP server's `elicitation/create` → the client's form request (capability-gated, session resolved per call) |
+| `session/session-config-options.ts` | the `mode` / `model` / `thought_level` selects and their write paths (`applyMode` / `applyModel` / `applyThoughtLevel`) |
+| `session/session-status.ts` | what a client is told about a session's state: the legacy `modes` field, the disk session id, the `StopReason` |
+| `session/session-runtime.ts` | per-session runtime + late binding of the disk id (`--client-env`) |
+| `session/sessions.ts` | disk catalog → ACP `SessionInfo`, cursor paging |
+| `session/commands.ts` | slash-command parsing + dispatch |
+| `session/usage-report.ts` | the `/usage` report text |
+| `session/mcp.ts` | ACP `McpServer[]` → core `McpServerConfig` (with validation) |
+| `client-env/environment.ts` | the client-backed `CoreEnv` |
+| `wire/types.ts`, `wire/content.ts`, `wire/paths.ts` | the structural types the projector reads, prompt `ContentBlock[]` ↔ `ContentPart`, workspace-relative ↔ absolute wire paths |
+| `transport/stdio.ts` | the stdio transport (stdin backpressure, stdout EPIPE/flush) |
 
 ## Validation
 

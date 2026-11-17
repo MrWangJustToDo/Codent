@@ -7,7 +7,7 @@
  * this package is handed whatever the caller had, which for the tools is a workspace-RELATIVE path.
  *
  * There used to be two implementations of this (`toAbsolute` in `tools.ts` for `locations` /
- * `diff.path`, and a newer local helper in `client-env.ts` for the `fs/*` bodies), and they answered
+ * `diff.path`, and a newer local helper in `client-env/environment.ts` for the `fs/*` bodies), and they answered
  * the same question differently: the first did string concatenation, so the same file could reach a
  * client as two different path strings — `/ws/packages/core/../acp/README.md` from a location and
  * `/ws/packages/acp/README.md` from the read that followed it. The client cannot tell those are one

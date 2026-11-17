@@ -22,7 +22,7 @@
  * of "the ordering must hold".
  */
 
-import type { AcpClientEnvFactoryContext, AcpAgentOptions, AcpSessionRuntime } from "./agent.js";
+import type { AcpClientEnvFactoryContext, AcpAgentOptions, AcpSessionRuntime } from "../agent/options.js";
 import type { AgentContext, ClientCapabilities } from "@agentclientprotocol/sdk";
 import type { AgentSessionHost } from "@codent/core";
 

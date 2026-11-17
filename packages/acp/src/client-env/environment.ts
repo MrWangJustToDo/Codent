@@ -33,7 +33,7 @@ import {
 } from "@agentclientprotocol/sdk";
 import { AGENT_DATA_DIR, defaultPath, ExecutionError } from "@codent/core";
 
-import { toWirePath } from "./paths.js";
+import { toWirePath } from "../wire/paths.js";
 
 import type {
   CoreEnv,
@@ -75,7 +75,7 @@ const TERMINAL_DEADLINE_MS = 10 * 60 * 1000;
  * this invariant quietly rots.
  */
 export function isLocalOnlyPath(rootPath: string, target: string): boolean {
-  // The SAME resolution the wire uses (`paths.ts`), not a third spelling of it: "is this absolute?"
+  // The SAME resolution the wire uses (`wire/paths.ts`), not a third spelling of it: "is this absolute?"
   // was being asked with `startsWith("/")` here and with `isAbsolute` on the wire.
   //
   // Scope, stated honestly because it is easy to overclaim: the two implementations were compared

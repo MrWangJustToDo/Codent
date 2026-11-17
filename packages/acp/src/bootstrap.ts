@@ -11,7 +11,7 @@
  * so an ACP client should spawn `codent acp` inside the workspace it wants the agent to see.
  *
  * With `--client-env` the local env stops being the whole story: each session gets a CoreEnv whose
- * filesystem and argv execution are borrowed from the ACP client (see `client-env.ts`), with the
+ * filesystem and argv execution are borrowed from the ACP client (see `client-env/environment.ts`), with the
  * local env kept as the fallback for everything the client cannot serve. That env is per-session
  * (every client request carries a `sessionId`), so the runtime is per-session too.
  */
@@ -37,10 +37,15 @@ import {
 import { createNodeEnv } from "@codent/node";
 import { stat as statPath } from "node:fs/promises";
 
-import { createAcpClientEnv } from "./client-env.js";
-import { resolveRoot } from "./paths.js";
+import { createAcpClientEnv } from "./client-env/environment.js";
+import { resolveRoot } from "./wire/paths.js";
 
-import type { AcpAgentDefaults, AcpAgentOptions, AcpSessionRuntime, AcpClientEnvFactoryContext } from "./agent.js";
+import type {
+  AcpAgentDefaults,
+  AcpAgentOptions,
+  AcpSessionRuntime,
+  AcpClientEnvFactoryContext,
+} from "./agent/options.js";
 import type {
   AgentSessionHost,
   ModelProvider,
@@ -74,7 +79,7 @@ export interface LocalAcpBootstrap {
    *  explicit-flags path (`--model …`) and on the `.env` fallback, which is what makes the ACP model
    *  selector disappear there: a selector offering exactly one value would be a fake choice. The list
    *  is process-wide (one config file), while the *current* model is per-session — see
-   *  `sessionConfigOptions` in `agent.ts`. */
+   *  `session/session-config-options.ts`. */
   models?: ModelCatalogRead;
   /** The entry the resolved default model came from — seeds a new session's recorded entry. */
   modelsDefaultEntryIndex?: number;
@@ -101,7 +106,7 @@ export async function bootstrapLocalAcp(
     model?: AcpModelOverride;
     /** `--client-env`: build each session's env from the ACP client's fs/terminal capabilities. */
     clientEnv?: boolean;
-    /** `--system` / `-s`: replaces the built-in prompt for this root (see `sessionSystemPrompt`). */
+    /** `--system` / `-s`: replaces the built-in prompt for this root (see `SessionCreation.systemPrompt` in `agent/session-creation.ts`). */
     systemPrompt?: string;
     /** `--max-iterations`: per-session agent-loop budget; default is core's schema default. */
     maxIterations?: number;
@@ -114,7 +119,7 @@ export async function bootstrapLocalAcp(
   } = {}
 ): Promise<LocalAcpBootstrap> {
   // Normalized to absolute HERE, at the boundary that accepts a caller-supplied `cwd`: everything
-  // downstream assumes an absolute root (see `paths.ts`), and a relative one would quietly make
+  // downstream assumes an absolute root (see `wire/paths.ts`), and a relative one would quietly make
   // `toWirePath` resolve against `process.cwd()` — the very fallback that file forbids. The other
   // boundary that takes a root is `createAcpAgent({ rootPath })`, which uses the same helper.
   const rootPath = resolveRoot(options.cwd);
@@ -433,7 +438,7 @@ export async function bootstrapLocalAcp(
       ...(options.mcpConfigPath ? { mcpConfigPath: options.mcpConfigPath } : {}),
       ...(toolConfig ? { toolConfig } : {}),
       // `--system` overrides the built-in prompt for the process root. A session whose `cwd`
-      // differs gets a prompt rebuilt from THAT workspace (see `sessionSystemPrompt`), which is
+      // differs gets a prompt rebuilt from THAT workspace (see `SessionCreation.systemPrompt`), which is
       // why the override is carried here rather than as one string for every root.
       systemPrompt: options.systemPrompt?.trim() ? options.systemPrompt : await buildDefaultSystemPrompt(),
     },
