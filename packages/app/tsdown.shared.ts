@@ -128,6 +128,9 @@ export const ENTRIES = [
   "src/utils/usage-heatmap.ts",
   "src/utils/file-icons.ts",
   "src/utils/tool-activity-summary.ts",
+  // Emitted for `test/tool-output-block.test.mjs`: the "paint a result block?" decision is a policy
+  // the row renderer consumes, so it is asserted as the predicate rather than through a frame.
+  "src/utils/tool-display.ts",
   "src/utils/project-transcript.ts",
   "src/utils/queue-preview.ts",
   "src/utils/keyboard-labels.ts",

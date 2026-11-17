@@ -21,6 +21,33 @@ export function hasDetailedOutputBlock(toolName: string): boolean {
 }
 
 /**
+ * Whether a tool call renders a result block at all.
+ *
+ * `detailed` means "this tool's block is worth keeping", NOT "paint one regardless": a tool whose
+ * descriptor declares no `text` renderer (every MCP tool — its name and schema come from a remote
+ * server, so there is no curated line to claim) has nothing to put in the block. Rendering it
+ * anyway painted an EMPTY `HalfLinePaddedBox` — two rows of ▄/▀ bars after a call that returned
+ * `Tab created`, with no body between them.
+ *
+ * Extracted from `ToolOutputView` so CI can assert the decision: the component is the only other
+ * caller, and a renderer assertion would need the local-only render smoke.
+ */
+export function shouldRenderResultBlock(input: {
+  /** `hasDetailedOutputBlock(toolName)` — the descriptor keeps a block for this tool. */
+  detailed: boolean;
+  /** A `text` renderer exists (the part's own `display.text`, or the session-side descriptor). */
+  hasTextRenderer: boolean;
+  /** The body that would be painted (already-resolved `display.text` / formatter fallback). */
+  output: string;
+}): boolean {
+  // No body, no block — whatever the descriptor says. This is the whole bug: an empty string is
+  // not a result, and a tool that failed carries its message in the row (`errorText`), not here.
+  if (!input.output.trim()) return false;
+  // A tool with neither a block worth keeping nor a renderer has nothing this host can show.
+  return input.detailed || input.hasTextRenderer;
+}
+
+/**
  * Whether a tool owns its compact presentation.
  *
  * Core owns this rule — a descriptor that declares `keepRow` (structured result), `clientSide`

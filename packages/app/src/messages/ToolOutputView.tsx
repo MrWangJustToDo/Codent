@@ -6,7 +6,7 @@ import { useTranscriptDisplayMode } from "../context/transcript-display-context.
 import { useSize } from "../hooks";
 import { BG, COLORS } from "../theme/colors.js";
 import { formatToolOutput } from "../utils/format";
-import { hasDetailedOutputBlock, keepsCompactRow } from "../utils/tool-display.js";
+import { hasDetailedOutputBlock, keepsCompactRow, shouldRenderResultBlock } from "../utils/tool-display.js";
 import { isCancelledToolCall, isInterruptedToolOutput } from "../utils/tool-part.js";
 import { isBuiltinTool, resolveToolPresentation } from "../utils/tool-presentation.js";
 
@@ -70,12 +70,11 @@ export const ToolOutputView = ({ part, uiState }: { part: ToolCallPart; uiState:
   // rendered by ToolCallPartView, so skip the otherwise-empty result block.
   if (uiState === "output-error" && !output.trim()) return null;
 
-  // Extension (and other) tools: show the default block only when the tool rendered
-  // non-empty text (`present.text`, in-process or precomputed into the payload).
-  if (!isDetailed) {
-    const hasRenderer = Boolean(display?.text) || Boolean(resolveToolPresentation(toolName)?.text);
-    if (!hasRenderer || !output.trim()) return null;
-  }
+  const hasTextRenderer = Boolean(display?.text) || Boolean(resolveToolPresentation(toolName)?.text);
+  // Nothing to say, no block painted — see `shouldRenderResultBlock`. Every MCP tool keeps a
+  // detailed block but claims no `text` renderer, so "detailed" alone used to paint an empty
+  // padded box: the ▄/▀ band with no body between the bars.
+  if (!shouldRenderResultBlock({ detailed: isDetailed, hasTextRenderer, output })) return null;
 
   const hasCanceld = isCancelledToolCall(part);
   // A call the upstream cut off carries `success: false` but is neither a tool failure nor a
