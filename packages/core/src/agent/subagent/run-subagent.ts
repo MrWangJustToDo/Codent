@@ -235,6 +235,8 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
     let failed = false;
     let errorMessage: string | undefined;
     let finishReason: string | null = null;
+    /** The engine's own step-budget/policy verdict (`RUN_FINISHED.metadata.tanstack.loopStopped`). */
+    let loopStopped: boolean | undefined;
     let previewMessages: UIMessage[] = [];
 
     // Same-epoch follow-up pass: continue the banner with a phase separator
@@ -268,8 +270,9 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
             tapBeginSummary(stream, taskCallId ? () => enterSummaryPhase() : undefined),
             config.onTextDelta
           ),
-          (reason) => {
-            finishReason = reason;
+          (info) => {
+            finishReason = info.finishReason;
+            loopStopped = info.loopStopped;
           }
         ),
       // Outcome applied below — abort ends the stream without throwing, so we must
@@ -308,6 +311,7 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
       failed,
       ...(errorMessage ? { errorMessage } : {}),
       finishReason,
+      ...(loopStopped !== undefined ? { loopStopped } : {}),
       maxIterations,
       ...(maxOutputLength !== undefined ? { maxOutputLength } : {}),
       runStartedAt,

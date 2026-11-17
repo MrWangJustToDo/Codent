@@ -232,10 +232,14 @@ check("sampling requests state that this runtime cannot answer them", () => {
 
 console.log("dependency patch");
 
-// Upstream 1.0.0 calls `connectTransport(options)` without the elicit handler, so without the patch
-// every assertion above would describe an option the client ignores. A reinstall that drops the
-// patch is silent (`pnpm install` restores the published file), which is exactly why it is asserted
-// here instead of trusted.
+// Upstream still calls `connectTransport(options)` without the elicit handler (measured on 1.0.0
+// and 1.2.0), so without the patch every assertion above would describe an option the client
+// ignores. A reinstall that drops the patch is silent (`pnpm install` restores the published
+// file), which is exactly why it is asserted here instead of trusted.
+const aiMcpPackage = JSON.parse(
+  readFileSync(new URL("../node_modules/@tanstack/ai-mcp/package.json", import.meta.url), "utf8")
+);
+const aiMcpVersion = aiMcpPackage.version;
 const aiMcpClient = readFileSync(
   new URL("../node_modules/@tanstack/ai-mcp/dist/esm/client.js", import.meta.url),
   "utf8"
@@ -273,8 +277,20 @@ check("the option is typed, so a caller cannot pass it unchecked", () => {
 check("the patch is declared and its file exists, so a reinstall reapplies it", () => {
   const workspace = readFileSync(new URL("../../../pnpm-workspace.yaml", import.meta.url), "utf8");
   assert.match(workspace, /patchedDependencies:/);
-  assert.match(workspace, /@tanstack\/ai-mcp@1\.0\.0/);
-  const patch = readFileSync(new URL("../../../patches/@tanstack__ai-mcp@1.0.0.patch", import.meta.url), "utf8");
+  // Version-agnostic on purpose: a hardcoded version made an SDK bump fail here for the wrong
+  // reason (the patch was re-created and applied, only the assertion's literal was stale).
+  // Quote-style agnostic too — Prettier rewrites the key from `'` to `"`.
+  const escapedVersion = aiMcpVersion.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  assert.match(
+    workspace,
+    new RegExp(`["']@tanstack/ai-mcp@${escapedVersion}["']\\s*:`),
+    `pnpm-workspace.yaml must declare the @tanstack/ai-mcp@${aiMcpVersion} patch`
+  );
+  assert.match(workspace, new RegExp(`patches/@tanstack__ai-mcp@${escapedVersion}\\.patch`));
+  const patch = readFileSync(
+    new URL(`../../../patches/@tanstack__ai-mcp@${aiMcpVersion}.patch`, import.meta.url),
+    "utf8"
+  );
   assert.match(patch, /options\.onElicit/);
 });
 

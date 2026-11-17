@@ -39,6 +39,8 @@ export interface FinalizeSubagentTaskInput {
   failed: boolean;
   errorMessage?: string;
   finishReason: string | null;
+  /** Authoritative step-budget verdict from the terminal chunk (`@tanstack/ai` >= 1.3). */
+  loopStopped?: boolean;
   maxIterations: number;
   maxOutputLength?: number;
   runStartedAt: number;
@@ -74,6 +76,7 @@ export async function finalizeSubagentTask(input: FinalizeSubagentTaskInput): Pr
     failed,
     errorMessage,
     finishReason,
+    loopStopped,
     maxIterations,
     maxOutputLength,
     runStartedAt,
@@ -125,6 +128,7 @@ export async function finalizeSubagentTask(input: FinalizeSubagentTaskInput): Pr
     messages: previewMessages,
     maxIterations,
     finishReason,
+    ...(loopStopped !== undefined ? { loopStopped } : {}),
     output: finalOutput,
     aborted,
     status: subagentManaged.getStatus(),

@@ -24,6 +24,15 @@ export interface DeriveSubagentRunStatsInput {
   messages: UIMessage[];
   maxIterations: number;
   finishReason: string | null;
+  /**
+   * The engine's own verdict that the agent loop stopped before the model finished
+   * (`RUN_FINISHED.metadata.tanstack.loopStopped`, `@tanstack/ai` >= 1.3).
+   *
+   * Authoritative when supplied: `true` is a real step-budget/policy cutoff, `false` is a
+   * run the engine would have continued. `undefined` (an older SDK, or a run with no
+   * `RUN_FINISHED`) keeps the pre-1.3 heuristic below.
+   */
+  loopStopped?: boolean;
   output: string;
   aborted: boolean;
   status?: AgentStatus;
@@ -106,15 +115,37 @@ export function countSubagentIterations(messages: UIMessage[]): number {
   return Math.max(1, splitStepSegments(lastAssistant.parts).length);
 }
 
-/** Wrap a stream to capture {@link RUN_FINISHED} finish reason. */
+/** What the terminal {@link RUN_FINISHED} of a child run reported. */
+export interface StreamFinishInfo {
+  finishReason: string | null;
+  /** `undefined` when the SDK/run supplied no verdict (an older metadata shape). */
+  loopStopped: boolean | undefined;
+}
+
+/**
+ * The engine's own "the loop stopped before the model finished" verdict, or `undefined`.
+ *
+ * It rides `metadata.tanstack.loopStopped` on the terminal `RUN_FINISHED` (`@tanstack/ai` >= 1.3).
+ * Read defensively: an older chunk shape has no metadata, and "absent" must stay distinct from
+ * `false` so the caller can fall back to the pre-1.3 heuristic.
+ */
+function readLoopStopped(chunk: StreamChunk): boolean | undefined {
+  const metadata = (chunk as { metadata?: { tanstack?: { loopStopped?: unknown } } }).metadata;
+  const value = metadata?.tanstack?.loopStopped;
+  return value === true ? true : value === false ? false : undefined;
+}
+
+/** Wrap a stream to capture {@link RUN_FINISHED} finish reason and loop verdict. */
 export async function* captureStreamFinishReason(
   stream: AsyncIterable<StreamChunk>,
-  onFinish: (reason: string | null) => void
+  onFinish: (info: StreamFinishInfo) => void
 ): AsyncIterable<StreamChunk> {
   for await (const chunk of stream) {
     if (chunk.type === "RUN_FINISHED") {
       const record = chunk as { finishReason?: string };
-      onFinish(record.finishReason ?? null);
+      // A run can emit more than one terminal chunk when tool iterations defer their finish;
+      // the LAST one describes the run's outcome.
+      onFinish({ finishReason: record.finishReason ?? null, loopStopped: readLoopStopped(chunk) });
     }
     yield chunk;
   }
@@ -139,18 +170,26 @@ export function deriveSubagentRunStats(
   // `begin_summary` cannot have finished naturally — some cutoffs end on a text
   // narration step (finishReason "stop"), which would otherwise hide the limit.
   //
+  // Not for a cancelled run. A user cancel lands mid-tool-loop, so `finishReason` is `tool_calls`
+  // and the count can sit at the ceiling — the run was stopped, not cut off, and reporting both
+  // `aborted` and `reachedLimit` puts a "limit reached" label on a run nobody let finish. The
+  // gates downstream already read it that way (`incomplete` is only evaluated when NOT aborted,
+  // which is why the fallback never fired for these); this is the same rule in the flag itself.
+  //
+  // The engine's own `loopStopped` is authoritative when present: it is exactly "the strategy or
+  // `onShouldContinue` refused another model call while tool results waited". `false` therefore
+  // means a `tool_calls` finish was a pause/interrupt, NOT the step budget — the pre-1.3 heuristic
+  // below cannot tell those apart. `undefined` keeps that heuristic for old chunks and callers.
+  //
   // This comparison is `iterationCount >= max` in the engine's own units
   // (`maxIterations(max) => ({iterationCount}) => iterationCount < max`), which is
   // why `iterations` above has to be that same count and not a tool-batch tally.
   const hitStepBudget =
     input.maxIterations > 0 &&
-    // Not for a cancelled run. A user cancel lands mid-tool-loop, so `finishReason` is `tool_calls`
-    // and the count can sit at the ceiling — the run was stopped, not cut off, and reporting both
-    // `aborted` and `reachedLimit` puts a "limit reached" label on a run nobody let finish. The
-    // gates downstream already read it that way (`incomplete` is only evaluated when NOT aborted,
-    // which is why the fallback never fired for these); this is the same rule in the flag itself.
     !input.aborted &&
-    (finishReason === "tool_calls" || (!calledBeginSummary && toolCalls > 0 && iterations >= input.maxIterations));
+    (input.loopStopped !== undefined
+      ? input.loopStopped
+      : finishReason === "tool_calls" || (!calledBeginSummary && toolCalls > 0 && iterations >= input.maxIterations));
   const reachedLimit = hitStepBudget;
 
   const hasSummary = input.output.trim().length > 0 && input.output !== EMPTY_SUMMARY;

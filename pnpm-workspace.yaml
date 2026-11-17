@@ -27,12 +27,12 @@ minimumReleaseAgeExclude:
   # younger than the quarantine window need an entry. A version the lockfile no longer
   # resolves, or one that has aged past the window, is dead weight. Add a new entry only
   # when an install reports a fresh version as quarantined.
-  - "@tanstack/ai@1.0.1"
-  - "@tanstack/openai-base@1.0.0"
-  - "@tanstack/ai-mcp@1.0.0"
-  - "@tanstack/ai-anthropic@1.0.0"
-  - "@tanstack/ai-code-mode@1.0.1"
-  - "@tanstack/ai-isolate-node@1.0.0"
+  - "@tanstack/ai@1.4.0"
+  - "@tanstack/openai-base@1.0.4"
+  - "@tanstack/ai-mcp@1.2.0"
+  - "@tanstack/ai-anthropic@1.1.1"
+  - "@tanstack/ai-code-mode@1.1.1"
+  - "@tanstack/ai-isolate-node@1.1.0"
   - "@agentclientprotocol/sdk@1.8.0"
 
 publicHoistPattern:
@@ -50,7 +50,7 @@ overrides:
   # Pin @tanstack/ai to a single instance across the chain: ai-mcp declares a
   # `@tanstack/ai` dependency range of its own and would otherwise pull a second
   # copy beside the one the workspace resolves from the package.json ranges.
-  "@tanstack/ai": 1.0.1
+  "@tanstack/ai": 1.4.0
 
 patchedDependencies:
-  '@tanstack/ai-mcp@1.0.0': patches/@tanstack__ai-mcp@1.0.0.patch
+  "@tanstack/ai-mcp@1.2.0": patches/@tanstack__ai-mcp@1.2.0.patch

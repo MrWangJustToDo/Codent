@@ -335,11 +335,11 @@
     "validate:session-lock": "pnpm run build && node scripts/validate-session-lock.mjs"
   },
   "dependencies": {
-    "@tanstack/ai": "^1.0.1",
-    "@tanstack/ai-anthropic": "^1.0.0",
-    "@tanstack/ai-code-mode": "^1.0.1",
-    "@tanstack/ai-mcp": "^1.0.0",
-    "@tanstack/openai-base": "^1.0.0",
+    "@tanstack/ai": "^1.4.0",
+    "@tanstack/ai-anthropic": "^1.1.1",
+    "@tanstack/ai-code-mode": "^1.1.1",
+    "@tanstack/ai-mcp": "^1.2.0",
+    "@tanstack/openai-base": "^1.0.4",
     "htmlparser2": "^12.0.0",
     "openai": "^7.30.0",
     "pathe": "^2.0.3",

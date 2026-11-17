@@ -60,7 +60,12 @@ export {
   resolveMcpToolExecuteResult,
 } from "../agent/mcp/prefer-multimodal-content.js";
 export { extractAssistantText } from "../agent/stream/extract-assistant-text.js";
-export { countSubagentIterations, deriveSubagentRunStats, hasBeginSummaryCall } from "../agent/subagent/run-stats.js";
+export {
+  captureStreamFinishReason,
+  countSubagentIterations,
+  deriveSubagentRunStats,
+  hasBeginSummaryCall,
+} from "../agent/subagent/run-stats.js";
 // The task tool itself, so a validation can assert what the model-facing projection actually
 // contains (the iteration numbers must not be in it).
 export { createTaskTool, taskOutputSchema } from "../agent/subagent/task-tool.js";

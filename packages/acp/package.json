@@ -66,7 +66,7 @@
     "@agentclientprotocol/sdk": "1.8.0",
     "@codent/core": "workspace:*",
     "@codent/node": "workspace:*",
-    "@tanstack/ai": "^1.0.1"
+    "@tanstack/ai": "^1.4.0"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",

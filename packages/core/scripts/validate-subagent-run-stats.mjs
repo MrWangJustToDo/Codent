@@ -7,6 +7,7 @@
 import assert from "node:assert/strict";
 
 import {
+  captureStreamFinishReason,
   countSubagentIterations,
   createTaskTool,
   deriveSubagentRunStats,
@@ -303,6 +304,91 @@ const zeroObserved = deriveSubagentRunStats({
   observedIterations: { current: 0, max: 0 },
 });
 assert.equal(zeroObserved.iterations, 2, "an idle iteration state falls back to the derived count");
+
+// ============================================================================
+// The engine's loopStopped verdict is authoritative over the finishReason heuristic
+//
+// `tool_calls` alone cannot distinguish "the step budget refused another model call" from
+// "the run paused on an approval/client tool / a custom stream ended". `@tanstack/ai` >= 1.3
+// puts the engine's own verdict on the terminal chunk; when it is present it decides, and
+// the old heuristic applies only when the chunk carries no verdict.
+// ============================================================================
+
+{
+  const paused = deriveSubagentRunStats({
+    messages: cutOffMessages,
+    maxIterations: 50,
+    finishReason: "tool_calls",
+    loopStopped: false,
+    output: "Exploring.",
+    aborted: false,
+    status: "completed",
+  });
+  assert.equal(paused.reachedLimit, false, "loopStopped:false overrides the tool_calls heuristic");
+  assert.equal(paused.incomplete, true, "…and the missing begin_summary still makes it incomplete");
+
+  const stopped = deriveSubagentRunStats({
+    messages: noBegin,
+    maxIterations: 50,
+    finishReason: "stop",
+    loopStopped: true,
+    output: "Still looking…",
+    aborted: false,
+    status: "completed",
+  });
+  assert.equal(stopped.reachedLimit, true, "loopStopped:true is a real budget cutoff, even on a narration finish");
+  assert.equal(stopped.incomplete, true);
+
+  const cancelled = deriveSubagentRunStats({
+    messages: cutOffMessages,
+    maxIterations: 50,
+    finishReason: "tool_calls",
+    loopStopped: true,
+    output: "Exploring.",
+    aborted: true,
+  });
+  assert.equal(cancelled.reachedLimit, false, "a cancel outranks the loop verdict");
+}
+
+// The terminal chunk's metadata is what feeds the verdict: capture must tolerate an absent
+// shape, and the LAST RUN_FINISHED wins (tool iterations defer their finish chunks).
+{
+  async function* chunkStream(list) {
+    for (const chunk of list) yield chunk;
+  }
+  async function drain(stream) {
+    const iterator = stream[Symbol.asyncIterator]();
+    while (!(await iterator.next()).done) {
+      // drain
+    }
+  }
+
+  let seen;
+  await drain(
+    captureStreamFinishReason(
+      chunkStream([
+        { type: "RUN_FINISHED", finishReason: "tool_calls", metadata: { tanstack: { loopStopped: false } } },
+        { type: "RUN_FINISHED", finishReason: "tool_calls", metadata: { tanstack: { loopStopped: true } } },
+      ]),
+      (info) => {
+        seen = info;
+      }
+    )
+  );
+  assert.deepEqual(seen, { finishReason: "tool_calls", loopStopped: true }, "the last terminal chunk decides");
+
+  let absent;
+  await drain(
+    captureStreamFinishReason(chunkStream([{ type: "RUN_FINISHED", finishReason: "stop" }]), (info) => {
+      absent = info;
+    })
+  );
+  assert.deepEqual(
+    absent,
+    { finishReason: "stop", loopStopped: undefined },
+    "an absent verdict stays undefined so the caller keeps the legacy heuristic"
+  );
+}
 
 // ============================================================================
 // The budget travels with the count, and neither one reaches the model
