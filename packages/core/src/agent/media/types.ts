@@ -47,9 +47,30 @@ const DEFAULT_MIME_BY_PART_TYPE: Record<BinaryMediaPartType, string> = {
   document: "application/pdf",
 };
 
-/** Fallback MIME for a binary part type; octet-stream for anything else. */
+/**
+ * Fallback MIME for a binary part type; octet-stream for anything else.
+ */
 export function defaultMimeForPartType(type: string): string {
   return isBinaryMediaPartType(type) ? DEFAULT_MIME_BY_PART_TYPE[type] : "application/octet-stream";
+}
+
+/**
+ * Content part type a binary MIME maps to, or `null` when no input modality accepts it.
+ *
+ * One definition for the places that ask "are these bytes a modality we can send": MCP content
+ * blocks and `resource` blobs (`agent/mcp`) and `webfetch`'s image branch.
+ *
+ * It maps by **family**, not by provider support — an endpoint may still reject `image/heic` or
+ * `video/quicktime`; that is the post-rejection widening's job (`capability-sanitize`), not this
+ * function's, and guessing here would silently drop media a provider does take. `image/svg+xml` is
+ * `null`: providers do not render it as an image, and no provider takes it as a document either.
+ */
+export function mediaPartTypeForMime(mimeType: string): BinaryMediaPartType | null {
+  if (mimeType.startsWith("image/")) return mimeType === "image/svg+xml" ? null : "image";
+  if (mimeType.startsWith("audio/")) return "audio";
+  if (mimeType.startsWith("video/")) return "video";
+  if (mimeType === "application/pdf") return "document";
+  return null;
 }
 
 /** Protocol prefix used in dehydrated source.value to reference a media file. */

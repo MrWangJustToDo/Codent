@@ -15,6 +15,7 @@ import { z } from "zod";
 import { isAbortError } from "../../../../../runtime-types/abort.js";
 import { buildDataUrl, parseDataUrl } from "../../../../../utils/data-url.js";
 import { assertPublicHttpUrl } from "../../../../../utils/public-url.js";
+import { mediaPartTypeForMime } from "../../../../media/types.js";
 import { defineServerTool, isProjectedModelContent } from "../../../runtime/define-tool.js";
 import { createTimeoutAbort } from "../../../shared/abort-timeout.js";
 import { maybeCacheOutput } from "../../../shared/cache/tool-output-cache.js";
@@ -245,8 +246,9 @@ Usage notes:
           const contentType = response.headers.get("content-type") || "text/plain";
           const mime = contentType.split(";")[0]?.trim().toLowerCase() || "text/plain";
 
-          // Handle images
-          const isImage = mime.startsWith("image/") && mime !== "image/svg+xml";
+          // Handle images — one vocabulary for "is this an image payload" (`mediaPartTypeForMime`),
+          // which excludes `image/svg+xml`: providers do not render it, so it keeps the text path.
+          const isImage = mediaPartTypeForMime(mime) === "image";
           if (isImage) {
             const base64Content = coreEnv.base64Encode(bytes);
             return {

@@ -2,6 +2,8 @@
  * File type detection for read_file (MIME + extension + binary sampling).
  */
 
+import { mediaPartTypeForMime } from "../../../../media/types.js";
+
 import type { ResolvedCoreEnv } from "../../../../../env";
 import type { FileStat } from "../../../../../env/types";
 
@@ -79,12 +81,7 @@ export async function detectReadFileType(
   const getMimeType = env.getMimeType;
   const mimeType = (getMimeType ? await getMimeType(filePath) : false) || undefined;
 
-  if (
-    mimeType &&
-    mimeType.startsWith("image/") &&
-    mimeType !== "image/svg+xml" &&
-    mimeType !== "image/vnd.fastbidsheet"
-  ) {
+  if (mimeType && mediaPartTypeForMime(mimeType) === "image" && mimeType !== "image/vnd.fastbidsheet") {
     return { type: "image", mimeType };
   }
 
