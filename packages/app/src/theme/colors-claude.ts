@@ -4,6 +4,14 @@
  * Warm, earthy palette inspired by Claude Code's terminal aesthetic:
  * coral/orange accents on a deep brown-black base, with amber and
  * terracotta tones replacing the cool blues/purples of the gemini theme.
+ * `accent` is the deliberate exception — a muted teal. A fully warm set put
+ * `primary`, `warning` and `accent` inside one hue arc, so inline code read as
+ * a link; the single cool counterpoint is what keeps the roles apart.
+ *
+ * Every value here clears 4.5:1 against the base background **and** against
+ * `BG.toolResult` (where tool rows are painted); `pnpm --filter @codent/app run
+ * validate:theme-palettes` recomputes it, so a "nicer" hex that fails contrast is
+ * a failing check rather than a later complaint.
  *
  * This file exports the SAME symbols as `colors.ts` (GRADIENT, COLORS, BG,
  * interpolateColor), so you can switch themes by changing a single import
@@ -74,17 +82,20 @@ const GRAY = "#9B8B7A";
 
 export const COLORS = {
   /** Primary — coral orange. Active state, titles, emphasis, links. */
-  primary: "#D97757",
-  /** Accent — teal. Inline code, special tags, user prefix. */
-  accent: "#5E9EA0",
+  primary: "#E0805F",
+  /** Accent — muted teal. The one cool counterpoint to the warm palette: inline code, special
+   *  tags, user prefix. Without it every accent lands in the same 15–40° hue arc as `primary` and
+   *  `warning`, so an inline code span reads as a link. */
+  accent: "#6FAFB1",
   /** Success — sage green. Completed, approved, ✓. */
   success: "#7DA88A",
   /** Warning — golden amber. Waiting, approval needed, ?. */
   warning: "#D4A04C",
-  /** Danger — brick red. Errors, denied, ✗. */
-  danger: "#C85A5A",
+  /** Danger — rose red. Errors, denied, ✗. Deliberately on the other side of `primary`'s hue: a
+   *  warm brick next to a warm coral left "error" and "active" indistinguishable. */
+  danger: "#EA6469",
   /** Muted — warm gray. Secondary text, placeholders, dim info. */
-  muted: "#9B8B7A",
+  muted: "#A6957F",
   /** Text — warm off-white. Primary text content. */
   text: "#E8DDD3",
 } as const;

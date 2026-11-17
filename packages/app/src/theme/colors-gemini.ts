@@ -77,8 +77,9 @@ export const COLORS = {
   success: "#3FB950",
   /** Warning — amber. Waiting, approval needed, ?. */
   warning: "#E3B341",
-  /** Danger — red. Errors, denied, ✗. */
-  danger: "#F85149",
+  /** Danger — red. Errors, denied, ✗. Lightened from #F85149, which sat at 4.40:1 on the
+   *  user-message tint — under the 4.5 floor `validate:theme-palettes` enforces. */
+  danger: "#FF6157",
   /** Muted — gray. Secondary text, placeholders, dim info. */
   muted: "#8B949E",
   /** Text — light gray-white. Primary text content. */
