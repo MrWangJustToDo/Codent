@@ -167,6 +167,10 @@ export class CodentAgent {
     }
     const provider: ModelProvider | undefined =
       options.provider ?? (options.direct ? createDirectModelProvider(options.direct) : undefined);
+    // Only a provider THIS call built may be destroyed by its cleanup: `options.provider` is the
+    // caller's object (a shared remote provider owns connections/timers), and `bindRuntime` can
+    // throw after it is attached.
+    const ownsProvider = options.provider === undefined && options.direct !== undefined;
     const runtimeOptions: AgentRuntimeOptions = {
       env: options.env,
       ...(provider ? { modelProvider: provider } : {}),
@@ -184,8 +188,9 @@ export class CodentAgent {
     // An injected manager built with `new AgentManager()` has no runtime and would keep using the
     // ambient env for every agent it creates. Bind it to the runtime this handle is built on, so
     // there is one workspace plane. No-op when it was already bound to this runtime; refuses a
-    // second (different) binding and a manager that already created agents.
-    options.manager?.bindRuntime(runtime);
+    // second (different) binding and a manager that already created agents. Called INSIDE the try
+    // below: it can throw (disposed / different runtime / already created agents), and a throw here
+    // used to leave the provider and env this call built with nobody to release them.
     // A manager we build is ours to tear down if a later step here throws; an injected one belongs
     // to the injector (disposing it here would destroy every root agent another runtime is using).
     const ownsManager = options.ownsManager ?? options.manager === undefined;
@@ -195,6 +200,7 @@ export class CodentAgent {
     const ownsRuntime = options.ownsRuntime ?? (options.manager === undefined || injectedRuntime === undefined);
     let manager: AgentManager | undefined;
     try {
+      options.manager?.bindRuntime(runtime);
       manager = options.manager ?? (options.host ? undefined : new AgentManager(runtime));
       const host = options.host ?? createLocalAgentSessionHost({ manager: manager! });
       return new CodentAgent(runtime, host, manager, options.models, ownsManager, ownsRuntime);
@@ -207,11 +213,14 @@ export class CodentAgent {
       }
       if (ownsRuntime) {
         // Release what this call created: the provider it built and (only when the runtime owns it)
-        // the workspace env, with the same registry clear `dispose()` performs.
-        try {
-          await runtime.modelProvider?.destroy?.();
-        } catch {
-          // Best-effort: the throw below is the caller's error.
+        // the workspace env, with the same registry clear `dispose()` performs. The provider gate is
+        // separate — an injected `provider` is the caller's object and must survive this failure.
+        if (ownsProvider) {
+          try {
+            await runtime.modelProvider?.destroy?.();
+          } catch {
+            // Best-effort: the throw below is the caller's error.
+          }
         }
         if (runtime.ownsEnv) {
           try {

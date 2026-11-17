@@ -9,6 +9,22 @@ import { configuredLogLevel } from "./log-level-env.js";
 
 import type { AgentLogFileSinkOptions, LogCategory, LogEntry, LogLevel, LogScope } from "./types.js";
 
+/**
+ * How much text is scanned for redaction before the message cut.
+ *
+ * Redaction must see the secret BEFORE truncation (a key split at 400 chars no longer matches), but
+ * scanning an unbounded provider body with thirteen patterns runs on the agent's own synchronous
+ * path: `ctx.logger.info(<2 MB body>)` paid for the whole string to keep 400 characters. The window
+ * is comfortably wider than the cut, so the property that matters is preserved; the payload
+ * summarizer (`REDACTION_SCAN_CHARS`) already bounds its scan the same way.
+ */
+const MESSAGE_REDACTION_SCAN_CHARS = MAX_LOG_MESSAGE_CHARS * 16;
+
+function boundForRedaction(text: string): string {
+  if (text.length <= MESSAGE_REDACTION_SCAN_CHARS) return text;
+  return `${text.slice(0, MESSAGE_REDACTION_SCAN_CHARS)} [truncated]`;
+}
+
 // ============================================================================
 // Log ID Generator
 // ============================================================================
@@ -241,7 +257,7 @@ export class AgentLog {
         // size, and a provider body returned by an extension turned the timeline into an unreadable
         // blob. `data` is bounded by `redactLogValue`'s own cap (it is not routed through the
         // bridge's `summarizePayload`).
-        message: truncateText(redactSecrets(message), MAX_LOG_MESSAGE_CHARS),
+        message: truncateText(redactSecrets(boundForRedaction(message)), MAX_LOG_MESSAGE_CHARS),
       };
 
       // The one builder every writer passes through: redact direct writers too, not just the bridge.
@@ -257,7 +273,7 @@ export class AgentLog {
           // specialized handlers (`compaction:*-error`, `session:diagnostic`, the subagent mirror)
           // wrote the provider's raw body here unmodified, so one failed summary produced a
           // multi-megabyte JSONL line on those paths.
-          message: truncateText(redactSecrets(options.error.message), MAX_LOG_MESSAGE_CHARS),
+          message: truncateText(redactSecrets(boundForRedaction(options.error.message)), MAX_LOG_MESSAGE_CHARS),
           // Bounded too: the stack starts with `${name}: ${message}`, so leaving it raw undid the
           // message bound (a provider body in the message became one MB-scale line again).
           stack:

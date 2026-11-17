@@ -352,9 +352,9 @@ async function searchSessionStream(
   roles: readonly string[],
   timeWindow: { since?: number; until?: number },
   collect: (match: HistoryMatch) => boolean
-): Promise<{ total: number; collected: number }> {
+): Promise<{ total: number; collected: number; exhausted: boolean }> {
   const path = getJournalPath(sessionId);
-  if (!(await env.fs.exists(path))) return { total: 0, collected: 0 };
+  if (!(await env.fs.exists(path))) return { total: 0, collected: 0, exhausted: false };
 
   const indexById = new Map<string, number>();
   const matchedIds = new Set<string>();
@@ -400,7 +400,7 @@ async function searchSessionStream(
   for (const [index, message] of [...candidates.entries()].sort(([a], [b]) => a - b)) {
     const text = messageText(message);
     if (!text) continue;
-    collect({
+    const accepted = collect({
       sessionId,
       role: typeof message.role === "string" ? message.role : "unknown",
       timestamp: messageTimestamp(message),
@@ -408,8 +408,12 @@ async function searchSessionStream(
       messageIndex: index,
       snippet: makeSnippet(text, query),
     });
+    // `collect` refused: the caller's count/size ceiling is reached, so nothing this session (or a
+    // later one) can add is returnable. Report it instead of finishing the enumeration — the return
+    // value used to be dropped, so a capped search kept parsing every remaining candidate.
+    if (!accepted) return { total: matchedIds.size, collected: candidates.size, exhausted: true };
   }
-  return { total: matchedIds.size, collected: candidates.size };
+  return { total: matchedIds.size, collected: candidates.size, exhausted: false };
 }
 
 /**
@@ -467,6 +471,9 @@ export async function searchHistory(env: ResolvedCoreEnv, options: SearchHistory
       // A session with more matches than the candidate cap means the result list is incomplete,
       // even when the caller's own `limit` is smaller than the cap.
       if (found.total > found.collected) truncated = true;
+      // The ceiling is global, not per session: once `collect` refused a match, scanning the other
+      // ~200 logs can only burn CPU (it used to, because the refusal was ignored here too).
+      if (found.exhausted) break;
     } catch {
       // A log can vanish or become unreadable between enumeration and read (remote/HTTP, delete
       // race). Skip that session rather than failing the whole search.

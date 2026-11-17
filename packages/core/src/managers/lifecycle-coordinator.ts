@@ -15,6 +15,7 @@ import {
 } from "../agent/extension/callback-timeout.js";
 import { clearTaskRuns } from "../agent/subagent/subagent-runs.js";
 import { SUBAGENT_ABORT_REASONS } from "../agent/subagent/subagent-stop-reason.js";
+import { isActiveStatus } from "../runtime-types/agent-status.js";
 import { errorMessage } from "../utils/errors.js";
 
 import { forceKillChildProcesses, releaseAgentResources } from "./teardown-resources.js";
@@ -96,9 +97,16 @@ export class LifecycleCoordinator {
 
     // Before the abort: the compaction `finally` and any queued pump unwind asynchronously and must
     // see "destroyed", not "stopped", or they resume a run on an agent that is being removed.
+    //
+    // Snapshot "was a run live?" BEFORE `markDestroyed` projects `idle`: the teardown abort below
+    // can no longer read it from the status, and without the snapshot destroying a RUNNING agent
+    // wrote no `agent:abort` row at all (leftover tool calls then read as "interrupted for no
+    // reason").
+    const previousStatus = managedAgent.getStatus?.();
+    const hadLiveRun = previousStatus !== undefined && isActiveStatus(previousStatus);
     attempt(() => managedAgent.markDestroyed());
     attempt(() => managedAgent.sessionLease.beginDrain());
-    attempt(() => managedAgent.abort(SUBAGENT_ABORT_REASONS.agentDestroyed));
+    attempt(() => managedAgent.abort(SUBAGENT_ABORT_REASONS.agentDestroyed, { hadLiveRun }));
 
     // Destroy all subagents first.
     const childIds = [...managedAgent.childIds];

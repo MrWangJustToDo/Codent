@@ -1,7 +1,6 @@
-import { isAbortError, isCancelledOutputMarker } from "../../../runtime-types/abort.js";
+import { isAbortError, isCancelledOutputMarker, TOOL_CANCELLED_MESSAGE } from "../../../runtime-types/abort.js";
 import { isExtensionDeniedOutput } from "../../../runtime-types/tool-denial.js";
 import { isInterruptedToolOutput } from "../../../runtime-types/tool-truncation.js";
-import { TOOL_CANCELLED_MESSAGE } from "../../stream/incomplete-tool-calls.js";
 
 import type { ImagePart, ToolCallPart, ToolCallState } from "@tanstack/ai";
 

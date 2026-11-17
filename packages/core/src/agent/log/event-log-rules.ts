@@ -204,7 +204,7 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
     },
   },
   "session:save-error": {
-    level: "warn",
+    level: "error", // the only persisted record of a failed write; warn dropped at AGENT_LOG_LEVEL=error
     category: "system",
     // `target` names what failed; the old prefix made a failed LOG write read as a session save.
     formatMessage: (event) => `Failed to save ${p(event).target ?? "data"}: ${p(event).error ?? "unknown"}`,

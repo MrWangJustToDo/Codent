@@ -63,21 +63,26 @@ function writeLog(log: AgentLog, rule: EventLogRule, event: AgentEvent, message:
   // as the `error` message below, and an error object's `message` is not bounded by the schema.
   message = truncateText(message, MAX_LOG_MESSAGE_CHARS);
 
-  if (level === "error") {
-    // A cancelled payload already had its level downgraded to `warn` above.
-    // The payload's own `error` is raw provider text (often the whole 4xx/5xx body); it becomes
-    // `entry.error.message`. The seam (`AgentLog.log`) bounds every writer's error message, so this
-    // is deliberately not truncated here — a second, narrower bound would let the specialized
-    // handlers (which do not pass through this function) keep their own behaviour.
-    const errorMessage = (payload.error as string | undefined) ?? message;
-    const error = eventError(errorMessage);
+  // One shape for every fault row: the LEVEL decides how loud a line is, never whether the
+  // structured `entry.error` exists. Building it only for `level === "error"` meant every
+  // warn-level fault (`agent:tool-error`, `session:save-error`, `agent:retry`) was invisible to a
+  // reader filtering `entry.error`, while a warn-level `session:diagnostic` DID carry one — the
+  // same fact in two shapes, decided by severity rather than by what happened.
+  const payloadError = typeof payload.error === "string" ? payload.error : undefined;
+  // A cancelled payload is not a fault: its `error` field is partial narration, not an exception.
+  const faulted = !cancelled && (payloadError !== undefined || level === "error");
+  let error: Error | undefined;
+  if (faulted) {
+    // The payload's own `error` is raw provider text (often the whole 4xx/5xx body); the seam
+    // (`AgentLog.log`) bounds it, so it is deliberately not truncated again here — a second,
+    // narrower bound would let the specialized handlers (which do not pass through this function)
+    // keep their own behaviour.
+    error = eventError(payloadError ?? message);
     // A producer that had an `Error` supplies its stack; `eventError` deliberately invents none.
     const stack = payload.stack;
     if (typeof stack === "string") error.stack = stack;
-    log.eventEntry("error", rule.category, event.type, message, data, error, run, event.sessionId);
-    return;
   }
-  log.eventEntry(level, rule.category, event.type, message, data, undefined, run, event.sessionId);
+  log.eventEntry(level, rule.category, event.type, message, data, error, run, event.sessionId);
 }
 
 /**
@@ -94,13 +99,17 @@ export function bridgeTelemetryToAgentLog(
   if (!enabled) return () => {};
 
   return bus.on("*", (event) => {
-    const log = resolveLog(event);
-    if (!log) return;
-
     // The table's `false` cells are authoritative, BEFORE any override. They are the projection /
     // internal events (`session:messages`, `tool:chunk`, …), and letting a host policy re-enable
     // one wrote a whole transcript snapshot into a single log line. The table already says "never".
+    //
+    // Checked BEFORE `resolveLog`: this runs on every streamed delta (`session:messages`) and every
+    // stdout chunk (`tool:chunk`), and resolving the owning log walks the scope chain for an event
+    // that can never produce a row.
     if (DEFAULT_EVENT_LOG_RULES[event.type] === false) return;
+
+    const log = resolveLog(event);
+    if (!log) return;
 
     // Policy overrides must still win before the specialized handlers: those events have their own
     // multi-row formatting, but an explicit `false` means "never write this event" and an explicit

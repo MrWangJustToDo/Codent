@@ -38,10 +38,17 @@ export const createGetCommandOutputTool = ({ context }: { context?: AgentToolCon
       // the TAIL of each stream here — the part a failure is reported at.
       const stdout = truncateToolOutput(result.stdout, OUTPUT_LIMITS.MAX_CONTENT_CHARS, true);
       const stderr = truncateToolOutput(result.stderr, OUTPUT_LIMITS.MAX_CONTENT_CHARS, true);
+      // Built explicitly, not spread: `logPath` is the poll result's own field name and is NOT in
+      // the output schema, so spreading published a key nothing declared (and the model wire had
+      // two names for one path). `cachedOutputPath` is the schema's documented slot for "the full
+      // output on disk — a cached result or a background job's log".
       return {
-        ...result,
+        jobId: result.jobId,
+        status: result.status,
         stdout: stdout.text,
         stderr: stderr.text,
+        exitCode: result.exitCode,
+        running: result.running,
         cachedOutputPath: result.logPath,
       };
     },

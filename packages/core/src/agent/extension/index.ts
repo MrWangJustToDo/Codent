@@ -35,7 +35,6 @@ export type {
   ExtensionZod,
   InterceptableEvent,
   EventInterceptor,
-  ExtensionLifecycleEvent,
   ToolBeforeEvent,
   ToolBeforePayload,
   ToolAfterEvent,

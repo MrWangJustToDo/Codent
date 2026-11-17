@@ -38,8 +38,6 @@ export { MODEL_CAPABILITY_FLAGS, buildModelCapabilityFlags } from "./message-tra
 // Lifecycle Hooks
 // ============================================================================
 
-export type ExtensionLifecycleEvent = "bootstrap" | "activate" | "deactivate" | "destroy";
-
 // ============================================================================
 // Tool registration
 // ============================================================================
@@ -535,12 +533,15 @@ export interface ExtensionContext {
   registerExitFlush(flush: () => void): () => void;
 
   /**
-   * Interception (`on` / `off` / `emit`) **and** observation (`observe` /
+   * Interception (`on` / `off` / `intercept`) **and** observation (`observe` /
    * `observeAny` / `retained`).
    *
    * `on` and `observe` are two dispatch modes, not two spellings: `on` is an
    * async interceptor that can rewrite or cancel the operation; `observe` is a
-   * synchronous observer that only reads what happened.
+   * synchronous observer that only reads what happened. `intercept` runs a
+   * pattern through OTHER extensions' chains on this extension's behalf — it
+   * drives their handlers, which is why it is revoked with the registration
+   * lease (a disabled extension must not make someone else's handler run).
    */
   events: ExtensionEventBus & ExtensionObserverSurface;
   ui: ExtensionUI;

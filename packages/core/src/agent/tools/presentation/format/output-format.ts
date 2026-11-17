@@ -1,4 +1,8 @@
-import { isSyntheticCancelOutput, syntheticCancelMessage } from "../../../../runtime-types/abort.js";
+import {
+  isSyntheticCancelOutput,
+  syntheticCancelMessage,
+  TOOL_CANCELLED_MESSAGE,
+} from "../../../../runtime-types/abort.js";
 import { promptTokensOf } from "../../../../runtime-types/token-usage.js";
 import { formatExtensionDeniedOutput, isExtensionDeniedOutput } from "../../../../runtime-types/tool-denial.js";
 import { isBareToolErrorResult } from "../../../../runtime-types/tool-error.js";
@@ -6,7 +10,6 @@ import { interruptedToolMessage, isInterruptedToolOutput } from "../../../../run
 import { formatByteSize } from "../../../../utils/byte-size.js";
 import { truncateText } from "../../../../utils/text-truncation.js";
 import { AGENT_CACHE_DIR } from "../../../../utils/workspace-paths.js";
-import { TOOL_CANCELLED_MESSAGE } from "../../../stream/incomplete-tool-calls.js";
 import { BUILTIN_TOOL_NAMES } from "../../catalog/tool-names.js";
 import { getBuiltinToolPresentation } from "../builtin.js";
 
@@ -190,6 +193,10 @@ function formatGlobOutput(output: GlobOutput): string {
   // replaced (the same line `isSyntheticCancelOutput` draws): a search that did return files still
   // renders them rather than hiding output the user watched arrive.
   if (output.cancelled === true && (!files || files.length === 0)) return TOOL_CANCELLED_MESSAGE;
+  // An empty page WITH a body is a notice, not an empty result: the brace-limit rejection returns
+  // `files: []` plus the reason in `content`, and "No files found" would claim the search ran.
+  const notice = typeof output.content === "string" ? output.content.trim() : "";
+  if ((!files || files.length === 0) && notice) return notice;
   if (!files || files.length === 0) return "No files found";
 
   const maxShow = 5;

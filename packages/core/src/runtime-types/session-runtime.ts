@@ -105,11 +105,12 @@ export interface SessionSidecarPort {
   /**
    * Drop the session's background work and its facade.
    *
-   * `sameSession` is a reload of the session that is still active (bootstrap restore, `/resume`
-   * to the current id): the jobs are the SAME jobs, so state that dedupes their lifecycle rows
-   * (e.g. `lastJobStatuses`) must survive. A real switch replaces the conversation and must clear it.
+   * Only a REAL switch calls this. A same-session reload (bootstrap restore, `/resume` onto the
+   * current id) keeps the facade, its rows and the lifecycle dedupe state, because they describe
+   * the conversation that stays active — killing them turned a reload into a silent cancel of
+   * running jobs and detached tasks.
    */
-  resetBackgroundWork(reason: string, options?: { sameSession?: boolean }): Promise<void> | void;
+  resetBackgroundWork(reason: string): Promise<void> | void;
   resumeBackgroundWork?(): void;
   warn?(message: string, data?: Record<string, unknown>): void;
 }

@@ -12,8 +12,7 @@
  */
 
 import { ExecutionError } from "../../../env/types";
-import { abortError } from "../../../runtime-types/abort.js";
-import { TOOL_CANCELLED_MESSAGE } from "../../stream/incomplete-tool-calls.js";
+import { abortError, TOOL_CANCELLED_MESSAGE } from "../../../runtime-types/abort.js";
 
 export function createTimeoutAbort(options: { timeoutMs: number; signal?: AbortSignal }): {
   controller: AbortController;

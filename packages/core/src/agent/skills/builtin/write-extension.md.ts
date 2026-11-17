@@ -295,6 +295,12 @@ Section names must be slugs (\`[A-Za-z][A-Za-z0-9._-]*\`) — the name becomes p
 extension is disabled; a throwing producer is skipped and reported without affecting the
 other sections.
 
+**\`disabledContent\` runs AFTER teardown**: the registrations are already gone, \`deactivate()\`
+has run, and the context lease is revoked when the producer is called. Read state you captured
+beforehand (or a plain value); do not depend on \`activate\`-time registrations, and do not call a
+leased surface (\`ctx.llm\`, \`ctx.register*\`) from it. An empty string opts out of the notice
+entirely, which is also what a producer that returns nothing now degrades to.
+
 The base section is emitted each user turn as \`<ctx kind="ext:<extension id>">\`, so it is
 prompt-cache friendly (\`undefined\` or an empty string injects nothing, and a section only
 re-injects when its content changes). All callbacks are re-evaluated every turn — read live

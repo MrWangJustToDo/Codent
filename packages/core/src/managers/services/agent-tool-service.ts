@@ -39,7 +39,10 @@ export interface AgentToolRegistrationContext {
 
 export class AgentToolService {
   private registry: AgentToolRegistry;
-  private readonly decorators = new Map<string, Array<{ ownerId: string; fn: ToModelOutputDecorator }>>();
+  private readonly decorators = new Map<
+    string,
+    Array<{ ownerId: string; fn: ToModelOutputDecorator; liveTool: ResolvedAgentTool["tool"] }>
+  >();
 
   constructor(tools: ToolsRecord = {}) {
     this.registry = new AgentToolRegistry(tools);
@@ -86,11 +89,22 @@ export class AgentToolService {
     if (!entry) return undefined;
     const decorators = this.decorators.get(name);
     if (!decorators || decorators.length === 0) return entry;
+    // Metadata belongs to the LIVE tool — the same rule `ToolRegistry.resolve` applies to `present`
+    // and `toModelOutput`. Two ways to match:
+    //   - identity: the tool this decorator was registered against is still live;
+    //   - incumbent: the built-in is live again, so a decorator written for it re-applies after a
+    //     shadowing tool is disabled (dropping it there made LSP diagnostics vanish for the rest of
+    //     the session).
+    // A decorator never attaches to a DIFFERENT extension's tool unless that is the exact object it
+    // registered against.
+    const incumbentLive = this.registry.isIncumbent(name);
+    const applicable = decorators.filter((decorator) => decorator.liveTool === entry.tool || incumbentLive);
+    if (applicable.length === 0) return entry;
     // A tool with no handler of its own still runs the decorator chain: the base is the identity
     // (the same JSON normalization the framework applies), not "skip the decorator". Without this,
     // `registerToolOutputDecorator` silently did nothing for client tools and third-party tools.
     let chain: ToModelOutputFn = entry.toModelOutput ?? ((ctx) => normalizeModelToolContent(ctx.output));
-    for (const decorator of decorators) {
+    for (const decorator of applicable) {
       const prev = chain;
       chain = async (ctx) => decorator.fn(ctx, prev);
     }
@@ -99,7 +113,10 @@ export class AgentToolService {
 
   /** Register an agent-scoped model-output decorator; the returned disposer removes only it. */
   registerDecorator(toolName: string, fn: ToModelOutputDecorator, ownerId: string): () => void {
-    const entry = { ownerId, fn };
+    // Capture the live tool this decorator was written for. `undefined` (registered before the tool
+    // exists) means it applies to nothing, rather than to whatever takes the name later.
+    const liveTool = this.registry.resolve(toolName)?.tool;
+    const entry = { ownerId, fn, liveTool };
     const list = this.decorators.get(toolName) ?? [];
     list.push(entry);
     this.decorators.set(toolName, list);

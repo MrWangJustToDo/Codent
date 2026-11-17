@@ -30,7 +30,7 @@
  *    session / resource regions are not field moves, they *are* the graph's
  *    mutation surface. Extracting one means moving policy and re-validating
  *    concurrency behaviour. The 2026-10-10 tracker entry is an ARCHIVED snapshot
- *    (~1756 lines and two named regions); the file is now ~2980 non-blank lines, so the
+ *    (~1756 lines and two named regions); the file is now well over 3300 non-blank lines, so the
  *    honest next units are the seams named above — state publication
  *    (`status`/`state` batching), extension runtime access, and background-work
  *    ownership — each extracted with its concurrency contract, not as a field move.
@@ -737,15 +737,11 @@ export class ManagedAgent {
         `Lost the cross-process lock on session ${sessionId}: another process took it over ` +
         `(stale for over ${Math.ceil(SESSION_LOCK_TTL_MS / 1000)}s). Writes are paused until that ` +
         `process closes; the next message retries the lock.`;
-      this.emitEvent("session:diagnostic", {
-        area: "session",
-        level: "warn",
-        message,
-        details: { sessionId },
-      });
-      // `session:diagnostic` has NO session channel — the timeline-only row would leave the user
-      // typing into a session whose writes are being refused. `session:save-error` is the one
-      // channel-backed persistence-failure shape hosts surface.
+      // ONE event. `session:save-error` is channel-backed (hosts surface it) AND log-backed, while
+      // the `session:diagnostic` beside it had no channel and existed only so the timeline would
+      // say the same sentence — two rows, one fact, and a reader could not tell whether the lock
+      // was lost twice. The message already names the session, so the diagnostic's `details` added
+      // nothing.
       this.emitEvent("session:save-error", { target: "session", error: message });
     });
     this.sessionFacet = new SessionFacet(this);
@@ -1026,19 +1022,19 @@ export class ManagedAgent {
             }
           }
         },
-        resetBackgroundWork: (reason, options) => {
+        resetBackgroundWork: (reason) => {
           // Drop the facade whole: its sources are closed/generation-bumped by `reset()`, and the
           // next session builds a fresh pair (same lifecycle the command registry always had).
           // Return the promise: the switch transaction awaits it before completing (a re-resume
           // must not race a late job-record deletion).
+          //
+          // Only a REAL switch reaches this: a same-session reload keeps the facade, its rows and
+          // the dedupe map, because they describe the conversation that stays active.
           const work = this.backgroundWork;
           this.backgroundWork = undefined;
           this.commandService = undefined;
           this.backgroundWakeSignature = null;
-          // The dedupe map describes the session being left. On a SAME-session reload the jobs are
-          // the same jobs, so keeping it is what stops a still-running job from re-announcing
-          // `job:changed{running}` after the reload; a real switch clears it with the conversation.
-          if (!options?.sameSession) this.lastJobStatuses.clear();
+          this.lastJobStatuses.clear();
           if (!work) return Promise.resolve();
           return work.reset(reason).catch((error: unknown) => {
             this.emitDiagnostic("jobs", "Failed to reset background work", {
@@ -1921,8 +1917,20 @@ export class ManagedAgent {
     }
 
     // Keep new on-disk sessions (`/new`, session.new) on the switched model.
+    //
+    // `updateConfig` above already applied the new values, so a field the caller OMITTED must read
+    // back as its CURRENT value — not `?? "openai"` / `?? "unknown"`. The old fallbacks wrote those
+    // literals into the session record, and a later `/resume` adopted them: a remote-session host
+    // sends `model` alone (its catalog entry owns the style), so the record became `style: openai`
+    // and the resume-facing request used the OpenAI adapter against an Anthropic baseURL.
     if (updates.model !== undefined || updates.modelStyle !== undefined) {
-      this.session.setModelConfig(updates.modelStyle ?? "openai", updates.model ?? "unknown");
+      // `config.modelStyle` is normally resolved at construction; when a host supplied only
+      // `modelInfo`, the style lives on the model metadata (`agent-factory` applies the same chain).
+      // The `?? "openai"` is the final default for a model with no declared style at all.
+      this.session.setModelConfig(
+        updates.modelStyle ?? this.config.modelStyle ?? this.modelInfo?.style ?? "openai",
+        updates.model ?? this.config.model
+      );
     }
 
     // Drop the cached adapter + runner so the next run re-resolves the model.
@@ -3007,12 +3015,12 @@ export class ManagedAgent {
    * (the same identity wired into TanStack `chat` by {@link prepareForRun}) and
    * any pending tool controllers.
    */
-  abort(reason?: string, options: { userCancel?: boolean } = {}): void {
+  abort(reason?: string, options: { userCancel?: boolean; hadLiveRun?: boolean } = {}): void {
     // A user stop leaves the terminal verdict to `interrupt` below; a teardown restores the phase
     // because no run remains to publish one.
     if (options.userCancel) this.compactions.abortForUserCancel(reason ?? "user-cancelled");
     else this.compactions.abortForTeardown(reason ?? "aborted");
-    abortManagedAgentRun(this, reason);
+    abortManagedAgentRun(this, reason, { hadLiveRun: options.hadLiveRun });
     // A stopped run must not keep pumping: `pumpToolPhases` only checks `token.isCurrent` after
     // the stream, so without this an aborted/destroyed agent still ran plan sync, auto-approve and
     // the command-safety round trip (a real CoreEnv call on a remote workspace), and could enter
@@ -3057,9 +3065,10 @@ export class ManagedAgent {
       const taskCallId = child.parentTaskId;
       if (taskCallId && peekTaskPreforkCoordinator(this)?.isDetached(taskCallId)) continue;
       const status = child.getStatus();
-      if (status !== "running" && status !== "compacting" && status !== "thinking" && status !== "responding") {
-        continue;
-      }
+      // Core's predicate, not a hand-written list: `waiting` / `awaiting_user` are active waits, and
+      // a literal subset silently skipped a parked child when a new wait kind was added (it stayed
+      // listed by `activeSubagents` but was neither aborted nor notified).
+      if (!isActiveStatus(status)) continue;
       try {
         child.abort(reason ?? "parent-aborted");
       } catch {

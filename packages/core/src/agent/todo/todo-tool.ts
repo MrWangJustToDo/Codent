@@ -58,12 +58,16 @@ IMPORTANT RULES:
     // Send title + source + items so the model can see the current list and its ownership.
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: TodoOutput }) {
       if (isProjectedModelContent(output)) return output;
+      // A restored / externally-built output may carry no `items` (the UI formatter
+      // `formatTodoOutput` guards the same shape). Keeping `title` alone is the honest answer;
+      // interpolating the missing list wrote the literal text "undefined" into the model context.
       const lines = output.items?.map?.((item) => {
         const icon = item.status === "completed" ? "[x]" : item.status === "in_progress" ? "[>]" : "[ ]";
         return `${icon} ${item.content}`;
       });
       const sourceTag = output.source === "plan" ? " [source=plan]" : "";
-      return [{ type: "text" as const, content: `${output.title}${sourceTag}\n${lines?.join("\n")}` }];
+      const body = lines?.length ? `\n${lines.join("\n")}` : "";
+      return [{ type: "text" as const, content: `${output.title}${sourceTag}${body}` }];
     },
   });
 };

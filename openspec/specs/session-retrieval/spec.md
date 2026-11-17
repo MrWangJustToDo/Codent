@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Define what the agent is told about reaching past conversations: that earlier sessions exist on disk, the two shapes they take, how each is read, and where that guidance lives. It is the single owner of usage guidance — the compaction summary carries path data and the archive header carries metadata, precisely so this stays one place that is always current and never needs revising for artifacts already written.
+Define what the agent is told about reaching past conversations: that earlier sessions exist on disk in ONE authoritative shape (`.agents/sessions/<id>.session.jsonl`, the complete conversation), how it is read, and where that guidance lives. It is the single owner of usage guidance — compaction only appends a summary and never drops messages, so this stays one place that is always current and never needs revising for artifacts already written. (The former `.agents/transcripts/<id>/compact-<N>.md` archive is removed; a `Compact archives MUST NOT be searched` requirement remains as a regression guard.)
 ## Requirements
 ### Requirement: Retrieval guidance has a single home
 

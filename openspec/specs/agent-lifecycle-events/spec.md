@@ -79,8 +79,8 @@ When a subagent run finishes successfully, the system SHALL emit `subagent:compl
 
 #### Scenario: Doc middleware list matches buildAgentRunner
 
-- **WHEN** a reader follows ARCHITECTURE §3.3 middleware order
-- **THEN** the listed stack matches `buildAgentRunner` in `run-agent.ts`, ending with extensions middleware rather than hooks middleware
+- **WHEN** a reader follows ARCHITECTURE §3.4 middleware order
+- **THEN** the listed stack matches `buildAgentRunner` in `run-agent.ts` (in `CANONICAL_MIDDLEWARE_ORDER` order, `prompt-cache` last), and it contains `extensions-middleware` rather than a hooks middleware
 
 #### Scenario: Doc describes the unified bus
 

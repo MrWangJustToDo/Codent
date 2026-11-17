@@ -29,7 +29,7 @@ The `ExtensionContext` SHALL provide `registerMessageTransformer(fn)` returning 
 
 ### Requirement: Transformer runs on every wire build, after channel projection
 
-The transformer SHALL be invoked on every message set sent to the model within a run — the initial call and each subsequent iteration — at a point **after** the channel-anchored wire projection has produced the model messages and **before** the messages are handed to the model engine. The transformer SHALL NOT be placed at a point that is superseded by a later channel projection within the same run. In the managed pipeline this point SHALL be a dedicated middleware that runs immediately after the `compaction` middleware; because both declare the same phase, the relative order SHALL be asserted against the pipeline the runner actually assembles, not against a hand-maintained factory list.
+The transformer SHALL be invoked on every message set sent to the model within a run — the initial call and each subsequent iteration — at a point **after** the channel-anchored wire projection has produced the model messages and **before** the messages are handed to the model engine. The transformer SHALL NOT be placed at a point that is superseded by a later channel projection within the same run. In the managed pipeline this point SHALL be a dedicated middleware that runs after the `compaction` middleware and after `tool-compact` (which itself immediately follows `compaction`); because all three declare the same `context-transform` phase, the relative order SHALL be asserted against the pipeline the runner actually assembles, not against a hand-maintained factory list.
 
 #### Scenario: First call of a run
 

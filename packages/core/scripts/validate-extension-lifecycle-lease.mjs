@@ -307,14 +307,14 @@ const toolDef = (name) => ({
 }
 
 // ============================================================================
-// 5. The lease covers the two side-effecting surfaces: ctx.llm and ctx.events.emit
+// 5. The lease covers the two side-effecting surfaces: ctx.llm and ctx.events.intercept
 // ============================================================================
 //
 // Both were outside it. `ctx.llm.complete` had no `isLive` check at all, so an extension that kept a
 // timer (the documented pattern) could spend the user's tokens and the session's budget after the
-// panel said "disabled". `ctx.events.emit` could still drive OTHER extensions' interceptors. Neither
-// reaches the host's own state (`emit` goes to interception only, never to observers/retained), so
-// the fix is a refusal, not a rollback.
+// panel said "disabled". `ctx.events.intercept` could still drive OTHER extensions' interceptors.
+// Neither reaches the host's own state (`intercept` goes to interception only, never to
+// observers/retained), so the fix is a refusal, not a rollback.
 {
   const tools = new Map();
   const runner = new ExtensionRunner({

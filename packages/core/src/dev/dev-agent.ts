@@ -297,7 +297,6 @@ export {
 } from "../agent/stream/empty-model-stream.js";
 export {
   TOOL_APPROVAL_ABANDONED_MESSAGE,
-  TOOL_CANCELLED_MESSAGE,
   TOOL_RUN_ENDED_MESSAGE,
   INTERRUPTED_RUN_MESSAGE,
   TOOL_BATCH_REPEAT_THRESHOLD,
@@ -478,6 +477,7 @@ export {
   createSkillsExtension,
   type SkillsExtensionConfig,
 } from "../agent/skills";
+export { TOOL_CANCELLED_MESSAGE, syntheticCancelMessage } from "../runtime-types/abort.js";
 export { createMcpExtension } from "../agent/mcp";
 export { mcpConfigFromServers } from "../agent/mcp/options.js";
 export { McpManager } from "../agent/mcp/manager.js";

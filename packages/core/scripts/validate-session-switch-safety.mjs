@@ -577,6 +577,8 @@ assert.equal(
   const session = { id: "ses_same", uiMessages: [], model: "m", modelStyle: "openai" };
   let clearedUi = 0;
   let clearedNotices = 0;
+  let childrenDestroyed = 0;
+  let taskRunsCleared = 0;
   const backgroundResets = [];
   const host = {
     getSessionData: () => session,
@@ -586,8 +588,16 @@ assert.equal(
       resetTracker: () => {},
       clearRestorePlaceholder: () => {},
     },
-    resetBackgroundWork: (_reason, options) => {
-      backgroundResets.push(options?.sameSession === true);
+    destroyChildAgents: () => {
+      childrenDestroyed += 1;
+    },
+    clearTaskRuns: () => {
+      taskRunsCleared += 1;
+    },
+    // The port takes only a reason now: a same-session reload does not call this at all (asserted
+    // as `[]` below), so an invocation here is always a real switch.
+    resetBackgroundWork: () => {
+      backgroundResets.push(true);
     },
     clearExtensionUi: () => {
       clearedUi += 1;
@@ -601,11 +611,16 @@ assert.equal(
   assert.equal(restored.id, session.id);
   assert.equal(clearedUi, 0, "a same-session restore keeps the slots activate() just published");
   assert.equal(clearedNotices, 0, "…and its notices");
+  // The conversation is NOT being left, so nothing it owns may be ended: `reset()` would destroy
+  // running background commands, abort detached tasks and drop the job-status ledger. A same-id
+  // `/resume` is a reload, not an exit.
   assert.deepEqual(
     backgroundResets,
-    [true],
-    "a same-session reload keeps the job-status ledger (no duplicate `job:changed{running}`)"
+    [],
+    "a same-session reload does not reset background work (its jobs/tasks still belong to it)"
   );
+  assert.equal(childrenDestroyed, 0, "a same-session reload keeps spawned subagents (and their previews)");
+  assert.equal(taskRunsCleared, 0, "a same-session reload keeps the task phase/seat records");
 
   // A real switch still clears them.
   backgroundResets.length = 0;
@@ -624,7 +639,7 @@ assert.equal(
   await switching.resume(target.id);
   assert.equal(clearedUi, 1, "a switch to a different session clears the old conversation's slots");
   assert.equal(clearedNotices, 1, "…and its notices");
-  assert.deepEqual(backgroundResets, [false], "a real switch clears the job-status ledger with the conversation");
+  assert.deepEqual(backgroundResets, [true], "a real switch resets background work with the conversation");
 }
 
 // A failed resume restores the input the stop half ACTUALLY cleared — captured at the stop

@@ -228,7 +228,7 @@ export const createGrepTool = () => {
         // here for both backends; brace alternatives include `*.{ts,tsx}`.
         // A single-file path already names the file; include flags are ignored by the
         // backend in that case, so do not filter the one result away here either.
-        const includePatterns = include && !searchPathIsFile ? expandBraceGlobs(include) : [];
+        const includePatterns = include && !searchPathIsFile ? expandBraceGlobs(include).patterns : [];
         const includeMatch = (file: string): boolean =>
           includePatterns.length === 0 ||
           includePatterns.some((pattern) => matchesGlobPath(file, searchPath, pattern, coreEnv.rootPath));

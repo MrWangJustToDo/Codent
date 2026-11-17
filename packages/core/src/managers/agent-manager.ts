@@ -7,7 +7,7 @@ import { AgentEventBusScope } from "./agent-event-bus-scope.js";
 import { buildManagedAgent } from "./agent-factory.js";
 import { AgentRegistry } from "./agent-registry.js";
 import { LifecycleCoordinator } from "./lifecycle-coordinator.js";
-import { runManagedAgent, runManagedAgentStream, type RunAgentStreamInput } from "./run-agent.js";
+import { runManagedAgentStream, type RunAgentStreamInput } from "./run-agent.js";
 import { emitSessionBootstrapEvents } from "./session-bootstrap-events.js";
 
 import type { ManagedAgent, ManagedAgentConfig } from "./managed-agent.js";
@@ -773,15 +773,6 @@ export class AgentManager {
    */
   runAgentStream(agentId: string, input: RunAgentStreamInput): AsyncIterable<StreamChunk> {
     return runManagedAgentStream(this, agentId, input);
-  }
-
-  /**
-   * Awaiting entry — a promise resolving to the AG-UI chunk stream. Awaiting runs
-   * `prepareForRun` eagerly, so setup failures reject here instead of at the first
-   * iteration. Same stream as {@link runAgentStream}.
-   */
-  runAgent(agentId: string, input: RunAgentStreamInput): Promise<AsyncIterable<StreamChunk>> {
-    return runManagedAgent(this, agentId, input);
   }
 
   /**

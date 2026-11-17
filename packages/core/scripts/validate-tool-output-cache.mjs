@@ -212,6 +212,46 @@ const STALE_AGE = TOOL_OUTPUT_MAX_AGE_MS + 60_000;
 }
 
 // ---------------------------------------------------------------------------
+// 4a. The preview must never swallow the pointer.
+//
+// The tool-output contract is "bounded preview + a path to the full output". A preview builder that
+// truncates AFTER the note/hint puts the model in front of a cut body with no way to reach the rest
+// — the failure this pins. Both preview shapes are covered (many lines → head/tail lines; one huge
+// line → head/tail chars), plus every note variant, so a future "just cut it to N chars" change
+// fails here instead of silently disconnecting a spill.
+// ---------------------------------------------------------------------------
+{
+  const spillId = (suffix) => `call_preview-${suffix}`;
+  const manyLines = Array.from({ length: 4000 }, (_, i) => `line ${i}`).join("\n");
+  const linePreview = await maybeCacheOutput(getEnv(), manyLines, spillId("lines-tree"));
+  assert.ok(linePreview.cachedOutputPath, "a long many-line body is spilled");
+  assert.ok(linePreview.content.includes(linePreview.cachedOutputPath), "the line preview names the spill path");
+  assert.match(linePreview.content, /Use read_file with path="/, "the read hint survives the line preview");
+  assert.match(linePreview.content, /Full output saved to:/, "an untruncated spill claims the full copy");
+
+  const oneLine = "x".repeat(CACHE_THRESHOLD * 4);
+  const charPreview = await maybeCacheOutput(getEnv(), oneLine, spillId("chars-webfetch"));
+  assert.ok(charPreview.cachedOutputPath, "a single huge line is spilled");
+  assert.ok(charPreview.content.includes(charPreview.cachedOutputPath), "the char preview names the spill path");
+  assert.match(charPreview.content, /Use read_file with path="/, "the read hint survives the char preview");
+  assert.ok(
+    charPreview.content.length < CACHE_THRESHOLD,
+    "the char preview is bounded (a multi-MB one-line body must not be copied into the preview)"
+  );
+
+  const page = await maybeCacheOutput(getEnv(), manyLines, spillId("page-grep"), { pageOnly: true });
+  assert.match(page.content, /Output for this page saved to:/, "a page spill names the page");
+  assert.doesNotMatch(page.content, /Full output saved to:/, "a page spill must not claim the full output");
+
+  const tail = await maybeCacheOutput(getEnv(), manyLines, spillId("tail-stdout"), { truncated: true });
+  assert.doesNotMatch(tail.content, /Full output saved to:/, "a truncated buffer must not claim a full copy");
+  assert.match(tail.content, /kept only its tail/, "a truncated buffer says so");
+  assert.match(tail.content, /Use read_file with path="/, "…and still names the file it did write");
+
+  console.log("preview keeps the cache pointer (both shapes, every note variant)");
+}
+
+// ---------------------------------------------------------------------------
 // 4b. Compaction GC reads the real tool-message `content`
 //
 // `convertMessagesToModelMessages` emits a tool message as `{ role: "tool", content }` where

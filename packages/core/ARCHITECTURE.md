@@ -168,10 +168,11 @@ table. It enforces **three** properties:
 
 | Field / API                                 | Host access                                                                        |
 | ------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `status`, `context`, `ui`                   | Read-only getters                                                                  |
+| `getStatus()`, `getUI()`                     | Read-only accessors (no property getters: see `validate:accessor-convention`)      |
 | `usage`, `planMode`, `autoMode`             | `readonly` service refs (mutate via methods); auto and plan are mutually exclusive |
 | `runner`, `textAdapter`, `runnerConfigKey`  | **Private** — package-internal accessors only                                      |
-| `setStatus` / `setContext` / `setUIChannel` | Mutation entry points (`setUIChannel` package-internal)                            |
+| `transitionStatus` / `setStatus`            | `transitionStatus` is the single writer; `setStatus` is the `@internal` compatibility write used only by `run-lifecycle` / compaction |
+| `setUIChannel`                              | Mutation entry point (package-internal)                                            |
 | `statusController.applyRunOutcome(...)`     | Unified run finalization (chat + detached/subagent)                                |
 
 Plan/auto exclusion is owned by `ModeCoordinator` (`agent/mode/mode-coordinator.ts`): it disables
@@ -211,9 +212,11 @@ Today's contract:
   second agent); the previous session's ownership is released on the switch.
 
 Direction (if one agent is ever to serve several sessions): the conversation-scoped state moves off
-`ManagedAgent` into a session object, `ManagedAgent.id` stops being the correlation key (the disk
-session becomes it), and session ownership grows a **file-level** lease — today's claim table is
-per-manager, so two runtimes over one workspace can open the same session and each write its own copy.
+`ManagedAgent` into a session object, and `ManagedAgent.id` stops being the correlation key (the disk
+session becomes it). Ownership itself is already shared per workspace root
+(`agent/session/session-ownership.ts`, `sharedLocalByRoot`) and backed by a cross-process
+`SessionLock` file (`.agents/sessions/<id>.session.lock`, TTL 120 s) — two runtimes over one
+workspace cannot both write the same session log.
 
 ---
 
@@ -378,10 +381,14 @@ Sources: `managers/middleware/*` for run stack; `agent/plan/plan-mode-middleware
 2. approval-resume-middleware re-apply persisted approvals so resumed tools do not re-prompt
 3. lifecycle-middleware      usage tracking, thinking events, llm:request/response
 4. compaction-middleware     auto-compact + channel-anchored wire projection (cache by revision)
-5. message-transform-middleware  extension message transformers (registerMessageTransformer).
-                             MUST run immediately after compaction, and ONLY consumes
-                             config.messages — anything placed before the projection is discarded
-6. tool-compact-middleware   per-tool LLM shaping
+5. tool-compact-middleware   per-tool LLM shaping via the tool's own `toModelOutput`.
+                             MUST stay after compaction and BEFORE message-transform: it is what
+                             turns a tool result into the model-visible shape, so a transformer
+                             running first would have its edit silently re-projected over
+6. message-transform-middleware  extension message transformers (registerMessageTransformer).
+                             MUST stay after compaction AND tool-compact — the wire it rewrites has
+                             to be the final one — and BEFORE wire-recovery (a strip running first
+                             would hide the real attachment from the transformer)
 7. wire-recovery-middleware  per-run wire overrides that are NOT in the channel: the capability
                              strip (unsupportedMultimodalPartTypes) and the max_tokens
                              continuation prompt. MUST run after tool-compact (it materializes
@@ -390,17 +397,18 @@ Sources: `managers/middleware/*` for run stack; `agent/plan/plan-mode-middleware
 8. turn-context-middleware   HASH-ADMITTED sections only: inject changed <ctx kind=...> blocks
                              post-compaction (identity + hash diff against the wire; subagents
                              filtered by SUBAGENT_ALLOWED_KINDS; systemPrompts = frozen only)
-9. extensions-middleware     ExtensionEventBus intercept + agent:tool-* lifecycle events
-10. early-tool-result-ui      apply each tool output to StreamProcessor as soon as it finishes
-11. task-prefork-middleware  subagent task prefork / phase state
-12. plan-mode-middleware     block forbidden tools while plan mode restricts tooling
-13. todo-reminder-middleware CONDITION + COUNTER: nag when the todo list has gone stale for too
+9. step-budget-middleware    subagent step-budget notice, appended at the same wire tail
+10. extensions-middleware     ExtensionEventBus intercept + agent:tool-* lifecycle events
+11. early-tool-result-ui      apply each tool output to StreamProcessor as soon as it finishes
+12. task-prefork-middleware  subagent task prefork / phase state
+13. plan-mode-middleware     block forbidden tools while plan mode restricts tooling
+14. todo-reminder-middleware CONDITION + COUNTER: nag when the todo list has gone stale for too
                              many rounds. Scans the window for the todo call / the previous nag and
                              re-admits only at a strictly later round (round/episode in shell attrs)
-14. repeat-reminder-middleware
+15. repeat-reminder-middleware
                              CONDITION + COUNTER: nudge when the trailing tool calls repeat. Scans the
                              run for a reminder inside it and re-admits only past a threshold
-15. background-middleware    the background class, in order: one-shot completion pushes
+16. background-middleware    the background class, in order: one-shot completion pushes
                              (<ctx kind=background_notification>, persisted + id-deduped, `jobs` /
                              `tasks` attrs, BOTH kinds) and then the <background_jobs> pointer
                              (hash-admitted, commands only: only jobs the wire does not already
@@ -408,15 +416,17 @@ Sources: `managers/middleware/*` for run stack; `agent/plan/plan-mode-middleware
                              block for both kinds; it reads the trunk facade, never a source.
                              Delivery only: the turn that makes an IDLE session deliver at all is
                              started by `ManagedAgent.wakeForBackgroundWork` (see §command jobs)
-16. prompt-cache-middleware  Anthropic cache_control + OpenAI prompt_cache_key + sorted tools
+17. prompt-cache-middleware  Anthropic cache_control + OpenAI prompt_cache_key + sorted tools
                              (must stay last so cache breakpoints see the final payload)
+
 ```
 
 Each middleware declares its own phase (`observe` / `context-transform` / `tools` / `wire-annotate`) via
 `defineMiddleware(phase, { name, ... })`, and `sortMiddlewaresByPhase` stable-sorts by phase. **Within a
 phase the array position in `buildAgentRunner` decides the order**, so same-phase adjacency is a real
-contract — `compaction`, `message-transform`, and `wire-recovery` are all `context-transform`, which is why
-`validate:middleware-order` drives `buildAgentRunner` instead of checking a copied factory list.
+contract — `context-transform` has six members (`compaction`, `tool-compact`, `message-transform`,
+`wire-recovery`, `turn-context`, `step-budget`), which is why `validate:middleware-order` drives
+`buildAgentRunner` instead of checking a copied factory list.
 
 ### Wire overrides vs. the channel projection
 
@@ -830,7 +840,7 @@ Idempotent per turn via `resetTurnLifecycle` / `beginTurnFinalize` (stop + pump 
 ```
 Session `session.resume` / Host.create `{ resumeSessionId | continueSession }`
   → ManagedAgent.restoreSession(sessionId)
-    → SessionPersistence.restore → SessionService.restoreFromStore
+    → SessionPersistence.restore → SessionService.readSessionForRestore (+ adoptRestoredSession)
       → usage.reset(); hydrate uiMessages
       → restore usage, todos, approvals (missing/`[]` backfills from UIMessage approval parts)
     → host.approvals.restore(session.approvals)

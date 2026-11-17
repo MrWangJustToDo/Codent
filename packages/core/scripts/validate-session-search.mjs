@@ -1,11 +1,11 @@
 /**
  * Validation: session history retrieval (`session_search` / `session_read`).
  *
- * Past conversation is two on-disk shapes — `.agents/sessions/<id>.session.jsonl` (one JSON message
- * per line) and `.agents/transcripts/<sessionId>/compact-<N>.md` (plain text) — and the tools must
- * read both without the model touching raw JSON. This pins:
+ * Past conversation lives in ONE authoritative shape — `.agents/sessions/<id>.session.jsonl` (one
+ * JSON message per line). Compaction only appends a summary; it never drops messages, so the log is
+ * the complete conversation. The tools must read it without the model touching raw JSON. This pins:
  *
- *   1. both shapes are searched, and a session hit is parsed (session id + role + snippet), not raw
+ *   1. every session-log hit is parsed (session id + role + snippet), not raw JSON
  *   2. the current session is excluded by default and re-included by an explicit sessionId
  *   3. the role filter narrows results
  *   4. results are bounded (a limit withholds the rest, and a candidate-cap overflow says so)
@@ -85,8 +85,9 @@ const FILES = {
   ".agents/sessions/ses_spill.session.jsonl": Array.from({ length: 9 }, (_, i) =>
     line({ id: `sp${i}`, role: "user", parts: [text(`M${i} ${"A".repeat(19000)}`)] })
   ).join("\n"),
-  // A compact archive that duplicates session-log content — it must NOT be searched (the log is
-  // the complete source; the archive is a derived, lower-fidelity copy).
+  // REMOVED-FORMAT REGRESSION GUARD: `.agents/transcripts/...` was a derived duplicate of the log
+  // and no longer exists. The file stays in the fixture so a reader that reintroduces `.md` scanning
+  // fails this test (the log is the single complete source).
   ".agents/transcripts/ses_old/compact-1.md": ["# Compaction", "ARCHIVE_ONLY_TOKEN blue-green."].join("\n"),
   // A compacted session: SURFACE_PROBE before the summary is `shadowed`, after is `current`.
   // Timestamps let the time-window filter be exercised.
@@ -165,8 +166,8 @@ registerCoreEnv({
       const bytes = Buffer.from(FILES[path], "utf8");
       return bytes.subarray(start, end).toString("utf8");
     },
-    // Writes are only expected for the tool-output spill (.agents/cache/tool-output/); the
-    // session logs and transcripts are never written (asserted structurally in section 7).
+    // Writes are only expected for the tool-output spill (.agents/cache/tool-output/); the session
+    // logs are never written (asserted structurally in section 7).
     writeFile: async (path, content) => {
       FILES[path] = String(content);
     },
@@ -244,8 +245,8 @@ try {
     assert.match(match.snippet, /blue-green/);
     assert.ok(!match.snippet.includes('"parts"'), "a session hit is parsed, never raw JSON");
 
-    // The compact archive (a derived duplicate) is NOT a search source: a token only it carries
-    // must not surface — the session log is the single, complete source.
+    // The REMOVED archive format must stay unsearchable: a token only that `.md` fixture carries
+    // must not surface. The log is the single, complete source.
     const archiveOnly = await searchHistory(getEnv(), { query: "ARCHIVE_ONLY_TOKEN", limit: 10 });
     assert.equal(archiveOnly.total, 0, "compact archives are not searched (the session log is complete)");
   }

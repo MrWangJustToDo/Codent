@@ -220,15 +220,14 @@ export class ExtensionTurnContext {
   ): Promise<string | undefined> {
     if (!produce) return undefined;
     try {
-      // The disable path awaits this before unregistering, so a producer that never settles would
-      // leave `pendingToggles` locked and the extension impossible to disable — the one state a
-      // broken extension must never be able to create.
+      // Bounded, and awaited AFTER the lease is revoked (see `applyEnabled`): a producer that never
+      // settles can therefore only cost this extension's own notice, never the ability to disable
+      // it. `pendingToggles` stays held for the wait, so the bound is what keeps the toggle usable.
       //
       // `timeoutMs === 0` means "no wall-clock bound" for per-turn CONTENT (a producer bounded by
-      // the run signal). It must NOT carry into the disable path: that path is awaited before the
-      // lease is revoked, so honouring `0` here is exactly the un-disableable state described
-      // above. Fall back to the callback timeout instead — `bound()` treats `undefined` as the
-      // runner default.
+      // the run signal). It must NOT carry into the disable path: an unbounded wait there is the
+      // un-disableable state described above. Fall back to the callback timeout instead — `bound()`
+      // treats `undefined` as the runner default.
       return (
         (await this.bound(
           Promise.resolve(produce()),

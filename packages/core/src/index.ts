@@ -36,12 +36,7 @@ export type { LspConnectionFactory } from "./env";
 // Model provider plane (orthogonal to CoreEnv)
 // ============================================================================
 
-export {
-  registerModelProvider,
-  clearModelProvider,
-  getModelProvider,
-  hasModelProvider,
-} from "./provider/model-provider-registry.js";
+export { registerModelProvider, clearModelProvider, getModelProvider } from "./provider/model-provider-registry.js";
 
 export {
   createDirectModelProvider,
@@ -406,6 +401,7 @@ export {
   isTimeoutError,
   isCancelledOutputMarker,
   isSyntheticCancelOutput,
+  TOOL_CANCELLED_MESSAGE,
 } from "./runtime-types/abort.js";
 export {
   TRUNCATED_TOOL_CALL_MESSAGE,
@@ -414,11 +410,7 @@ export {
   isInterruptedToolOutput,
   isTruncatedToolOutput,
 } from "./runtime-types/tool-truncation.js";
-export {
-  TOOL_APPROVAL_ABANDONED_MESSAGE,
-  TOOL_CANCELLED_MESSAGE,
-  TOOL_RUN_ENDED_MESSAGE,
-} from "./agent/stream/incomplete-tool-calls.js";
+export { TOOL_APPROVAL_ABANDONED_MESSAGE, TOOL_RUN_ENDED_MESSAGE } from "./agent/stream/incomplete-tool-calls.js";
 export type {
   ToolActivityCategory,
   ToolPresentation,
@@ -507,7 +499,6 @@ export type {
   ExtensionZod,
   InterceptableEvent,
   EventInterceptor,
-  ExtensionLifecycleEvent,
   ToolBeforeEvent,
   ToolBeforePayload,
   ToolAfterEvent,

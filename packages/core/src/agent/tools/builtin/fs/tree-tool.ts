@@ -2,11 +2,10 @@ import { z } from "zod";
 
 import { getEnv, type CoreEnvFs } from "../../../../env";
 import { ExecutionError } from "../../../../env/types";
-import { isAbortError } from "../../../../runtime-types/abort.js";
+import { isAbortError, TOOL_CANCELLED_MESSAGE } from "../../../../runtime-types/abort.js";
 import { compareCodeUnits } from "../../../../utils/code-unit-order.js";
 import { headDisplayLines } from "../../../../utils/display-lines.js";
 import { toPosixPath, toPosixPathKey } from "../../../../utils/posix-path.js";
-import { TOOL_CANCELLED_MESSAGE } from "../../../stream/incomplete-tool-calls.js";
 import { defineServerTool, isProjectedModelContent } from "../../runtime/define-tool.js";
 import { maybeCacheOutput } from "../../shared/cache/tool-output-cache.js";
 import { OUTPUT_LIMITS, truncateToolOutput } from "../../shared/output-limits.js";

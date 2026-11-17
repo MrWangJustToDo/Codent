@@ -103,19 +103,38 @@ export function isInterceptorTimedOut(event: object): boolean {
 }
 
 /**
- * Drop an interceptor's rewrite wherever this event keeps it.
+ * Drop every rewrite an interceptor may have written before it failed.
  *
- * `modifiedArgs` is a top-level field, but `ToolAfterPayload.modifiedResult` lives INSIDE `payload`
- * (`agent/extension/types.ts`). Clearing only the top level left a half-executed `tool:after`
- * rewrite readable by the caller, and nothing but an opt-in `isInterceptorTimedOut` check stood
- * between it and the model's tool result.
+ * `modifiedArgs` is top-level, but `ToolAfterPayload.modifiedResult` lives INSIDE `payload`
+ * (`agent/extension/types.ts`) — clearing only the top level left a half-executed `tool:after`
+ * rewrite readable by the caller.
+ *
+ * A handler that throws (or one that timed out mid-work) produced NO verdict, so a half-written
+ * rewrite must never reach the caller. One definition, called by the bus's failure branches AND by
+ * the extension wrapper: the wrapper contains its own throw (so the bus never sees it), which is
+ * exactly how a partially-written `tool:after` rewrite used to reach the model as a final result.
  */
-function clearPayloadRewrite(event: object): void {
+export function clearInterceptorRewrite(event: object): void {
+  const mutable = event as {
+    modifiedArgs?: unknown;
+    modifiedResult?: unknown;
+    payload?: { modifiedResult?: unknown };
+  };
   try {
-    const payload = (event as { payload?: { modifiedResult?: unknown } }).payload;
+    mutable.modifiedArgs = undefined;
+  } catch {
+    // Best-effort cleanup: a frozen/foreign event must not turn containment into a throw.
+  }
+  try {
+    mutable.modifiedResult = undefined;
+  } catch {
+    // See above.
+  }
+  try {
+    const payload = mutable.payload;
     if (payload && typeof payload === "object") payload.modifiedResult = undefined;
   } catch {
-    // Best-effort cleanup: a frozen/foreign payload must not turn a contained timeout into a throw.
+    // See above.
   }
 }
 
@@ -447,12 +466,8 @@ export class DefaultAgentEventBus implements AgentEventBus {
             skip?: boolean;
             skipDefault?: boolean;
             handlerError?: boolean;
-            modifiedArgs?: unknown;
-            modifiedResult?: unknown;
           };
-          mutable.modifiedArgs = undefined;
-          mutable.modifiedResult = undefined;
-          clearPayloadRewrite(event);
+          clearInterceptorRewrite(event);
           mutable.skip = true;
           mutable.handlerError = true;
           break outer;
@@ -486,12 +501,8 @@ export class DefaultAgentEventBus implements AgentEventBus {
               skip?: boolean;
               skipDefault?: boolean;
               handlerError?: boolean;
-              modifiedArgs?: unknown;
-              modifiedResult?: unknown;
             };
-            mutable.modifiedArgs = undefined;
-            mutable.modifiedResult = undefined;
-            clearPayloadRewrite(event);
+            clearInterceptorRewrite(event);
             mutable.skip = true;
             mutable.handlerError = true;
             break outer;
@@ -500,7 +511,7 @@ export class DefaultAgentEventBus implements AgentEventBus {
           // fail-closed gate can deny, and keep going — one broken extension must not fail every
           // call it touches. A half-written rewrite is equally untrustworthy here (the timeout path
           // clears it for the same reason), so drop it rather than let the caller apply it.
-          clearPayloadRewrite(event);
+          clearInterceptorRewrite(event);
           (event as { handlerError?: boolean }).handlerError = true;
           continue;
         }

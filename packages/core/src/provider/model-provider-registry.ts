@@ -26,11 +26,6 @@ export function clearModelProvider(): void {
     .catch(() => undefined);
 }
 
-/** Whether an ambient model provider is registered. */
-export function hasModelProvider(): boolean {
-  return ambientProvider !== null;
-}
-
 /** Get the ambient model provider. Throws when none is registered. */
 export function getModelProvider(): ModelProvider {
   if (!ambientProvider) {

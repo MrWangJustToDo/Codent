@@ -744,7 +744,12 @@ export class ExtensionRunner {
         });
       }
       this.extensions = this.extensions.filter((entry) => entry !== duplicate);
-      this.ranks.delete(api.id);
+      // Replace IN PLACE. `seq` is the stable tie-break WITHIN one `order` value, and deleting the
+      // rank made the replacement take a fresh (larger) `seq` — it moved behind every same-order
+      // sibling, silently changing interceptor chains, transformer order and same-name tool
+      // precedence. Only `order` is re-derived, because it comes from the NEW module's declaration.
+      const previousRank = this.ranks.get(api.id);
+      if (previousRank) this.ranks.set(api.id, { ...previousRank, order: resolveExtensionOrder(api.order) });
       this.turnContextSections.clearNotices(api.id);
       // The old instance's `<ctx kind="ext:ID">` section may already be in THIS turn's collected
       // snapshot; `clearNotices` only affects future collections. Retract the section the same way
@@ -1377,9 +1382,11 @@ export class ExtensionRunner {
       return { ok: false, message: `Failed to enable "${id}": ${outcome.error.message}` };
     }
 
-    // Capture the provider's disabledContent BEFORE destroy (destroy unsubscribes
-    // it). Undefined/absent falls back to a generic notice so non-customizing
-    // extensions stay informative; an empty string explicitly opts out.
+    // Snapshot the provider + its `disabledContent` ACCESSORS before destroy (destroy unsubscribes
+    // the provider). Only the reads happen here — the producers run AFTER teardown (see below), so
+    // an extension that hangs in its own notice can no longer delay its own disable.
+    // Undefined/absent falls back to a generic notice so non-customizing extensions stay
+    // informative; an empty string explicitly opts out.
     const provider = this.turnContextSections.providerOf(instance.api.id);
     const ctxForDisable = this.contexts.get(instance.api.id);
     // A broken extension is the one that most needs disabling, so its own notice producer must
@@ -1400,13 +1407,17 @@ export class ExtensionRunner {
         error: `context provider: ${errorMessage(error)}`,
       });
     }
-    const custom = await this.turnContextSections.captureDisabledNotice(
-      instance.api.id,
-      "context provider",
-      customProducer,
-      providerTimeoutMs
-    );
-    const sectionNotices: Array<[string, string]> = [];
+    // The producers are only COLLECTED here. Awaiting them before teardown is what made a stuck
+    // extension block its own remedy: the disable path is `await`ed by the dispatcher and the lease
+    // was still live, so a 60s notice producer held `/extensions` (and every later toggle) for a
+    // minute per section with the extension still running. Nothing here needs the registrations —
+    // `ctxForDisable` is captured, and `produce(ctx)` reads data.
+    const pendingSectionNotices: Array<{
+      name: string;
+      label: string;
+      produce: (() => string | undefined | Promise<string | undefined>) | undefined;
+      timeoutMs: number | undefined;
+    }> = [];
     // `sections` is runtime data from arbitrary JS. A malformed entry (or a throwing getter) used
     // to reject `setEnabled` BEFORE teardown, leaving a broken extension active with no rollback —
     // the remedy unreachable through the path that needs it. Same containment as `collect`.
@@ -1435,17 +1446,12 @@ export class ExtensionRunner {
         });
         continue;
       }
-      const body = await this.turnContextSections.captureDisabledNotice(
-        instance.api.id,
-        `section "${section.name}"`,
-        producer,
-        timeoutMs
-      );
-      // A named section only announces a disabled notice when it declares `disabledContent` (an
-      // empty string opts out). The base provider has a generic fallback; named sections do not,
-      // by contract — but every registered name is still recorded below so the ENABLE retraction
-      // can cover a section that produced content earlier.
-      if (body?.trim()) sectionNotices.push([section.name, body.trim()]);
+      pendingSectionNotices.push({
+        name: section.name,
+        label: `section "${section.name}"`,
+        produce: producer,
+        timeoutMs,
+      });
     }
 
     // Teardown revokes the lease before unregistering, so even a throwing host callback leaves the
@@ -1464,6 +1470,32 @@ export class ExtensionRunner {
         error: errorMessage(error),
       });
     }
+    // Now that the lease is revoked and the registrations are gone, harvest the notices. A producer
+    // that hangs costs this extension's OWN notice (bounded), never the ability to disable it.
+    const custom = await this.turnContextSections.captureDisabledNotice(
+      instance.api.id,
+      "context provider",
+      customProducer,
+      providerTimeoutMs
+    );
+    const sectionNotices: Array<[string, string]> = [];
+    for (const pending of pendingSectionNotices) {
+      const body = await this.turnContextSections.captureDisabledNotice(
+        instance.api.id,
+        pending.label,
+        pending.produce,
+        pending.timeoutMs
+      );
+      // A named section only announces a disabled notice when it declares `disabledContent` (an
+      // empty string opts out). The base provider has a generic fallback; named sections do not,
+      // by contract — but every registered name is still recorded below so the ENABLE retraction
+      // can cover a section that produced content earlier.
+      if (body?.trim()) sectionNotices.push([pending.name, body.trim()]);
+    }
+    // `destroyAll()` can land inside the await above (it clears the notice maps and the instance
+    // list). Writing a notice onto a destroyed runner would outlive the destroy's own invariant
+    // that nothing survives it; the extension is already gone, so report success and stop.
+    if (this.destroyed) return { ok: true, message: `Extension "${id}" disabled` };
     const notice =
       custom === undefined
         ? `Extension "${instance.api.name ?? id}" is disabled — its tools and commands are unavailable.`
@@ -1665,6 +1697,20 @@ export class ExtensionRunner {
     const existing = byExtension.get(key);
     if (existing) return existing;
     const wrapped: EventInterceptor<InterceptableEvent> = async (event) => {
+      // Snapshot the rewrite fields so a throw rolls back only THIS handler's writes.
+      //
+      // Clearing instead would also discard a rewrite a PREVIOUS interceptor already produced — on
+      // `tool:after` that rewrite is legitimate and the middleware applies it, so one broken
+      // third-party handler would silently revert another extension's result shaping.
+      const mutable = event as {
+        modifiedArgs?: unknown;
+        modifiedResult?: unknown;
+        payload?: { modifiedResult?: unknown };
+      };
+      const beforeArgs = mutable.modifiedArgs;
+      const beforeResult = mutable.modifiedResult;
+      const beforePayloadResult =
+        mutable.payload && typeof mutable.payload === "object" ? mutable.payload.modifiedResult : undefined;
       try {
         return await handler(event, this.contexts.get(extensionId));
       } catch (err) {
@@ -1677,6 +1723,23 @@ export class ExtensionRunner {
         // `tool:before:*` tool gate) reads it as a deny. Without the flag a throwing gate silently
         // allowed every tool it matched.
         this.reportInterceptorFailure(extensionId, pattern, event.type, err);
+        // Roll back THIS handler's partial writes; leave earlier interceptors' rewrites intact.
+        try {
+          mutable.modifiedArgs = beforeArgs;
+        } catch {
+          // Frozen/foreign event: containment must not become a throw.
+        }
+        try {
+          mutable.modifiedResult = beforeResult;
+        } catch {
+          // See above.
+        }
+        try {
+          if (mutable.payload && typeof mutable.payload === "object")
+            mutable.payload.modifiedResult = beforePayloadResult;
+        } catch {
+          // See above.
+        }
         event.handlerError = true;
         return undefined;
       }

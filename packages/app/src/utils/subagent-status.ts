@@ -1,8 +1,16 @@
+import { isActiveStatus, isBusyStatus } from "@codent/core";
+
 import { COLORS } from "../theme/colors.js";
 
-import type { AgentSessionSubagentSummary } from "@codent/core";
+import type { AgentSessionSubagentSummary, AgentStatus } from "@codent/core";
 
-const STATUS_ICON: Record<string, string> = {
+/**
+ * Icon per status. `satisfies Record<AgentStatus, string>` makes a NEW core status a compile error
+ * here — a missing key would otherwise make `isAgentStatus` lie (the status renders as unknown and
+ * the activity predicates are never even called), which is exactly the drift this map is the guard
+ * for. The `as const` keeps the wide `string` index `getStatusIcon` needs.
+ */
+const STATUS_ICON = {
   running: ">",
   thinking: ">",
   responding: ">",
@@ -13,23 +21,34 @@ const STATUS_ICON: Record<string, string> = {
   error: "✗",
   aborted: "⊘",
   idle: "○",
-};
+} as const satisfies Record<AgentStatus, string>;
+
+/** Runtime guard for a status that crossed a serialized boundary (a remote/restored snapshot). */
+function isAgentStatus(value: string): value is AgentStatus {
+  return Object.hasOwn(STATUS_ICON, value);
+}
 
 export function getStatusIcon(status: string): string {
-  return STATUS_ICON[status] ?? "?";
+  return (STATUS_ICON as Record<string, string>)[status] ?? "?";
 }
 
 export function getStatusColor(status: string): string {
   if (status === "completed") return COLORS.success;
   if (status === "error") return COLORS.danger;
   if (status === "aborted") return COLORS.muted;
-  if (["running", "thinking", "responding", "compacting"].includes(status)) return COLORS.warning;
+  // Core owns the busy set: a hand-written copy here went stale the moment a status was added.
+  if (isAgentStatus(status) && isBusyStatus(status)) return COLORS.warning;
   return COLORS.muted;
 }
 
-/** Display-level activity check for subagent panel rows (distinct from core's AgentStatus predicate). */
+/**
+ * Display-level activity check for subagent panel rows.
+ *
+ * Delegates to core's `isActiveStatus` so a new status (or a new wait kind) cannot make a running
+ * row render as inactive without a compile error in core.
+ */
 export function isSubagentActiveStatus(status: string): boolean {
-  return ["running", "thinking", "responding", "compacting", "waiting", "awaiting_user"].includes(status);
+  return isAgentStatus(status) && isActiveStatus(status);
 }
 
 export function getTaskLabel(task: AgentSessionSubagentSummary): string {

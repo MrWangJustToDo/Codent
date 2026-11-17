@@ -302,6 +302,25 @@ export class TaskPreforkCoordinator {
   }
 
   /**
+   * Session switch: end every seat AND release the unregistered `runWithSlot` waiters.
+   *
+   * The one caller is the session-switch transaction (`SubagentRuns.reset()`). `abortAll` /
+   * `abortDetached` only touch REGISTERED seats; a `runWithSlot` waiter is an unregistered promise
+   * parked on `acquireSlot`. Left alone it survived the switch and was promoted by the next
+   * session's first free slot — then ran with the ABORTED signal of a call the switch had already
+   * discarded, doing its duration/cache bookkeeping after the conversation it belonged to was gone.
+   */
+  resetForSessionSwitch(): void {
+    this.abortAll();
+    this.abortDetached();
+    const waiters = this.serialWaiters.splice(0);
+    // The slots those waiters were queued for belong to the conversation being left.
+    this.active = 0;
+    for (const resolve of waiters) resolve();
+    if (waiters.length > 0) this.notify();
+  }
+
+  /**
    * Throw away ONE registered run and report it.
    *
    * The per-call half of {@link abortAll}: a `task` call can be refused after its pre-fork started
@@ -502,7 +521,10 @@ export class TaskPreforkCoordinator {
     if (entry.aborted) {
       if (entry.occupying) {
         entry.occupying = false;
-        this.active -= 1;
+        // Clamped: `resetForSessionSwitch` already zeroed the counter for the conversation being
+        // left, and an unwinding run's `finally` must not drive it negative (a negative `active`
+        // admits `cap + n` streams in the next session).
+        this.active = Math.max(0, this.active - 1);
         this.promote();
       }
       this.notify();
@@ -518,7 +540,7 @@ export class TaskPreforkCoordinator {
       return await factory();
     } finally {
       entry.occupying = false;
-      this.active -= 1;
+      this.active = Math.max(0, this.active - 1);
       this.promote();
       // After `promote`: a freed slot usually admits someone, so this announcement carries the
       // post-promotion queue rather than a one-off intermediate state.

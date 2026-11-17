@@ -90,7 +90,10 @@ export async function prepareManagedAgentForRun(
     // explanation of why the agent is working, and it has to slice with the run it explains.
     if (forcedNewTurn) {
       // Debug-level on purpose — it explains a run without being part of the readable story.
-      host.emitEvent("run:wake", { cause: host.takePendingWakeCause() ?? "job" });
+      //
+      // `unknown` when no cause was marked: this is the ONLY row that explains an unprompted turn,
+      // and defaulting to `job` invented a reason (a task wake read as a command completing).
+      host.emitEvent("run:wake", { cause: host.takePendingWakeCause() ?? "unknown" });
     }
   }
 
@@ -206,7 +209,11 @@ export function finalizeManagedAgentRun(
   return true;
 }
 
-export function abortManagedAgentRun(host: RunLifecycleHost, reason?: string): void {
+export function abortManagedAgentRun(
+  host: RunLifecycleHost,
+  reason?: string,
+  options: { hadLiveRun?: boolean } = {}
+): void {
   // "(no reason)" when the caller stated none. `RunCoordinator.abort` now forwards the
   // reason to the controller, so it reaches child subagent signals, which read it to say
   // *why* they stopped. A caller that rushes to default `"user-cancelled"` here would
@@ -224,7 +231,14 @@ export function abortManagedAgentRun(host: RunLifecycleHost, reason?: string): v
   // for a turn that had failed before the user pressed Esc.
   const axes = host.getAgentState?.();
   const alreadySettled = axes?.outcome === "error" || axes?.outcome === "aborted";
-  const hadRun = !alreadySettled && isActiveStatus(host.getStatus());
+  // `hadLiveRun` is supplied by a teardown that had to project `idle` BEFORE aborting (a destroyed
+  // agent must stay destroyed for the unwinding pump). Reading the status then is too late, and the
+  // teardown cancel of a genuinely running turn produced no `agent:abort` row at all.
+  //
+  // `alreadySettled` still wins: a run that FAILED and is only kept `awaiting_user` by a pending
+  // `ask_user` has no running work left, so a teardown must not label it "aborted" (the noise the
+  // status read alone was added to suppress — 459 rows vs 58 real cancels).
+  const hadRun = !alreadySettled && (options.hadLiveRun ?? isActiveStatus(host.getStatus()));
   if (hadRun) host.emitEvent("agent:abort", { reason: effectiveReason });
   host.run.abort(effectiveReason);
   // The status flip normally already happened in the abort listener above (it fires

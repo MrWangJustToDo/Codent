@@ -555,7 +555,7 @@ managed 路径不传 owner controller 会直接抛错，只有 `detached: true` 
 | 手动 `/compact` 失败 | `managed-agent-compact.ts:258-263` | 返回 `{ok:false,error}`；`finally` 恢复 previousStatus（`:264-275`） | 命令报错 | 不影响 run（运行中本就拒绝压缩，`local-session-dispatch.ts:93`） |
 | 扩展 handler 抛错 | `extension/runner.ts:303-321` | 记录 + `agent:extension-error`（自带递归保护） | 警告，不打断 | **继续** |
 | message transformer 抛错 | `message-transform-middleware.ts:105-127` | 保留上一版合法消息集，`agent:extension-error` phase `message-transform` | 警告 | **继续** |
-| 持久化失败（后台写） | `session-persistence.ts:77-81` | `session:save-error`（否则未处理的 rejection 会打崩进程） | 警告 | **继续** |
+| 持久化失败（后台写） | `session-persistence.ts:77-81` | `session:save-error`（否则未处理的 rejection 会打崩进程） | 错误（`error` 级日志行 + `session` 通道） | **继续** |
 | pump 辅助步骤抛错（命令安全分析 / plan 同步） | `agent-chat-controller.ts:611-596` | 归一化 → `onRunError` + 拒绝未决审批 → `finalizeChat(error)` | error | **终止**（error），不会把进程带走 |
 
 三种"重试"要分清：

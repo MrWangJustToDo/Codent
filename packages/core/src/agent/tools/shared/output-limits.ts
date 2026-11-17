@@ -39,6 +39,15 @@ export const OUTPUT_LIMITS = {
  * Scoped to TOOL OUTPUT on purpose (hence the name): it inserts a newline before the marker and
  * reports the drop count, which is not the general character-truncation contract. That one lives in
  * `utils/text-truncation.ts` (`truncateText`, with the shared omission marker).
+ *
+ * ⚠️ Never apply this to text that is about to be spilled for the model. The tool-output contract is
+ * "bounded preview + a path to the full output" ({@link maybeCacheOutput}): spilling a body this
+ * function already cut produces a file that stops exactly where the display did, while the preview
+ * still says "Full output saved to …". Two legitimate shapes exist —
+ *   - spill the UNtruncated text and let the preview bound it (`read_file` on the path is the way to
+ *     the rest), or
+ *   - the source already owns the full copy and the pointer names it (a background job log: cut the
+ *     inline body, then append the `log:` line AFTER the cut — see `formatCommandBody`).
  */
 export function truncateToolOutput(
   str: string,

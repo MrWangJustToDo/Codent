@@ -31,7 +31,7 @@ export interface QueuedTask {
  * (a waiting entry *because* the cap is full says nothing with `n/m`, and the cap moves), so there
  * is nothing else to read.
  */
-function readQueued(payload: Record<string, unknown>): QueuedTask[] {
+function readQueued(payload: { queued?: unknown }): QueuedTask[] {
   if (!Array.isArray(payload.queued)) return [];
   return payload.queued.flatMap((entry) => {
     if (!entry || typeof entry !== "object") return [];
@@ -53,8 +53,13 @@ export const useTaskQueue = (): QueuedTask[] => {
     return session.subscribe(
       (event) => {
         if (event.channel !== "lifecycle") return;
-        if (event.payload.type !== "subagent:queue") return;
-        setQueue(readQueued(event.payload));
+        // The lifecycle channel carries the typed AgentEvent ENVELOPE, so the snapshot is
+        // `envelope.payload` — reading `event.payload.queued` silently returned [] forever.
+        // A remote client only `JSON.parse`s a block, so a malformed frame is possible.
+        const envelope = event.payload as { type?: unknown; payload?: unknown } | null | undefined;
+        if (!envelope || typeof envelope !== "object") return;
+        if (envelope.type !== "subagent:queue") return;
+        setQueue(readQueued((envelope.payload ?? {}) as { queued?: unknown }));
       },
       { channels: ["lifecycle"] }
     );

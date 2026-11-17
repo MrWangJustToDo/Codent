@@ -117,6 +117,14 @@ export class SessionLock {
   private timer: ReturnType<typeof setInterval> | undefined;
   /** Set when a refresh found the file taken by someone else: stop pretending to hold it. */
   private lost = false;
+  /**
+   * The heartbeat write currently on disk, if any.
+   *
+   * `release()` must not remove the file while a beat that already passed its ownership read is
+   * still about to write it: the beat would recreate `<id>.session.lock` with a fresh mtime right
+   * after a clean exit, and the next process would refuse to resume for a full TTL.
+   */
+  private beatInFlight: Promise<unknown> | null = null;
 
   constructor(
     private readonly env: ResolvedCoreEnv,
@@ -257,6 +265,9 @@ export class SessionLock {
     if (target === undefined) return;
     if (target === this.current) this.current = undefined;
     if (this.current === undefined) this.stopHeartbeat();
+    // Serialize against the heartbeat: a beat that already read `current` would otherwise write the
+    // file back AFTER the `remove` below, resurrecting a lock this process just gave up.
+    await this.beatInFlight?.catch(() => undefined);
     try {
       const held = await this.inspect(target);
       // Only delete our own file: a takeover (stale lock claimed by another process) must not be
@@ -373,6 +384,9 @@ export class SessionLock {
       // Re-verify ownership before refreshing: another process may have taken over after a stale
       // window, and rewriting the file would silently steal the session back mid-run.
       const held = await this.inspect(sessionId);
+      // A release/dispose (or a switch to another session) that landed while we were reading must
+      // win: without this re-check the write below recreated a lock the teardown had just deleted.
+      if (this.current !== sessionId || this.lost) return "held";
       if (held && held.owner !== this.owner && !this.isSameProcess(held)) {
         this.lost = true;
         this.current = undefined;
@@ -388,8 +402,16 @@ export class SessionLock {
     }
   }
 
-  private async beat(): Promise<void> {
-    await this.refreshOwnership();
+  private beat(): void {
+    // Tracked so `release()` can wait for it: a beat that already passed its ownership read would
+    // otherwise recreate the file just after teardown removed it.
+    const inFlight = this.refreshOwnership();
+    this.beatInFlight = inFlight;
+    void inFlight
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.beatInFlight === inFlight) this.beatInFlight = null;
+      });
   }
 }
 

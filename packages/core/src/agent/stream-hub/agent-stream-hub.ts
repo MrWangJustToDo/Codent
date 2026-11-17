@@ -85,6 +85,15 @@ export class AgentStreamHub {
    */
   private generation = 0;
   /**
+   * The hub was released at teardown.
+   *
+   * `dispose()` clears the maps and drops the bus, but a producer can still deliver afterwards:
+   * teardown disposes the hub BEFORE aborting the run, so a command pipe that is still draining
+   * posts its final chunks into a hub nobody owns. `appendCommand` would recreate an ACTIVE entry
+   * (sharing its generation, since command chunks carry none) that no later `end` will close.
+   */
+  private disposed = false;
+  /**
    * Command ids that have already settled. A late chunk must not recreate a pruned stream:
    * `appendCommand` would otherwise reset it as active with no later tool-end to close it.
    */
@@ -108,6 +117,7 @@ export class AgentStreamHub {
    * @internal Called by `LifecycleCoordinator.destroy` while the object graph is still alive.
    */
   dispose(): void {
+    this.disposed = true;
     this.generation += 1;
     this.streams.clear();
     this.closedCommandIds.clear();
@@ -254,6 +264,8 @@ export class AgentStreamHub {
 
   /** Append a command chunk; opens the stdout/stderr stream on first use. */
   appendCommand(toolCallId: string, channel: "stdout" | "stderr", chunk: string): void {
+    // Released hub: every writer is gone and nothing would ever close an entry this recreated.
+    if (this.disposed) return;
     // A command that already settled must not be revived by a late transport chunk. Its final
     // output is owned by the tool result; recreating a preview here would leave an active entry
     // with no later tool-end to close it.

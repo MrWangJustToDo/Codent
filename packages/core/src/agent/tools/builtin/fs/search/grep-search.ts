@@ -80,7 +80,7 @@ function buildRgArgs(
   // Brace groups like `*.{ts,tsx}` are expanded to one --glob per alternative
   // since rg does not brace-expand its own --glob values.
   if (options.include && !options.searchPathIsFile) {
-    for (const glob of expandBraceGlobs(options.include)) {
+    for (const glob of expandBraceGlobs(options.include).patterns) {
       // ripgrep, like fd, matches a path glob from the search root/cwd; a caller's
       // `nested/*.ts` would match nothing unless it can start at any depth. The JS
       // include filter applies the exact relative semantics afterwards.
@@ -159,7 +159,7 @@ function buildGrepArgs(
     // GNU grep's --include is basename-only. For a path glob, still give it the basename
     // as a cheap pre-filter (e.g. `nested/*.ts` → `*.ts`); the exact path semantics are
     // applied in JS after the command returns.
-    for (const glob of expandBraceGlobs(options.include)) {
+    for (const glob of expandBraceGlobs(options.include).patterns) {
       args.push("--include", needsJsIncludeFilter ? includeBasename(glob) : glob);
     }
   }
@@ -230,7 +230,7 @@ function buildGitGrepArgs(
   // path above).
   const pathspecs: string[] = [];
   if (options.include && !options.searchPathIsFile && !includeNeedsJsFilter(options.include)) {
-    pathspecs.push(...expandBraceGlobs(options.include));
+    pathspecs.push(...expandBraceGlobs(options.include).patterns);
   }
   pathspecs.push(searchPath);
   // The policy's build/data directories are not necessarily in `.gitignore` (a fixture repo, a

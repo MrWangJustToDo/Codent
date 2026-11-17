@@ -427,7 +427,7 @@ export class AgentUIChannel {
     return !this.summaryHub || this.summaryHub.isCurrentGeneration(this.summaryGeneration);
   }
 
-  /** Process a single stream chunk (for incremental bridge during `runAgent`). */
+  /** Process a single stream chunk (for incremental bridge during the managed run). */
   processChunk(chunk: StreamChunk, generation = this.sessionGeneration): void {
     // A run from the session being left must not append after clear/restore. The
     // generation is captured by consumeRun; direct callers default to the current one.

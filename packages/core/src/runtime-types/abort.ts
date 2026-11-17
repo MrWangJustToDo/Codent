@@ -106,6 +106,16 @@ export function isSyntheticCancelOutput(output: unknown): boolean {
 }
 
 /**
+ * The one user-cancel message.
+ *
+ * Shared by the synthetic tool-result writers, the render layer (which compares a stored
+ * `output.error` against it by EQUALITY) and {@link syntheticCancelMessage}'s fallback. It used to
+ * be spelled twice — a constant in `agent/stream` plus a bare literal here — so a drift in either
+ * copy silently reclassified a cancel as a failure (red cross, ACP `failed`, activity-summary error).
+ */
+export const TOOL_CANCELLED_MESSAGE = "Cancelled by user.";
+
+/**
  * The text a synthetic cancel should show the UI **and** the model.
  *
  * The marker is shared by two writers with different reasons: a user abort writes
@@ -115,5 +125,5 @@ export function isSyntheticCancelOutput(output: unknown): boolean {
  */
 export function syntheticCancelMessage(output: unknown): string {
   const reason = (output as { reason?: unknown } | null | undefined)?.reason;
-  return typeof reason === "string" && reason.trim() ? reason : "Cancelled by user.";
+  return typeof reason === "string" && reason.trim() ? reason : TOOL_CANCELLED_MESSAGE;
 }

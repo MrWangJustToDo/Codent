@@ -275,11 +275,17 @@ class LocalAgentSessionImpl implements AgentSession {
           }
           continue;
         }
+        // Retained replay: the provider returns the CURRENT value, so the frame describes now, not
+        // the past. Stamp the same identity a live emission carries — a subscriber that attributes
+        // frames by `sessionId` (remote aggregation, log filtering) otherwise could not attribute
+        // the initial frame while every later one was attributable.
+        const sessionId = this.managed.getEventSessionId?.();
         const projected = projectChannelEvent(channel, {
           type,
           ts: now(),
           agentId: this.managed.id,
           ...(this.managed.parentId !== undefined ? { parentId: this.managed.parentId } : {}),
+          ...(sessionId !== undefined ? { sessionId } : {}),
           payload,
         } as AgentEvent);
         if (projected) deliverInitial(projected);

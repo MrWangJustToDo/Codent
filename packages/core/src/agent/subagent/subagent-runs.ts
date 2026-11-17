@@ -268,9 +268,9 @@ export class SubagentRuns {
     this.phases.clear();
     this.background.clear();
     // Discard the eager seats of the run being left, then end the background ones. Idempotent: the
-    // switch transaction already aborts the run (which discards seats).
-    this.prefork.abortAll();
-    this.prefork.abortDetached();
+    // switch transaction already aborts the run (which discards seats). The serial waiters are
+    // included because they are NOT registered seats: they would otherwise outlive the switch.
+    this.prefork.resetForSessionSwitch();
   }
 
   private notify(finished: readonly string[]): void {

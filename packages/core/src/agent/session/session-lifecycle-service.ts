@@ -144,7 +144,11 @@ export class SessionLifecycleService {
         this.rt.sidecars.getTodoManager()?.reset();
         this.rt.sidecars.getToolCompactCache?.().clear();
       }
-      this.rt.sidecars.streamHub.clearAll();
+      // `clearAll()` advances the hub's generation, which would (a) silence the live preview of a
+      // background command this reload intentionally keeps running and (b) make a kept background
+      // task's settle fail its `isCurrentGeneration` check, dropping its tokens/cost from the
+      // session. A same-session reload keeps the same conversation, so its streams stay valid.
+      if (!options.sameSession) this.rt.sidecars.streamHub.clearAll();
       this.rt.mode.resetTurnContext();
       // Extension render slots describe the conversation, not the agent: a plan board or file tree
       // published for the old transcript must not survive into the new one (and must not be replayed
@@ -166,8 +170,16 @@ export class SessionLifecycleService {
       // preview, but the conversation it belonged to is gone. Destroying them (not just aborting)
       // is what releases the child's UI channel, log sink and tool state; `clearTaskRuns` below then
       // drops the phase records/pre-fork seats that pointed at them.
-      this.rt.sidecars.destroyChildAgents(reason);
-      this.rt.sidecars.clearTaskRuns();
+      //
+      // `sameSession` (a `/resume` onto the id already open, or the bootstrap load of a fresh id)
+      // means the conversation is NOT being left: its runs, spawned subagents and background work
+      // all still describe the session that stays on screen. Destroying them turned a "reload" into
+      // a silent kill of running build jobs, detached tasks and their previews — and a failed
+      // `/resume` was already gentler than a successful reload, which is backwards.
+      if (!options.sameSession) {
+        this.rt.sidecars.destroyChildAgents(reason);
+        this.rt.sidecars.clearTaskRuns();
+      }
       this.rt.sidecars.clearToolBeforeHooks?.();
       this.rt.run.resetRunOutcome?.();
     } finally {
@@ -178,10 +190,12 @@ export class SessionLifecycleService {
       // reported success while the leaving session's jobs and tasks survived into the new
       // transcript. A synchronous throw is converted, not rethrown, so it cannot mask the original.
       this.pendingBackgroundReset = (() => {
+        // Same-session reload: the background rows and their processes belong to the conversation
+        // that stays active, so there is nothing to end. `reset()` would kill them (the command
+        // source destroys processes, the task source aborts detached seats).
+        if (options.sameSession) return Promise.resolve();
         try {
-          return Promise.resolve(
-            this.rt.sidecars.resetBackgroundWork(reason, { sameSession: options.sameSession === true })
-          );
+          return Promise.resolve(this.rt.sidecars.resetBackgroundWork(reason));
         } catch (error) {
           return Promise.reject(error);
         }

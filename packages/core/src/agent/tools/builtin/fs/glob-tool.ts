@@ -34,6 +34,39 @@ import type { GlobOutput } from "../../shared/schemas.js";
 const DEFAULT_LIMIT = OUTPUT_LIMITS.MAX_ARRAY_ITEMS;
 
 /**
+ * Hard cap on brace alternatives for ONE `glob` call.
+ *
+ * The pattern is model-controlled text (or text a fetched page injected into it) and brace
+ * expansion is a cartesian product: `{a..j}{a..j}{a..j}` is 1000 alternatives, and this tool runs
+ * with no approval. Each alternative was a separate `fd`/`git`/`find` process, so an innocent
+ * looking pattern could exhaust the host's processes and file descriptors before `abortSignal` had
+ * anything to abort. 32 covers every real use (`*.{ts,tsx,js}`, `src/{a,b,c}/**`) with room to spare.
+ */
+const MAX_BRACE_PATTERNS = 32;
+
+/** Peak concurrent searches. `fd`/`git`/`find` are processes, not promises. */
+const GLOB_PATTERN_CONCURRENCY = 4;
+
+/** Run at most `limit` searches at a time: the cap above bounds the total, this bounds the peak. */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  run: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const index = cursor++;
+      if (index >= items.length) return;
+      results[index] = await run(items[index]!);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+/**
  * Build `fd` arguments.
  *
  * Returned as an array, never a joined string: the pattern and exclude values are passed
@@ -383,9 +416,24 @@ export const createGlobTool = () => {
         // there. `resolveSearchPath` reads the path only, so the search is the only stoppable step.
         let rawOutput: string;
         try {
-          const patterns = expandBraceGlobs(effectivePattern);
-          const parts = await Promise.all(
-            patterns.map((candidate) => runGlobSearch(coreEnv, candidate, searchPath, searchOptions))
+          // Expand with a HARD cap one above our own: the check must happen while the product is
+          // built, not after it (a 6-group pattern is 64M strings before any length test runs).
+          const expansion = expandBraceGlobs(effectivePattern, MAX_BRACE_PATTERNS + 1);
+          if (expansion.overflowed || expansion.patterns.length > MAX_BRACE_PATTERNS) {
+            // Reject before spawning anything: the failure the cap exists to prevent is the
+            // fan-out itself, so running "the first 32" would still be work the caller did not ask
+            // for and would silently return a partial answer.
+            return {
+              files: [] as string[],
+              content: `Pattern expands to more than ${MAX_BRACE_PATTERNS} brace alternatives (the limit). Narrow the brace groups or run separate glob calls.`,
+              offset: skip,
+              limit: take,
+              cachedOutputPath: null,
+            };
+          }
+          const patterns = expansion.patterns;
+          const parts = await mapWithConcurrency(patterns, GLOB_PATTERN_CONCURRENCY, (candidate) =>
+            runGlobSearch(coreEnv, candidate, searchPath, searchOptions)
           );
           rawOutput = [...new Set(parts.flatMap((part) => part.split("\n").filter(Boolean)))].join("\n");
         } catch (err) {

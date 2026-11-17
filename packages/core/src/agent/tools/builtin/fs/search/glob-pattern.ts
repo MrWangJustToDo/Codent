@@ -11,17 +11,34 @@ import { toPosixPath } from "../../../../../utils/posix-path.js";
 import type { CoreEnv } from "../../../../../env";
 
 /**
+ * Hard ceiling on ONE brace expansion, independent of the caller's own limit.
+ *
+ * Expansion is a cartesian product over model-controlled text, so the cost is paid BEFORE a caller
+ * can inspect the result: `{a..t}` repeated six times is 20^6 strings. `max` bounds the frontier
+ * while it is built (a single group with 100k alternatives is refused by the same check), so a
+ * pathological pattern can never allocate more than ~max entries.
+ */
+const MAX_BRACE_EXPANSIONS = 1024;
+
+export interface BraceExpansion {
+  patterns: string[];
+  /** More alternatives existed than `max` allowed; `patterns` is a prefix, not the whole set. */
+  overflowed: boolean;
+}
+
+/**
  * Expand simple brace groups in a glob (`*.{ts,tsx}` → `*.ts`, `*.tsx`).
  *
  * Neither `fd --glob`, `find -path`, `grep --include`, nor `rg --glob` performs
  * brace expansion itself, so callers must do it before handing a pattern to the
  * command. Nested groups are resolved iteratively; malformed/unclosed braces stay literal.
  */
-export function expandBraceGlobs(pattern: string): string[] {
+export function expandBraceGlobs(pattern: string, max: number = MAX_BRACE_EXPANSIONS): BraceExpansion {
   const groupRe = /\{([^{}]+)\}/;
   const pending = [pattern];
   const expanded: string[] = [];
   while (pending.length > 0) {
+    if (pending.length + expanded.length > max) return { patterns: expanded, overflowed: true };
     const current = pending.shift()!;
     const match = groupRe.exec(current);
     if (!match) {
@@ -30,12 +47,16 @@ export function expandBraceGlobs(pattern: string): string[] {
     }
     const full = match[0];
     const alternatives = match[1].split(",");
+    // Check the group BEFORE materializing it: one group is itself unbounded.
+    if (pending.length + expanded.length + alternatives.length > max) {
+      return { patterns: expanded, overflowed: true };
+    }
     const index = current.indexOf(full);
     for (const alt of alternatives) {
       pending.push(current.slice(0, index) + alt + current.slice(index + full.length));
     }
   }
-  return expanded;
+  return { patterns: expanded, overflowed: false };
 }
 
 /**

@@ -12,6 +12,7 @@
  * - valid `input-complete` tools waiting for a normal tool-phase pump
  */
 
+import { TOOL_CANCELLED_MESSAGE } from "../../runtime-types/abort.js";
 import { TRUNCATED_TOOL_CALL_MESSAGE } from "../../runtime-types/tool-truncation.js";
 import { tryParseToolArguments } from "../../utils/parse-tool-arguments.js";
 import { BUILTIN_TOOL_NAMES } from "../tools/catalog/tool-names.js";
@@ -19,8 +20,6 @@ import { BUILTIN_TOOL_NAMES } from "../tools/catalog/tool-names.js";
 import { isSettledToolCallPart, isToolCallPart } from "./message-parts.js";
 
 import type { ToolCallPart, ToolResultPart, UIMessage } from "@tanstack/ai";
-
-export const TOOL_CANCELLED_MESSAGE = "Cancelled by user.";
 
 /**
  * Why an approval was denied when the run ended for a reason the user did not choose.

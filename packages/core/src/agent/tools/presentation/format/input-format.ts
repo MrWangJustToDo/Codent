@@ -201,11 +201,9 @@ export function formatToolInput(
       case BUILTIN_TOOL_NAMES.todo:
         formatted = formatTodoInput(obj);
         break;
-      case "web_search":
       case BUILTIN_TOOL_NAMES.websearch:
         formatted = formatWebSearchInput(obj);
         break;
-      case "web_fetch":
       case BUILTIN_TOOL_NAMES.webfetch:
         formatted = formatWebFetchInput(obj);
         break;

@@ -222,6 +222,12 @@ export function shouldCache(content: string): boolean {
 /**
  * Cache content if it exceeds the threshold, returning either the original
  * content or a preview with cache path. Also returns the cache path if cached.
+ *
+ * ⚠️ `content` is written to disk VERBATIM. Pass the untruncated text: a caller that cuts first
+ * (`truncateToolOutput`) hands the model a preview whose "Full output saved to …" points at a file
+ * that stops at the same place. When the caller's own text is already a bounded view (a cancelled
+ * command's accumulator tail), say so with `truncated: true` so the note stops promising a full
+ * copy; when only a page is written (grep/glob/session-read), pass `pageOnly: true`.
  */
 export async function maybeCacheOutput(
   env: ResolvedCoreEnv,

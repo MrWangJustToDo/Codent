@@ -4,6 +4,7 @@
    moving one out would separate a decision from the loop that enforces it. The refusal gate and
    the queue drain helpers are the next extracted unit; the `SendMessageOutcome` contract added here
    is what pushed the file over the ceiling. */
+import { TOOL_CANCELLED_MESSAGE } from "../../runtime-types/abort.js";
 import { isParkedStatus, isTerminalStatus } from "../../runtime-types/agent-status.js";
 import { toError } from "../../utils/errors.js";
 import { ApprovalDecisionCoordinator } from "../approval/approval-decision-coordinator.js";
@@ -16,7 +17,6 @@ import { stripEmptyAssistantShells } from "../stream/empty-assistant-shell.js";
 import { extractAssistantText } from "../stream/extract-assistant-text.js";
 import {
   TOOL_APPROVAL_ABANDONED_MESSAGE,
-  TOOL_CANCELLED_MESSAGE,
   TOOL_RUN_ENDED_MESSAGE,
   describeToolCallBatch,
   settleChatToolCalls,

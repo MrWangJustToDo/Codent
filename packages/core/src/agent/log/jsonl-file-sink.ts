@@ -369,6 +369,9 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
         reportPersistError({ stage: "write", error: "live buffer cap reached", dropped });
       }
     } catch (error) {
+      // The documented contract: an unserializable entry is DROPPED, never written as a placeholder
+      // (a reader could not tell a placeholder from real data). `redactLogValue` deliberately returns
+      // a true cycle as-is so this branch is reachable rather than masking the object shape.
       reportEntryError(
         `[agent] log entry is not serializable (${entry.level}/${entry.category}): ${errorMessage(error)}`,
         { stage: "serialize", error: errorMessage(error), dropped: 0 }
