@@ -230,6 +230,7 @@
     "validate:websearch-providers": "pnpm run build && node scripts/validate-websearch-providers.mjs",
     "validate:websearch-tool-config": "pnpm run build && node scripts/validate-websearch-tool-config.mjs",
     "validate:media-store": "pnpm run build && node scripts/validate-media-store.mjs",
+    "validate:tool-result-media-shapes": "pnpm run build && node scripts/validate-tool-result-media-shapes.mjs",
     "validate:session-persist-media-failure": "pnpm run build && node scripts/validate-session-persist-media-failure.mjs",
     "validate:session-persist-integrity": "pnpm run build && node scripts/validate-session-persist-integrity.mjs",
     "validate:session-persistence": "pnpm run build && node scripts/validate-session-persistence.mjs",

@@ -13,20 +13,30 @@
  * 2. **Both source types** — `source.type: "url"` (data URL prefix) and
  *    `source.type: "data"` (raw base64) are handled.
  * 3. **Scope** — ImagePart/AudioPart/VideoPart/DocumentPart `source.value`, plus
- *    binary parts nested inside stringified tool results (`tool-result.content`
- *    is the JSON text of a `ContentPart[]` — see "Stringified tool results").
+ *    binary parts nested inside a tool result (`tool-result.content`) or a tool
+ *    call's structured output (`tool-call.output`) — see "Nested tool media".
  * 4. **Inline runtime values** — parts without `metadata.mediaRef` that still
  *    carry a data URL / raw base64 (or `media://` path) are left or resolved
  *    as appropriate; dehydrated sessions always carry `mediaRef`.
  *
- * ## Stringified tool results
+ * ## Nested tool media
  *
- * TanStack's `normalize-stream-chunk` turns `TOOL_CALL_END.result` into
- * `TOOL_CALL_RESULT.content` with `JSON.stringify` whenever the result is an
- * array, so a multimodal tool result is persisted as the JSON text of a
- * `ContentPart[]` (base64 inline) — a plain string, invisible to the part-scoped
- * walk above. Rewriting those nested `source.value`s too keeps the base64 out of
- * the session file (a single screenshot is ~100 KB, a read_file image >1 MB).
+ * A multimodal tool result reaches the message channel in two shapes and both
+ * must be walked:
+ *
+ * - **ContentPart[] (current)** — TanStack ≥ 1.0.1 `StreamProcessor` re-parses
+ *   the stringified `TOOL_CALL_RESULT` and keeps the array on
+ *   `tool-result.content`, which is also the same parts the `tool-call` carries in
+ *   `output`. A tool result is `string | Array<ContentPart>`, so an array is not a
+ *   text result with media in it — it is the media.
+ * - **JSON text (legacy)** — `normalize-stream-chunk` stringifies an array
+ *   `TOOL_CALL_END.result` into `TOOL_CALL_RESULT.content`, so a session written
+ *   before the processor kept the array holds the JSON text of a `ContentPart[]`.
+ *
+ * Walking only the text form is what left every MCP screenshot inline — and twice
+ * over, because the call's `output` carries the same parts. Rewriting the nested
+ * `source.value`s keeps the base64 out of the session file (a single screenshot is
+ * ~100 KB, a read_file image >1 MB).
  */
 
 import { isBase64Source, parseDataUrl } from "../../utils/data-url.js";
@@ -47,7 +57,7 @@ import {
   parseMediaRefPath,
 } from "./types.js";
 
-import type { MediaRef } from "./types.js";
+import type { BinaryMediaPartType, MediaRef } from "./types.js";
 import type { ResolvedCoreEnv } from "../../env";
 import type { AudioPart, DocumentPart, ImagePart, UIMessage, VideoPart } from "@tanstack/ai";
 
@@ -81,7 +91,7 @@ function ensureMetadata(part: BinaryMediaPart): SessionMediaMetadata {
 }
 
 // ============================================================================
-// Stringified tool results (tool-result.content)
+// Nested tool media (tool-result.content / tool-call.output)
 // ============================================================================
 
 interface NestedMediaPart {
@@ -92,25 +102,75 @@ interface NestedMediaPart {
 }
 
 /**
- * Parts of `tool-result.content` when it is the JSON text of a `ContentPart[]`.
- * Returns `null` for plain-text results so callers can leave them untouched.
+ * A container of content parts, in whichever shape it was stored.
+ *
+ * `stringify` remembers the shape so a rewrite round-trips it: a legacy session keeps its JSON text,
+ * a current session keeps its array.
  */
-function parseToolResultParts(content: unknown): NestedMediaPart[] | null {
-  if (typeof content !== "string") return null;
-  return parseStringifiedMultimodalContent(content) as NestedMediaPart[] | null;
+interface NestedContent {
+  parts: NestedMediaPart[];
+  stringify: boolean;
 }
 
-/** Rewrite one nested binary part, returning whether anything changed. */
+/**
+ * Nested parts of a tool result / tool-call output, or `null` for a plain-text result.
+ *
+ * Array elements are not shape-checked here: {@link mapNestedMediaPart} only rewrites a part that
+ * is a binary media type carrying a base64 / `media://` value, so an unrelated array passes through.
+ * Deliberately not gated on `isContentPartArray` either — a strict gate would skip a near-miss shape
+ * (a part missing `source.mimeType`, an extra field) and re-open the leak this walk exists to close,
+ * whereas the narrow per-part test above can only rewrite something that IS inline media. The cost
+ * is that a tool returning its own record array with `{type:"document", source:{value:<base64>}}`
+ * gets that value replaced by a ref in the **persisted** copy only; hydrate restores it on load.
+ */
+function nestedContentOf(content: unknown): NestedContent | null {
+  if (Array.isArray(content)) return { parts: content as NestedMediaPart[], stringify: false };
+  if (typeof content !== "string") return null;
+  const parts = parseStringifiedMultimodalContent(content) as NestedMediaPart[] | null;
+  return parts ? { parts, stringify: true } : null;
+}
+
+/**
+ * Rewrite a nested container's binary parts, returning the value in its original shape.
+ *
+ * Copy-on-write at the **container** level only: when no part changed, `content` is returned as-is,
+ * so a caller can compare references to treat the whole walk as a no-op. When something did change,
+ * the array that comes back is the same array the walk mutated — parts are rewritten in place, which
+ * is what keeps a part's position (and the JSON shape of a persisted message) stable.
+ */
+async function rewriteNestedContent(
+  content: unknown,
+  rewrite: (parts: NestedMediaPart[]) => Promise<boolean>
+): Promise<unknown> {
+  const nested = nestedContentOf(content);
+  if (!nested) return content;
+  const changed = await rewrite(nested.parts);
+  if (!changed) return content;
+  return nested.stringify ? JSON.stringify(nested.parts) : nested.parts;
+}
+
+/**
+ * Rewrite one nested binary part, returning whether anything changed.
+ *
+ * `partType` is passed to the rewriter instead of being re-read there: `mapNestedMediaPart` has
+ * already narrowed it to a binary media type, and a `?? "image"` fallback downstream was dead code
+ * that also lied about which type was being stored.
+ */
 async function mapNestedMediaPart(
   part: NestedMediaPart,
-  rewrite: (source: NonNullable<NestedMediaPart["source"]>, metadata: Record<string, unknown>) => Promise<boolean>
+  rewrite: (
+    partType: BinaryMediaPartType,
+    source: NonNullable<NestedMediaPart["source"]>,
+    metadata: Record<string, unknown>
+  ) => Promise<boolean>
 ): Promise<boolean> {
   if (typeof part.type !== "string" || !isBinaryMediaPartType(part.type)) return false;
+  const partType = part.type;
   const source = part.source;
   if (!source || typeof source.value !== "string" || source.value.length === 0) return false;
 
   const metadata = part.metadata != null && typeof part.metadata === "object" ? part.metadata : {};
-  const changed = await rewrite(source, metadata);
+  const changed = await rewrite(partType, source, metadata);
   if (changed) {
     // Keep the JSON shape stable across dehydrate/hydrate: drop the container
     // again when the rewrite removed the last key (hydrate clears mediaRef).
@@ -118,6 +178,30 @@ async function mapNestedMediaPart(
     else delete part.metadata;
   }
   return changed;
+}
+
+/**
+ * The `mediaRef` metadata dehydrate wrote on a nested part, or `undefined`.
+ *
+ * Hydrate needs it for the media store's **file extension**, which is derived from the MIME type:
+ * a part with no `source.mimeType` (a `url` source may omit it) saved as `<hash>.bin` for an
+ * unmapped type — `image/avif`, `video/quicktime` — and hydrate would otherwise re-derive the MIME
+ * from the ref's own extension, get `undefined`, fall back to the part type's default
+ * (`image/png`) and look for a file that was never written. Reported as `not-found`, the image
+ * would be substituted with a "media unavailable" placeholder on the wire.
+ */
+function storedMediaRefOf(metadata: Record<string, unknown>): MediaRef | undefined {
+  const candidate = metadata.mediaRef;
+  if (!isPlainRecord(candidate)) return undefined;
+  const { hash, mimeType, filename, size, sourceType } = candidate;
+  if (typeof hash !== "string" || typeof mimeType !== "string") return undefined;
+  return {
+    hash,
+    mimeType,
+    filename: typeof filename === "string" ? filename : undefined,
+    size: typeof size === "number" ? size : 0,
+    sourceType: sourceType === "data" ? "data" : "url",
+  };
 }
 
 /**
@@ -159,6 +243,10 @@ function mimeForToolCallOutput(output: ToolCallOutputRecord): string {
 }
 
 async function dehydrateToolCallOutput(output: unknown, store: MediaStore): Promise<unknown> {
+  // MCP results (and any tool that returns `ContentPart[]`) keep the parts on the call's output —
+  // the same array the tool result carries. Walking only the record shapes below left a second
+  // copy of every inline screenshot in the session file.
+  if (Array.isArray(output)) return dehydrateNestedMedia(output, store);
   if (!isToolCallOutputRecord(output)) return output;
 
   // `read_file` image / PDF: raw base64 in `base64`. Shape-check the media type too — a generic
@@ -206,7 +294,18 @@ async function hydrateToolCallOutput(
   store: MediaStore,
   onMissing?: (miss: MediaHydrationMiss) => void
 ): Promise<unknown> {
-  if (!isToolCallOutputRecord(output) || !output.mediaRef) return output;
+  if (Array.isArray(output)) return hydrateNestedMedia(output, store, onMissing, "tool-call");
+  if (!isToolCallOutputRecord(output)) return output;
+  if (!output.mediaRef) {
+    // A `media://` value with no ref beside it cannot be resolved — the hash does not name the file's
+    // extension — and leaving it unreported means the wire keeps an unfetchable value, because the
+    // miss counter is what arms the substitution. Same class as an `invalid-ref` below.
+    const orphan = [output.base64, output.content].find(
+      (value): value is string => typeof value === "string" && isMediaRefValue(value)
+    );
+    if (orphan) onMissing?.({ ref: orphan, reason: "not-found", path: "tool-call" });
+    return output;
+  }
   if (!isMediaHash(output.mediaRef.hash)) {
     // A malformed ref must be REPORTED, not silently left as `media://bad`: the miss counter drives
     // the wire-recovery substitution, and without it the provider receives an unfetchable value on
@@ -240,80 +339,80 @@ async function hydrateToolCallOutput(
 }
 
 /**
- * Dehydrate binary parts nested in a stringified tool result. Leaves the field as
- * a string (the wire path revives it via `toModelOutput`), only shrinking the
- * embedded `source.value`s to `media://` references.
+ * Dehydrate the binary parts nested in a tool result's `content` or a tool call's `output`.
+ *
+ * The container keeps its shape: a `ContentPart[]` stays an array (which the model wire accepts
+ * directly), a legacy JSON-text result stays a string.
  */
-async function dehydrateToolResultContent(content: unknown, store: MediaStore): Promise<string> {
-  const parts = parseToolResultParts(content);
-  if (!parts) return content as string;
+async function dehydrateNestedMedia(content: unknown, store: MediaStore): Promise<unknown> {
+  return rewriteNestedContent(content, async (parts) => {
+    let changed = false;
+    for (const part of parts) {
+      const didChange = await mapNestedMediaPart(part, async (partType, source, metadata) => {
+        const value = source.value as string;
+        if (!isBase64Source(value)) return false;
 
-  let changed = false;
-  for (const part of parts) {
-    const partType = part.type ?? "image";
-    const didChange = await mapNestedMediaPart(part, async (source, metadata) => {
-      const value = source.value as string;
-      if (!isBase64Source(value)) return false;
+        const mimeType = source.mimeType ?? guessMimeType(value, partType);
+        const filename = typeof metadata.filename === "string" ? metadata.filename : undefined;
+        const ref = await store.save(value, mimeType, filename, source.type === "data" ? "data" : "url");
 
-      const mimeType = source.mimeType ?? guessMimeType(value, partType);
-      const filename = typeof metadata.filename === "string" ? metadata.filename : undefined;
-      const ref = await store.save(value, mimeType, filename, source.type === "data" ? "data" : "url");
-
-      source.value = buildMediaRefPath(ref);
-      metadata.mediaRef = {
-        hash: ref.hash,
-        mimeType: ref.mimeType,
-        filename: ref.filename,
-        size: ref.size,
-        sourceType: ref.sourceType,
-      };
-      return true;
-    });
-    changed = changed || didChange;
-  }
-
-  return changed ? JSON.stringify(parts) : (content as string);
+        source.value = buildMediaRefPath(ref);
+        metadata.mediaRef = {
+          hash: ref.hash,
+          mimeType: ref.mimeType,
+          filename: ref.filename,
+          size: ref.size,
+          sourceType: ref.sourceType,
+        };
+        return true;
+      });
+      changed = changed || didChange;
+    }
+    return changed;
+  });
 }
 
-/** Reverse of {@link dehydrateToolResultContent}: restore nested `source.value`s. */
-async function hydrateToolResultContent(
+/** Reverse of {@link dehydrateNestedMedia}: restore nested `source.value`s. */
+async function hydrateNestedMedia(
   content: unknown,
   store: MediaStore,
-  onMissing?: (miss: MediaHydrationMiss) => void
-): Promise<string> {
-  const parts = parseToolResultParts(content);
-  if (!parts) return content as string;
+  onMissing: ((miss: MediaHydrationMiss) => void) | undefined,
+  path: MediaMissPath
+): Promise<unknown> {
+  return rewriteNestedContent(content, async (parts) => {
+    let changed = false;
+    for (const part of parts) {
+      const didChange = await mapNestedMediaPart(part, async (partType, source, metadata) => {
+        const value = source.value as string;
+        if (!isMediaRefValue(value)) return false;
 
-  let changed = false;
-  for (const part of parts) {
-    const partType = part.type ?? "image";
-    const didChange = await mapNestedMediaPart(part, async (source, metadata) => {
-      const value = source.value as string;
-      if (!isMediaRefValue(value)) return false;
+        // The ref's own MIME is the load-side truth: it is what dehydrate used to name the file,
+        // and re-deriving it from `source.mimeType` (which a `url` source may not carry) can name a
+        // different extension than the one that was written. See `storedMediaRefOf`.
+        const mimeType =
+          storedMediaRefOf(metadata)?.mimeType ?? source.mimeType ?? guessMimeTypeFromRef(value, partType);
+        const filename = typeof metadata.filename === "string" ? metadata.filename : undefined;
+        const sourceType = source.type === "data" ? "data" : "url";
+        const parsed = parseMediaRefPath(value);
+        if (!parsed) {
+          onMissing?.({ ref: value, reason: "invalid-ref", path });
+          return false;
+        }
 
-      const mimeType = source.mimeType ?? guessMimeTypeFromRef(value, partType);
-      const filename = typeof metadata.filename === "string" ? metadata.filename : undefined;
-      const sourceType = source.type === "data" ? "data" : "url";
-      const parsed = parseMediaRefPath(value);
-      if (!parsed) {
-        onMissing?.({ ref: value, reason: "invalid-ref", path: "tool-result" });
-        return false;
-      }
+        const loaded = await store.tryLoad({ hash: parsed.hash, mimeType, filename, size: 0, sourceType });
+        if (!loaded) {
+          onMissing?.({ ref: value, reason: "not-found", path });
+          return false;
+        }
 
-      const loaded = await store.tryLoad({ hash: parsed.hash, mimeType, filename, size: 0, sourceType });
-      if (!loaded) {
-        onMissing?.({ ref: value, reason: "not-found", path: "tool-result" });
-        return false;
-      }
-
-      source.value = loaded;
-      delete metadata.mediaRef;
-      return true;
-    });
-    changed = changed || didChange;
-  }
-
-  return changed ? JSON.stringify(parts) : (content as string);
+        source.value = loaded;
+        delete metadata.mediaRef;
+        return true;
+      });
+      changed = changed || didChange;
+    }
+    return changed;
+  });
 }
 
 // ============================================================================
@@ -351,7 +450,7 @@ export async function dehydrateUIMessages(
   for (const message of cloned) {
     for (const part of message.parts) {
       if (part.type === "tool-result") {
-        part.content = await dehydrateToolResultContent(part.content, store);
+        part.content = (await dehydrateNestedMedia(part.content, store)) as typeof part.content;
         continue;
       }
 
@@ -447,7 +546,7 @@ export async function hydrateUIMessages(
     }
     for (const part of message.parts) {
       if (part.type === "tool-result") {
-        part.content = await hydrateToolResultContent(part.content, store, onMissing);
+        part.content = (await hydrateNestedMedia(part.content, store, onMissing, "tool-result")) as typeof part.content;
         continue;
       }
 
