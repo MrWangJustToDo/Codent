@@ -306,25 +306,32 @@ const zeroObserved = deriveSubagentRunStats({
 assert.equal(zeroObserved.iterations, 2, "an idle iteration state falls back to the derived count");
 
 // ============================================================================
-// The engine's loopStopped verdict is authoritative over the finishReason heuristic
+// The engine's loopStopped verdict overrides the finishReason heuristic
 //
 // `tool_calls` alone cannot distinguish "the step budget refused another model call" from
-// "the run paused on an approval/client tool / a custom stream ended". `@tanstack/ai` >= 1.3
-// puts the engine's own verdict on the terminal chunk; when it is present it decides, and
-// the old heuristic applies only when the chunk carries no verdict.
+// "the run paused on an approval/client tool". `@tanstack/ai` >= 1.3 puts the engine's own
+// verdict on the terminal chunk, but it only ever stamps `true` (the loop stopped early); a
+// pause is an ordinary engine outcome and carries NO field. So:
+//   - `true`   → a real cutoff, even on a narration finish (`stop`) the heuristic misses;
+//   - absent   → the pre-1.3 heuristic, which stays best-effort (a pause still reads as a cutoff);
+//   - `false`  → honoured defensively for a replayed/foreign chunk; this SDK does not emit it.
 // ============================================================================
 
 {
+  // What a pause actually looks like from the provider: no verdict at all.
   const paused = deriveSubagentRunStats({
     messages: cutOffMessages,
     maxIterations: 50,
     finishReason: "tool_calls",
-    loopStopped: false,
     output: "Exploring.",
     aborted: false,
     status: "completed",
   });
-  assert.equal(paused.reachedLimit, false, "loopStopped:false overrides the tool_calls heuristic");
+  assert.equal(
+    paused.reachedLimit,
+    true,
+    "an absent verdict keeps the tool_calls heuristic — a known over-report when the run merely paused"
+  );
   assert.equal(paused.incomplete, true, "…and the missing begin_summary still makes it incomplete");
 
   const stopped = deriveSubagentRunStats({
@@ -348,6 +355,19 @@ assert.equal(zeroObserved.iterations, 2, "an idle iteration state falls back to 
     aborted: true,
   });
   assert.equal(cancelled.reachedLimit, false, "a cancel outranks the loop verdict");
+
+  // Defensive tolerance: a chunk that DOES supply `false` means the engine would have continued.
+  const resumed = deriveSubagentRunStats({
+    messages: cutOffMessages,
+    maxIterations: 50,
+    finishReason: "tool_calls",
+    loopStopped: false,
+    output: "Exploring.",
+    aborted: false,
+    status: "completed",
+  });
+  assert.equal(resumed.reachedLimit, false, "a supplied false verdict overrides the tool_calls heuristic");
+  assert.equal(resumed.incomplete, true, "…and the missing begin_summary still makes it incomplete");
 }
 
 // The terminal chunk's metadata is what feeds the verdict: capture must tolerate an absent
@@ -367,7 +387,7 @@ assert.equal(zeroObserved.iterations, 2, "an idle iteration state falls back to 
   await drain(
     captureStreamFinishReason(
       chunkStream([
-        { type: "RUN_FINISHED", finishReason: "tool_calls", metadata: { tanstack: { loopStopped: false } } },
+        { type: "RUN_FINISHED", finishReason: "tool_calls" },
         { type: "RUN_FINISHED", finishReason: "tool_calls", metadata: { tanstack: { loopStopped: true } } },
       ]),
       (info) => {

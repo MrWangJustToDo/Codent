@@ -28,9 +28,12 @@ export interface DeriveSubagentRunStatsInput {
    * The engine's own verdict that the agent loop stopped before the model finished
    * (`RUN_FINISHED.metadata.tanstack.loopStopped`, `@tanstack/ai` >= 1.3).
    *
-   * Authoritative when supplied: `true` is a real step-budget/policy cutoff, `false` is a
-   * run the engine would have continued. `undefined` (an older SDK, or a run with no
-   * `RUN_FINISHED`) keeps the pre-1.3 heuristic below.
+   * `@tanstack/ai@1.4.0` only ever stamps `true` (`withTanstackMetadata(..., { loopStopped: true })`)
+   * and it does so only when the engine itself refused another model call. A normal finish — and an
+   * approval / client-tool pause, which the engine treats as an ordinary outcome — carries NO field,
+   * so `undefined` is the common case and keeps the pre-1.3 heuristic below (a known best-effort
+   * over-report: `tool_calls` alone cannot separate that pause from a cutoff). `false` is honoured
+   * defensively if a replayed or future chunk shape supplies it; this SDK does not emit it.
    */
   loopStopped?: boolean;
   output: string;
@@ -127,7 +130,8 @@ export interface StreamFinishInfo {
  *
  * It rides `metadata.tanstack.loopStopped` on the terminal `RUN_FINISHED` (`@tanstack/ai` >= 1.3).
  * Read defensively: an older chunk shape has no metadata, and "absent" must stay distinct from
- * `false` so the caller can fall back to the pre-1.3 heuristic.
+ * `false` so the caller can fall back to the pre-1.3 heuristic. Note the emitting side only stamps
+ * `true`, so the distinction is a tolerance for foreign chunks, not a value this SDK produces.
  */
 function readLoopStopped(chunk: StreamChunk): boolean | undefined {
   const metadata = (chunk as { metadata?: { tanstack?: { loopStopped?: unknown } } }).metadata;
@@ -176,10 +180,15 @@ export function deriveSubagentRunStats(
   // gates downstream already read it that way (`incomplete` is only evaluated when NOT aborted,
   // which is why the fallback never fired for these); this is the same rule in the flag itself.
   //
-  // The engine's own `loopStopped` is authoritative when present: it is exactly "the strategy or
-  // `onShouldContinue` refused another model call while tool results waited". `false` therefore
-  // means a `tool_calls` finish was a pause/interrupt, NOT the step budget — the pre-1.3 heuristic
-  // below cannot tell those apart. `undefined` keeps that heuristic for old chunks and callers.
+  // The engine's own `loopStopped` decides when a chunk supplies it: `true` is exactly "the strategy
+  // or `onShouldContinue` refused another model call while tool results waited". That is the one
+  // thing this SDK actually emits (`@tanstack/ai@1.4.0` never stamps `false`), and it is what makes
+  // a cutoff that ended on a narration step (`finishReason: "stop"`) visible.
+  //
+  // Everything else — a normal finish, an approval/client-tool pause — leaves the field absent, which
+  // keeps the heuristic below. That heuristic is best-effort, not a fix for the pause case: a
+  // `tool_calls` finish with no verdict still reads as a cutoff. `false` is honoured if it ever
+  // arrives, but it is not a shape this SDK produces.
   //
   // This comparison is `iterationCount >= max` in the engine's own units
   // (`maxIterations(max) => ({iterationCount}) => iterationCount < max`), which is

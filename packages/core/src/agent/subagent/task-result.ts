@@ -39,7 +39,10 @@ export interface FinalizeSubagentTaskInput {
   failed: boolean;
   errorMessage?: string;
   finishReason: string | null;
-  /** Authoritative step-budget verdict from the terminal chunk (`@tanstack/ai` >= 1.3). */
+  /**
+   * Step-budget verdict from the terminal chunk (`@tanstack/ai` >= 1.3 stamps this only as `true`;
+   * absence means the engine reported no early stop).
+   */
   loopStopped?: boolean;
   maxIterations: number;
   maxOutputLength?: number;

@@ -235,7 +235,7 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
     let failed = false;
     let errorMessage: string | undefined;
     let finishReason: string | null = null;
-    /** The engine's own step-budget/policy verdict (`RUN_FINISHED.metadata.tanstack.loopStopped`). */
+    /** Engine verdict: `true` when it refused another model call; absent otherwise. */
     let loopStopped: boolean | undefined;
     let previewMessages: UIMessage[] = [];
 
