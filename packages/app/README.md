@@ -74,12 +74,39 @@ if (typeof process === "undefined" || !process.stdout?.isTTY) return;
 
 `enableWheelAsArrows()` is the worked example: an unguarded `process.stdout.isTTY` threw a `ReferenceError` out of the workspace panel's mount effect, so the web app never rendered. `test/alternate-screen.test.mjs` pins both shapes by standing in a `process` (absent / no stdout / TTY / non-TTY) around the real helper — Node's own `process` always exists, so a copy of the condition would prove nothing.
 
+## Themes
+
+Two palettes — `theme/colors-gemini.ts` (default) and `theme/colors-claude.ts` — export the same `COLORS` / `BG` / `GRADIENT` symbols. `/settings theme` (or `useTheme`'s `setTheme` / `toggle`) calls `applyColorPalette`, which `Object.assign`s the values **onto** the shared objects exported by `theme/colors.ts`, then rebuilds the markdown theme. Call sites keep importing `{ COLORS, BG }` from `theme/colors.js`, never a palette file directly.
+
+That in-place mutation is the whole seam, so **palette values must be read at render time**:
+
+```tsx
+// ✓ resolved per render — a theme switch repaints it
+const statusColor = (status: TodoStatus) =>
+  status === "completed" ? COLORS.success : status === "in_progress" ? COLORS.primary : COLORS.muted;
+
+// ✗ captures the palette that was active at import — /settings theme can never repaint it
+const STATUS_COLORS = { pending: COLORS.muted, in_progress: COLORS.warning, completed: COLORS.success };
+```
+
+The second shape is how the `todo` tool kept rendering gemini colors in a claude session. Because `Object.assign` only overwrites the keys a palette actually has, both palettes must also declare the same keys — a key present in one alone silently keeps the previous theme's value.
+
+Guards (`pnpm --filter @codent/app run validate:theme-palettes`, plus `test/theme-palettes.test.mjs`):
+
+| Assertion | Why |
+|-----------|-----|
+| key parity across palettes | `Object.assign` staleness |
+| contrast floors — 4.5:1 for every `COLORS` value on the base background and on `BG.toolResult`, 4.5:1 for `text` / `accent` / `muted` on `BG.message`, 8:1 for `text` there, 1.15:1 for strokes and 1.10:1 for fills | a hex is otherwise reviewed only by "looks fine in my terminal" |
+| no module-scope palette capture outside `src/theme/` | the render-time rule above |
+| `setTheme` repaints real consumers, and switching back restores the first palette exactly | proves the seam works and leaves nothing stale |
+
 ## Validate
 
 ```bash
 pnpm --filter @codent/app run validate:core-imports
 pnpm --filter @codent/app run validate:presentation-helpers
 pnpm --filter @codent/app run validate:session-only-smoke
+pnpm --filter @codent/app run validate:theme-palettes
 pnpm --filter @codent/app test
 ```
 

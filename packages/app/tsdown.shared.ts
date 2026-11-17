@@ -155,4 +155,8 @@ export const ENTRIES = [
   // frames), so they are asserted directly instead of through a copy of their conditions.
   "src/utils/alternate-screen.ts",
   "src/utils/wheel-settle.ts",
+  // Emitted for `test/theme-palettes.test.mjs`: the theme store is what applies a palette, so a
+  // switch is asserted through `setTheme` rather than by calling `applyColorPalette` directly —
+  // the point of the test is that consumers repaint, which needs the real store.
+  "src/hooks/use-theme.ts",
 ];
