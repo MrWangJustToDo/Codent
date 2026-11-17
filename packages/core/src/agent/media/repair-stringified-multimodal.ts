@@ -18,53 +18,35 @@
  * legacy session stores are migrated.
  */
 
-import { isRecord } from "../../utils/is-record.js";
+import { parseStringifiedContentParts, isContentPartLike } from "../../utils/stringified-content-parts.js";
 
 import { isBinaryMediaPartType } from "./types.js";
 
+import type { ParsedContentPart } from "../../utils/stringified-content-parts.js";
 import type { StreamChunk, UIMessage } from "@tanstack/ai";
 
-type LoosePart = {
-  type?: string;
-  content?: unknown;
-  text?: unknown;
-  source?: unknown;
-  metadata?: unknown;
-};
+/** Loose parts: `JSON.parse` output, before the media walk decides what it can rewrite. */
+type LoosePart = ParsedContentPart;
 
 /** True when a JSON value looks like TanStack ContentPart[] with multimodal parts. */
 export function isStringifiedMultimodalContentParts(value: unknown): value is LoosePart[] {
   if (!Array.isArray(value) || value.length === 0) return false;
-  let sawMultimodal = false;
-  for (const part of value) {
-    if (!isRecord(part) || typeof part.type !== "string") return false;
-    if (part.type === "text") {
-      if (typeof part.content !== "string" && typeof part.text !== "string") return false;
-      continue;
-    }
-    if (isBinaryMediaPartType(part.type)) {
-      if (!isRecord(part.source)) return false;
-      sawMultimodal = true;
-      continue;
-    }
-    return false;
-  }
-  return sawMultimodal;
+  // Same per-part rule as the shared recogniser (`utils/stringified-content-parts.ts`), plus the
+  // media requirement this path adds: an array without binary parts is not worth rewriting here.
+  if (!value.every(isContentPartLike)) return false;
+  return value.some((part) => isBinaryMediaPartType(part.type));
 }
 
 /**
  * Parse a text blob that is JSON.stringify(ContentPart[]) from an interrupt snapshot.
+ *
+ * The mechanical parse is the shared `parseStringifiedContentParts` (also used by the MCP coerce and
+ * the Chat Completions lift, which apply their own — stricter — shape check); this wrapper adds the
+ * loose "contains media" requirement above.
  */
 export function parseStringifiedMultimodalContent(content: string): LoosePart[] | null {
-  const trimmed = content.trim();
-  if (!trimmed.startsWith("[{")) return null;
-  try {
-    const parsed: unknown = JSON.parse(trimmed);
-    if (!isStringifiedMultimodalContentParts(parsed)) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
+  const parsed = parseStringifiedContentParts(content);
+  return isStringifiedMultimodalContentParts(parsed) ? parsed : null;
 }
 
 /** Convert TanStack text parts (`content`) to AG-UI user content (`text`). */

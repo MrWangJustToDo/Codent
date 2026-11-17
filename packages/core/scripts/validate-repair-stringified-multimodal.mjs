@@ -29,6 +29,12 @@ const multimodalParts = [
 function testParse() {
   assert.equal(parseStringifiedMultimodalContent("hello"), null);
   assert.equal(parseStringifiedMultimodalContent('[{"type":"text","content":"only"}]'), null);
+  // Loose, but not shapeless: a text part whose payload is not a string, and a binary part with no
+  // `source` object, are not parts — admitting them would have the repair rewrite a message whose
+  // "text" is a number and drop an image it cannot classify.
+  assert.equal(parseStringifiedMultimodalContent('[{"type":"text","content":123},{"type":"image","source":{}}]'), null);
+  assert.equal(parseStringifiedMultimodalContent('[{"type":"text","content":"x"},{"type":"image"}]'), null);
+  assert.equal(parseStringifiedMultimodalContent('{"type":"text","content":"x"}'), null, "an object is not an array");
   assert.ok(isStringifiedMultimodalContentParts(multimodalParts));
   const parsed = parseStringifiedMultimodalContent(JSON.stringify(multimodalParts));
   assert.ok(parsed);

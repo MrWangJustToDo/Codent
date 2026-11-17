@@ -78,7 +78,7 @@ assert.equal(withDoc.length, 1);
 assert.equal(withDoc[0].role, "tool");
 assert.equal(withDoc[0].content, "PDF read: x.pdf\n\nHello from PDF");
 assert.ok(!String(withDoc[0].content).includes("pdfbytes"));
-assert.ok(!String(withDoc[0].content).includes("Omitted non-image"));
+assert.ok(!String(withDoc[0].content).includes("Omitted media"));
 
 // Document with no text → omit notice
 const docOnly = liftToolMediaForChatCompletions([
@@ -88,7 +88,27 @@ const docOnly = liftToolMediaForChatCompletions([
     content: [{ type: "document", source: { type: "data", value: "pdfbytes", mimeType: "application/pdf" } }],
   },
 ]);
-assert.match(String(docOnly[0].content), /Omitted non-image media/);
+assert.match(String(docOnly[0].content), /Omitted media: Chat Completions cannot embed/);
+
+// Stringified tool content (the wire chunk / an older session) takes the same path: the shared
+// `parseStringifiedContentParts` reads it, then the strict `isContentPartArray` check decides.
+const stringified = liftToolMediaForChatCompletions([
+  {
+    role: "tool",
+    toolCallId: "s1",
+    content: JSON.stringify([{ type: "text", content: "shot.png" }, imagePart]),
+  },
+]);
+assert.equal(stringified[0].content, "shot.png", "a stringified parts array is revived, not sent as JSON text");
+assert.equal(stringified[1].role, "user");
+assert.equal(stringified[1].content[1].type, "image");
+
+// …and the strictness difference from the strip path is deliberate: a part the provider would reject
+// (a `data` source with no `mimeType`) must stay text instead of being lifted onto the wire.
+const unstrict = JSON.stringify([{ type: "image", source: { type: "data", value: "abc" } }]);
+const notLifted = liftToolMediaForChatCompletions([{ role: "tool", toolCallId: "s2", content: unstrict }]);
+assert.equal(notLifted.length, 1, "an unvalidatable array is not lifted");
+assert.equal(notLifted[0].content, unstrict, "…it stays the text it arrived as");
 
 // Plain string tool content unchanged
 const plain = liftToolMediaForChatCompletions([{ role: "tool", toolCallId: "t", content: "ok" }]);
