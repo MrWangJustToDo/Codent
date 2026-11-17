@@ -512,7 +512,7 @@ export class SessionLockController {
   /**
    * A restore read that throws still holds the target's lock (acquiring handed the departure over).
    * Put it back on the session the agent is actually on — the departure — or drop a target nobody
-   * adopted. Best-effort: the TTL expires a stranded target lock.
+   * adopted.
    */
   async restoreAfterFailedRead(
     env: ResolvedCoreEnv | null | undefined,
@@ -525,7 +525,13 @@ export class SessionLockController {
       if (previousId !== undefined && previousId !== targetId) await this.lockSession(previousId, env);
       else await lock.release(targetId);
     } catch {
-      // Best-effort: the switch's recovery still re-opens the departure.
+      // The hand-back failed, so this process can no longer prove it owns the departure's log —
+      // most often a live peer took it over while the restore was reading. Continuing to append is
+      // the merged-transcript failure the lock exists to prevent, so mark the session we are still
+      // on as LOST: `hasLost` pauses its queued writes, and `reacquireLost` (tried when the queued
+      // writer refuses) is the way back once the peer exits. The old empty catch left a lock-less
+      // writer appending silently, because `hasLost` was never set.
+      if (previousId !== undefined) this.lostSessionId = previousId;
     }
   }
 

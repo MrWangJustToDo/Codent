@@ -18,7 +18,8 @@
  *    refuses the legacy `setStatus` (a destroyed agent must not become "idle and writable").
  * 6. `CompactionController.cancel()` restores the run phase. Dropping the lease without
  *    `restoreStatusFor` left `run: compacting` forever, which rejects every later `prepare`.
- * 7. `interrupt` clears `resumeStream` with the other two lease-phase fields.
+ * 7. `interrupt` during a compaction records the verdict and KEEPS the lease's run phase; the
+ *    lease's own end applies it. Clearing the `resume*` fields there stranded the lease's restore.
  * 8. A reset inside an unsettled session switch is refused.
  * 9. A USER stop of a compaction emits ONE net status move (no restored phase in between).
  * 10. A user stop while `run: compacting, outcome: error` restores the phase (no wedge).
@@ -279,10 +280,15 @@ const CHUNK = { type: "REASONING_MESSAGE_CONTENT", delta: "hmm" };
 }
 
 // ---------------------------------------------------------------------------
-// 7. interrupt clears every lease-phase field, not just two of three
+// 7. `interrupt` during a compaction records the verdict and leaves the lease its phase
 // ---------------------------------------------------------------------------
+//
+// The old rule cleared `resumeRun`/`resumeOutcome`/`resumeStream` and moved the run to `finalizing`
+// while the controller still held the lease. `restoreStatusFor` then read `run !== "compacting"` and
+// skipped its own restore, and the projection said `aborted` while the summarizer was still writing
+// its checkpoint — the window in which a new turn was admitted beside it.
 {
-  const agent = await makeAgent("interrupt-clears-resume");
+  const agent = await makeAgent("interrupt-during-compaction");
   agent.transitionStatus({ type: "prepare" });
   agent.transitionStatus({ type: "stream-chunk", stream: "thinking" });
 
@@ -291,9 +297,17 @@ const CHUNK = { type: "REASONING_MESSAGE_CONTENT", delta: "hmm" };
   assert.equal(agent.getAgentState().resumeStream, "thinking", "compaction-start saved the phase");
 
   agent.transitionStatus({ type: "interrupt" });
-  assert.equal(agent.getAgentState().resumeRun, undefined);
-  assert.equal(agent.getAgentState().resumeOutcome, undefined);
-  assert.equal(agent.getAgentState().resumeStream, undefined, "the third field clears with the others");
+  const state = agent.getAgentState();
+  assert.equal(state.run, "compacting", "the lease keeps the run phase while the summarizer is live");
+  assert.equal(state.outcome, "aborted", "the interrupt's verdict is recorded");
+  assert.equal(state.resumeRun, "streaming", "the restore target survives");
+  assert.equal(state.resumeStream, "thinking");
+  assert.equal(agent.compactions.isRunning(), true, "the lease still owns the agent");
+
+  agent.compactions.release(lease);
+  assert.equal(agent.getAgentState().run, "finalizing", "the lease's end applies the recorded abort");
+  assert.equal(agent.getAgentState().outcome, "aborted");
+  assert.equal(agent.compactions.isRunning(), false);
 }
 
 // ---------------------------------------------------------------------------
@@ -324,9 +338,11 @@ const CHUNK = { type: "REASONING_MESSAGE_CONTENT", delta: "hmm" };
 {
   const agent = await makeAgent("compact-user-cancel");
   const statuses = [];
+  let aborts = 0;
   agent
     .getEventBus()
     .on("agent:status", (event) => statuses.push([event.payload.from, event.payload.to]), { replay: false });
+  agent.getEventBus().on("agent:abort", () => (aborts += 1), { replay: false });
 
   const lease = agent.compactions.begin("auto");
   assert.ok(lease, "an auto lease is granted from idle");
@@ -336,6 +352,10 @@ const CHUNK = { type: "REASONING_MESSAGE_CONTENT", delta: "hmm" };
   assert.equal(agent.getStatus(), "aborted", "the user stop settles the turn as aborted");
   assert.equal(agent.getAgentState().run, "finalizing", "the compaction phase is gone");
   assert.deepEqual(statuses, [["compacting", "aborted"]], "exactly one net move — no restored phase in between");
+  // The abort publishes its verdict itself now, so it must snapshot "a run was live" BEFORE that
+  // write: reading the axes afterwards finds a settled turn and drops the row that `agent:abort`
+  // observers (the memory selection discard) run on.
+  assert.equal(aborts, 1, "a user stop during an auto compaction still reports agent:abort");
 
   // The producer's finally is what releases the lease in production.
   agent.compactions.release(lease);

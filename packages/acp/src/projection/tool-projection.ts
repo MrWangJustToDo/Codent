@@ -41,6 +41,22 @@ import type {
 } from "../wire/types.js";
 import type { AgentSessionEvent, AgentStreamEvent } from "@codent/core";
 
+/**
+ * A one-line result summary from the tool's own formatter, used only when the result carries no
+ * extractable text (otherwise the client would get `rawOutput` JSON).
+ *
+ * `formatToolOutput` is the same call the app makes for a local row. It returns "" for a tool with
+ * no renderer (extension tools, plan bodies), which leaves the raw-JSON fallback in place for those.
+ */
+function formattedResultText(name: string | undefined, output: unknown): string {
+  if (!name || output === undefined) return "";
+  try {
+    return formatToolOutput(output, name);
+  } catch {
+    return "";
+  }
+}
+
 /** Tool output is forwarded at most this often; a chunk stream is a log, not a frame per line. */
 const STREAM_FLUSH_MS = 300;
 
@@ -234,7 +250,9 @@ export class ToolProjection {
     const images = imagesOfResult(part.output, part.content);
     // The row's text. When the bytes are being rendered as an image block they must not ALSO be prose,
     // which is what `hasMedia` tells the extractor — a bare media object declares no text and so
-    // contributes none. Every other result keeps the JSON that IS its rendering.
+    // contributes none. The extractor is FIRST because it carries the whole result; a tool's
+    // formatter is a summary (`Read src/a.ts (lines 1-42 of 42)`, `3 matches: …`), so using it first
+    // would delete the body a client has no other way to see.
     const taskOutput = state?.name === BUILTIN_TOOL_NAMES.task ? taskOutputOf(part) : undefined;
     const taskText = taskOutput !== undefined ? formatToolOutput(taskOutput, BUILTIN_TOOL_NAMES.task) : undefined;
     // An interruption marker is a shared shape, not a tool result: its JSON is not a rendering.
@@ -242,7 +260,12 @@ export class ToolProjection {
       taskText ??
       (interruptedResult
         ? (state?.interruptedText ?? interruptedToolMessage(part.output))
-        : toolResultText(part.content, images.length > 0) || (part.error ?? ""));
+        : toolResultText(part.content, images.length > 0) ||
+          // No extractable content: the tool's formatter beats the raw JSON that used to follow
+          // (`rawOutput`), and a media result keeps the extractor's answer so an image is not also
+          // printed as prose.
+          (images.length === 0 ? formattedResultText(state?.name, part.output) : "") ||
+          (part.error ?? ""));
     if (state) {
       // Kept so a late `write_file` oldText read can rebuild a terminal row without losing the
       // result text/images that the diff update replaces.

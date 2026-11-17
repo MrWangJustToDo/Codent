@@ -373,6 +373,7 @@ export {
   agentStreamKey,
 } from "../agent/stream-hub";
 export { createJobsExtension, summarizeJobs } from "../agent/jobs/extension.js";
+export { JobTransitionTracker } from "../agent/jobs/job-transition-tracker.js";
 // The background-work trunk: the facade, its two sources, and the task output shapes. Validators
 // drive the real objects (`validate:background-task`), so they must be reachable from here rather
 // than re-implemented against a replica.

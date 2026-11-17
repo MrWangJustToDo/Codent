@@ -38,7 +38,11 @@ export interface ExtensionLlmRequest {
   model?: string;
   /** Output-token cap for this call; the runtime applies its own default when omitted. */
   maxOutputTokens?: number;
-  /** Cancellation; defaults to {@link ExtensionContext.signal} when omitted. */
+  /**
+   * Additional cancellation. The runtime always merges this with the run's signal and the
+   * extension incarnation's own (a disable aborts an in-flight call), so a call cannot opt out of
+   * being cancelled by the run.
+   */
   signal?: AbortSignal;
   /**
    * Presence selects the structured form: the resolved value satisfies this schema. Absent → text.

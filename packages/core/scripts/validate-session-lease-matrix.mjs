@@ -195,4 +195,31 @@ function activeLease(sessionId, options = {}) {
   assert.throws(() => lease.commit(), /without a claimed session/);
 }
 
+// ---------------------------------------------------------------------------
+// 9. Release during a switch drops BOTH claims (target and departure)
+// ---------------------------------------------------------------------------
+//
+// The departure is still owned until `commit`/`abortClaim`. Tearing the agent down mid-switch used to
+// release only the target, leaving the departure's claim (and its reservation) in the shared map for
+// the rest of the process — the next `/resume` onto it read "already active in another live session".
+{
+  const { lease, calls } = activeLease("ses_a", { claim: { reserved: true } });
+  calls.release.length = 0;
+  calls.reservation.length = 0;
+
+  assert.equal(lease.claim("ses_b"), true, "a switch to B claims the target");
+  assert.equal(lease.getState(), "claimed");
+  lease.release();
+
+  assert.equal(lease.getState(), "released");
+  assert.deepEqual(
+    calls.release.map((call) => call.sessionId),
+    ["ses_b", "ses_a"],
+    "both the target and the departure are released"
+  );
+  assert.deepEqual(calls.reservation, ["ses_a"], "and the departure's reservation with it");
+  lease.release();
+  assert.equal(calls.release.length, 2, "releasing twice is still a no-op");
+}
+
 console.log("session lease matrix validation passed");

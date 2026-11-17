@@ -12,7 +12,7 @@ import { createTextAdapter } from "../models/adapter/adapter-factory.js";
 import { runSideTextQuery } from "../models/adapter/side-text-query.js";
 import { DEFAULT_BASE_URLS, trimBaseURL } from "../models/config/model-connection.js";
 import { resolveModelInfoFromModelsDev } from "../models/config/models-config.js";
-import { abortError } from "../runtime-types/abort.js";
+import { abortError, mergeAbortSignals } from "../runtime-types/abort.js";
 import { errorMessage } from "../utils/errors.js";
 
 import type { UsageTracker } from "./telemetry/usage-tracker.js";
@@ -244,7 +244,10 @@ export async function completeExtensionQuery(
   // A ceiling, not a default: a caller may ask for less, never for more than the host allows.
   const cap = host.getExtensionMaxOutputTokens?.() ?? DEFAULT_EXTENSION_MAX_OUTPUT_TOKENS;
   const maxOutputTokens = Math.min(request.maxOutputTokens ?? cap, cap);
-  const signal = request.signal ?? host.getExtensionSignal();
+  // Two independent owners may cancel one request — the run (Esc / session switch) and the
+  // extension incarnation that asked (a disable aborts it). `??` honoured only the first, so a
+  // request that carried its own signal ignored the run's; merge both instead.
+  const signal = mergeAbortSignals(request.signal, host.getExtensionSignal());
 
   // A signal that is already aborted must not start a request at all: the run may have been cancelled
   // between the handler deciding to call and the call landing, and the adapter would otherwise issue

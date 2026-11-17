@@ -36,9 +36,12 @@ function safe<T>(render: () => T): T | undefined {
  *
  * `text` is the tool's **own** renderer (`present.text`, the old `toUI` contract). For an
  * EXTENSION tool that string *is* the row result. A built-in may also declare `text` (session
- * search/read, tree, memory, LSP) — there it is the full-display body only. `row-rules.ts` decides
- * the row from tool identity for built-ins, and from the presence of `present.text` for extension
- * tools (for an extension, that string is its whole result). `summary` comes from
+ * search/read, tree, memory, LSP) — there it is the full-display body only. That is a deliberate
+ * boundary: a built-in whose body is a host-owned block (`run_command` and friends, `detailed`) or
+ * that owns no result block ships NO text, so the payload cannot duplicate a detailed block. A host
+ * that needs the local body calls `formatToolOutput` (in-process), not `part.display`.
+ * `row-rules.ts` decides the row from tool identity for built-ins, and from the presence of
+ * `present.text` for extension tools (for an extension, that string is its whole result). `summary` comes from
  * `present.summary` only — for a built-in, the resolver merges the built-in table's formatter, so
  * there is no second name-keyed summary switch here. `label` is the tool's declarative input label.
  *

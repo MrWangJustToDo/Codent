@@ -33,6 +33,32 @@ export function isAbortError(err: unknown, signal?: AbortSignal | null): boolean
 }
 
 /**
+ * Combine independent cancellation sources into one signal.
+ *
+ * A request can have more than one owner that may cancel it: the run that asked (its own
+ * `AbortSignal`), a per-call deadline, and — since an extension's `ctx.llm.complete` outlives a
+ * disable — the incarnation that issued it. `request.signal ?? host.getExtensionSignal()` could
+ * only honour one of them, so disabling an extension left its in-flight completion billing and
+ * resolving into revoked code. Native `AbortSignal.any` handles the common case; the fallback keeps
+ * older hosts working without dropping the run's cancellation.
+ */
+export function mergeAbortSignals(...signals: Array<AbortSignal | undefined | null>): AbortSignal | undefined {
+  const live = signals.filter((signal): signal is AbortSignal => signal != null);
+  if (live.length === 0) return undefined;
+  if (live.length === 1) return live[0];
+  if (typeof AbortSignal.any === "function") return AbortSignal.any(live);
+  const controller = new AbortController();
+  for (const signal of live) {
+    if (signal.aborted) {
+      controller.abort(signal.reason);
+      break;
+    }
+    signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
+  }
+  return controller.signal;
+}
+
+/**
  * The ONE way to construct an abort-shaped `Error`.
  *
  * Four modules used to build this by hand (`abort-timeout`, `compaction/abort-classification`,

@@ -261,9 +261,10 @@ export class CompactionController {
    * Abort the running compaction for a USER stop, letting the run's interrupt publish `aborted`.
    *
    * `abortForTeardown` restores the status the compaction replaced because a session switch has
-   * no run left to do it. A user cancel does: `interrupt` is about to run and writes the terminal
-   * verdict. Restoring first published `compacting → <previous> → aborted`, and a consumer that
-   * classifies a compaction by "left the compacting phase" read the cancel as a completion.
+   * no run left to do it. A user cancel does: this call publishes the verdict itself (the caller's
+   * abort would otherwise publish it too, but only after this lease is gone). Restoring first
+   * published `compacting → <previous> → aborted`, and a consumer that classifies a compaction by
+   * "left the compacting phase" read the cancel as a completion.
    *
    * A manual `/compact` has no run to interrupt, so it uses {@link cancel} (which owns that
    * verdict itself).
@@ -283,7 +284,20 @@ export class CompactionController {
       this.abortForTeardown(reason);
       return;
     }
+    const { kind } = this.active.lease;
+    const { previousStatus } = this.active;
     this.abortActive(reason);
+    // This call DROPS the lease, and `interrupt` (the caller's next step) may no longer steal the
+    // run phase from a live one — so this is the last owner that can publish `compaction-end`.
+    // Without it the phase stays `compacting` forever: every later `prepare` is rejected while the
+    // terminal projection hides the wedge.
+    //
+    // Order is what keeps the timeline honest: `interrupt` FIRST records `aborted` and keeps the
+    // phase (so no pre-compaction status is restored), then `compaction-end` takes its "a finish
+    // landed" branch. Both project `aborted`, so `agent:status` publishes ONE net move
+    // (`compacting → aborted`) — the old `compacting → <previous> → aborted` flicker is not back.
+    this.deps.transition?.({ type: "interrupt" });
+    this.restoreStatusFor(kind, previousStatus);
   }
 
   /**

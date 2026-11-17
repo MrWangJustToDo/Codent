@@ -233,6 +233,8 @@ only meant to observe.
 
 Hook names support a \`prefix:*\` wildcard: \`tool:before:*\` observes **every** tool call.
 Match is on the literal prefix, so \`tool:before:run_*\` works too.
+An unknown hook name is refused at registration (the runtime logs a warning naming the valid hooks)
+rather than registering a handler that can never run.
 
 | Hook | Payload / control |
 |---|---|

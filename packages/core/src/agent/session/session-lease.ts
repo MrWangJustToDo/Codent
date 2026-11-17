@@ -182,6 +182,15 @@ export class SessionLease {
       this.ports.release(this.sessionId, this.ownerId);
       if (this.reserved) this.ports.releaseReservation?.(this.sessionId);
     }
+    // A switch in flight owns TWO claims: the target and the departure it is leaving. Only the
+    // target was released here, so the departure's claim (and its reservation) stayed in the shared
+    // ownership map until something else released it — `releaseAllFor` does, but not every caller
+    // runs it (a failed bootstrap released only this lease). The residue reads as "already active
+    // in another live session" on the next `/resume` onto that id.
+    if (this.leavingId !== undefined && this.leavingId !== this.sessionId) {
+      this.ports.release(this.leavingId, this.ownerId);
+      if (this.leavingReserved) this.ports.releaseReservation?.(this.leavingId);
+    }
     this.sessionId = undefined;
     this.leavingId = undefined;
     this.reserved = false;

@@ -694,4 +694,67 @@ assert.equal(
   );
 }
 
+// ---------------------------------------------------------------------------
+// A step that throws does not abandon the rest of the unload
+// ---------------------------------------------------------------------------
+//
+// The steps are independent producer cleanups. The old shape let the first throw (a host callback
+// inside `stopActiveRun`, a dead child, a disposed stream hub) skip everything after it, so children
+// kept streaming into the channel that was about to be replaced and pre-forked tasks stayed
+// registered — a HALF-unloaded switch with a recovered departure.
+{
+  const ran = [];
+  const warnings = [];
+  const lifecycle = new SessionLifecycleService(
+    runtime({
+      peekQueuedInput: () => ({ steer: ["steer-a"], followUp: [] }),
+      abortManualCompaction: () => ran.push("compaction"),
+      stopActiveRun: () => {
+        ran.push("run");
+        throw new Error("host callback failed");
+      },
+      clearQueuedInput: () => ran.push("queue"),
+      cascadeAbortToChildren: () => ran.push("children"),
+      discardPreforkRuns: () => ran.push("prefork"),
+      streamHub: { endAllCommands: () => ran.push("previews"), clearAll: () => {} },
+      warn: (message, data) => warnings.push({ message, data }),
+    })
+  );
+  // A failed `stopActiveRun` is CRITICAL: the switch must not commit while the pump may still be
+  // alive. The remaining steps still ran, so the departure is as unloaded as it could get.
+  assert.throws(() => lifecycle.stop("session-switch"), /could not stop active run/);
+  assert.deepEqual(
+    ran,
+    ["compaction", "run", "queue", "children", "prefork", "previews"],
+    "every producer step ran despite the throw"
+  );
+  assert.equal(warnings.length, 1, "the failure is reported, not swallowed");
+  assert.match(warnings[0].message, /unload/);
+  assert.deepEqual(
+    warnings[0].data.failures.map((entry) => entry.step),
+    ["active run"]
+  );
+}
+
+// A best-effort step failing does NOT abort the switch: the transaction's own reset repeats that
+// cleanup, so blocking on it would turn a recoverable hiccup into a failed switch.
+{
+  const ran = [];
+  const lifecycle = new SessionLifecycleService(
+    runtime({
+      peekQueuedInput: () => ({ steer: [], followUp: [] }),
+      stopActiveRun: () => ran.push("run"),
+      clearQueuedInput: () => ran.push("queue"),
+      cascadeAbortToChildren: () => {
+        ran.push("children");
+        throw new Error("child teardown failed");
+      },
+      discardPreforkRuns: () => ran.push("prefork"),
+      warn: () => {},
+    })
+  );
+  assert.doesNotThrow(() => lifecycle.stop("session-switch"));
+  assert.deepEqual(ran, ["run", "queue", "children", "prefork"], "the rest still ran");
+}
+
 console.log("session-switch-safety validation passed");

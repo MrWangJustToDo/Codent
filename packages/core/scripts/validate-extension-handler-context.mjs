@@ -48,7 +48,7 @@ await runner.loadExtension({
   description: "context probe",
   async activate(ctx) {
     captured = ctx;
-    ctx.registerInterceptor("probe:ping", async (_event, ctxFromDispatch) => {
+    ctx.registerInterceptor("tool:before:probe", async (_event, ctxFromDispatch) => {
       handlerCtx = ctxFromDispatch;
     });
     ctx.registerCommand({ name: "probe-cmd", description: "probe", execute: async () => "ok" });
@@ -88,7 +88,7 @@ assert.equal(captured.signal, controller.signal, "the run's own signal, not a co
 
 // A handler receives the same live context as its second argument.
 // The raw bus dispatches interceptors through `intercept` (observers use `emit`).
-await bus.intercept({ type: "probe:ping", payload: {} });
+await bus.intercept({ type: "tool:before:probe", payload: {} });
 assert.equal(handlerCtx, captured, "interceptors receive the extension's live context");
 
 // `ctx.env` is the extension's OWN config map, filtered to strings.
@@ -118,7 +118,7 @@ assert.equal(runner.contextFor("probe"), undefined, "disable releases the live c
 assert.equal((await runner.setEnabled("probe", true)).ok, true);
 assert.equal(runner.contextFor("probe"), captured, "re-enable restores the same context object");
 handlerCtx = undefined;
-await bus.intercept({ type: "probe:ping", payload: {} });
+await bus.intercept({ type: "tool:before:probe", payload: {} });
 assert.equal(handlerCtx, captured, "and handlers receive it again");
 
 // ── the conversation copy is isolated ───────────────────────────────────────

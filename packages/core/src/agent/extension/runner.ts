@@ -2,6 +2,7 @@
 import { getEnv, hasCoreEnv } from "../../env";
 // The extension exit-flush registry lives with the other process-exit guards, so a hard exit runs
 // it on the same two hooks (fatal handler + `exit`) that already land the active logs.
+import { mergeAbortSignals } from "../../runtime-types/abort.js";
 import { errorMessage, toError } from "../../utils/errors.js";
 import { createAgentEventBus } from "../agent-event-bus";
 import { compareDispatchRank, resolveExtensionOrder } from "../dispatch-order.js";
@@ -11,6 +12,7 @@ import { EXTENSION_CALLBACK_TIMEOUT_MS, withCallbackTimeout } from "./callback-t
 import { createExtensionContext, type ContextFactoryHost } from "./context-factory.js";
 import { ExtensionLlmError } from "./extension-llm-error.js";
 import { createExtensionUiBridge } from "./extension-ui-bridge.js";
+import { INTERCEPTOR_HOOK_HELP, isInterceptorHook } from "./interceptor-hooks.js";
 import { MessageTransformerRegistry } from "./message-transformer-registry.js";
 import { createObserverSurface } from "./observer-surface.js";
 import { scopeExtensionOwnerId } from "./owner-id.js";
@@ -259,6 +261,16 @@ export class ExtensionRunner {
   /** Live context per active extension — the object handed to every handler of that extension. */
   private contexts = new Map<string, ExtensionContext>();
   /**
+   * One abort source per INCARNATION, keyed by its context.
+   *
+   * `ctx.llm.complete` is the one registration-surface escape the lease cannot revoke: it is an
+   * in-flight request, not a callback. A disable/destroy therefore aborts this controller, which
+   * `completeViaRuntime` merges with the run's signal — otherwise the call kept billing and its
+   * result resolved into code the panel already reported as disabled. Keyed by context, not id: a
+   * replacement incarnation owns a different context and must not be cancelled by the old teardown.
+   */
+  private readonly incarnationAborts = new WeakMap<ExtensionContext, AbortController>();
+  /**
    * Wrapped interceptor per (handler, extension). `ctx.events.off(handler)` must unregister the
    * wrapper that was actually registered, not the caller's original function.
    */
@@ -370,12 +382,26 @@ export class ExtensionRunner {
         // of commands must end up with what dispatch would run, not with every claim ever made.
         if (this.stacks.commandOwner(cmd.name) === extensionId) this.options.onRegisterCommand?.(cmd);
       },
-      registerInterceptor: (extensionId, eventType, handler, rank) =>
-        this.eventBus.on(
+      registerInterceptor: (extensionId, eventType, handler, rank) => {
+        // The observer side is exhaustive at compile time; this side is not (the hook is built from
+        // a tool name at runtime). Refuse an unknown hook instead of registering a handler that can
+        // never fire: for a `tool:before:*` guard that failure mode is a silent FAIL-OPEN, and a
+        // JavaScript extension gets no type check at all.
+        if (!isInterceptorHook(eventType)) {
+          this.writeExtensionLog(
+            "warn",
+            extensionId,
+            `Ignored an interceptor for unknown hook "${eventType}". Known hooks: ${INTERCEPTOR_HOOK_HELP}. ` +
+              `A typo here would register a handler that never runs.`
+          );
+          return () => undefined;
+        }
+        return this.eventBus.on(
           eventType,
           this.wrapInterceptor(extensionId, eventType, handler as EventInterceptor<InterceptableEvent>),
           rank
-        ),
+        );
+      },
       offInterceptor: (extensionId, eventType, handler) => {
         this.eventBus.off(
           eventType,
@@ -852,6 +878,7 @@ export class ExtensionRunner {
     // so a toggle cannot observe "context exists, activating false" (or the reverse).
     instance.context = context;
     this.contexts.set(instance.api.id, context);
+    this.incarnationAborts.set(context, new AbortController());
     this.activating.add(instance.api.id);
     this.refusedRegistrations.delete(instance.api.id);
     // A notice describes the PREVIOUS incarnation. Clear it when activation STARTS: a turn
@@ -974,8 +1001,8 @@ export class ExtensionRunner {
    *
    * **Not an "unload".** It leaves the instance in `this.extensions`, keeps its rank and sends no
    * notification — callers that mean "load's inverse" must do those themselves (see
-   * `loadExtension`'s duplicate path and `setEnabled(false)`). `@internal` so a future public
-   * `unloadExtension` is not confused with it.
+   * `loadExtension`'s duplicate path and `setEnabled(false)`). `@internal`: it is not the public
+   * unload, and a host that wants one must also drop the instance, its rank and its notification.
    */
   async destroyExtension(instance: ExtensionInstance): Promise<void> {
     // External teardown: record it before the awaits so a failed activation's catch does not
@@ -1003,6 +1030,9 @@ export class ExtensionRunner {
    * are the runner's bookkeeping, not the extension's — logging/coreEnv still work after a revoke.
    */
   private async teardownIncarnation(instance: ExtensionInstance, incarnation = instance.context): Promise<void> {
+    // Cancel what the incarnation has in flight before waiting on it: a `ctx.llm.complete` is not a
+    // callback the lease can revoke, and a slow `deactivate()` must not keep its request alive.
+    this.incarnationAborts.get(incarnation)?.abort();
     // Serialize per incarnation: a revoke that lands while the first teardown is still awaiting
     // `deactivate()` must join it, not start a second concurrent pass.
     const inFlight = instance.teardownInFlight;
@@ -1769,7 +1799,13 @@ export class ExtensionRunner {
         `Extension "${extensionId}" cannot call a model: this extension host has no agent runtime attached.`
       );
     }
-    return runtime.complete(extensionId, request);
+    // The RUN's signal (inside `runtime.complete`) and this incarnation's are independent owners of
+    // the same request: passing ours in `request.signal` lets the host merge them instead of
+    // choosing one (`request.signal ?? run signal`).
+    const context = this.contexts.get(extensionId);
+    const incarnation = context ? this.incarnationAborts.get(context)?.signal : undefined;
+    const signal = mergeAbortSignals(request.signal, incarnation);
+    return runtime.complete(extensionId, signal ? { ...request, signal } : request);
   }
 
   /** Build one activation's context — see {@link createExtensionContext}. */

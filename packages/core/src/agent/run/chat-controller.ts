@@ -54,6 +54,21 @@ import type { QueuedMessageContent, QueuedMessagesSnapshot } from "../../runtime
 import type { ContentPart, UIMessage } from "@tanstack/ai";
 
 const MAX_TOOL_PHASES = 40;
+/**
+ * Model/tool phases for ONE user prompt, across every chained pump.
+ *
+ * `MAX_TOOL_PHASES` bounds a single pump, and the `keepPumping` hand-off deliberately starts a new
+ * one without finalizing the turn (a long tool loop is not a turn end). Nothing bounded the chain:
+ * a degenerate response — a batch whose tool calls never settle, a stream that ends before its tools
+ * — handed off forever, each pump with a fresh `maxIterations` allowance, so one prompt could spend
+ * an unbounded number of paid calls while `agent:iteration` restarted at 1/max every time. This is
+ * the ceiling for the whole prompt; `MAX_TOOL_PHASES * 4` keeps every legitimate long turn that the
+ * previous per-pump cap already admitted.
+ */
+const MAX_TURN_TOOL_PHASES = MAX_TOOL_PHASES * 4;
+/** Reported when {@link MAX_TURN_TOOL_PHASES} is exhausted (a failed turn, not a silent halt). */
+const TURN_PHASE_BUDGET_MESSAGE =
+  "Stopped this turn after its tool-phase budget was exhausted. Send another message to continue.";
 
 /** Boundary that ran a settle pass (mirrors the `tool:settle` payload). */
 type ToolSettleCause = "pump-start" | "pre-send" | "turn-end" | "abort" | "stream-error" | "engine";
@@ -117,6 +132,22 @@ export class AgentChatController {
   } | null = null;
   /** Signature of the last `tool:phase` decision set, so a text-only follow-up phase adds no row. */
   private lastToolPhaseSignature: string | null = null;
+  /**
+   * Tool phases spent by the current user prompt, across chained pumps.
+   *
+   * Reset by a pump that is NOT a continuation (and by a transcript clear). See
+   * {@link MAX_TURN_TOOL_PHASES}.
+   */
+  private turnPhases = 0;
+  /**
+   * Set by the `keepPumping` hand-off so the next pump knows it continues the same prompt.
+   *
+   * Consumed (and cleared) as the first thing a pump does — before its admission check can return —
+   * so a refused chain pump cannot make the next real turn look like a continuation. It marks the
+   * next PUMP rather than the next enqueue, so it survives a `runPending()` join: another caller may
+   * already have scheduled the pump that will do this work.
+   */
+  private pendingContinuesTurn = false;
   /**
    * Epoch of the single pump queued on {@link runChain} but not yet started. A stale
    * callback must not clear a newer epoch's slot; `null` means no current-epoch pump
@@ -218,6 +249,18 @@ export class AgentChatController {
   private advanceLifecycleEpoch(): void {
     this.lifecycleEpoch += 1;
     this.pendingRunEpoch = null;
+    // The turn budget belongs to the run/turn being abandoned. Reset it HERE, not only in
+    // `clearTranscript`: a queued chain pump whose `run()` then returns on the epoch check never
+    // reaches `pumpToolPhases`, so `pendingContinuesTurn` would survive and the next prompt would
+    // start as a continuation with the previous prompt's spent budget (stopping after ~1 phase).
+    this.turnPhases = 0;
+    this.pendingContinuesTurn = false;
+  }
+
+  /** Drop the turn's phase budget (session adoption / reset). */
+  resetTurnBudget(): void {
+    this.turnPhases = 0;
+    this.pendingContinuesTurn = false;
   }
 
   /** Drop queued and visible transcript state only; lifecycle owns the other resets. */
@@ -810,7 +853,12 @@ export class AgentChatController {
     // message typed in that window open a turn BESIDE the summarizer — exactly the race
     // `shouldDeferMidRunQueue`'s `compacting` clause exists to prevent. Deferring here is released
     // by `resumeAfterCompaction` like any other message queued during compaction.
-    if (status === "compacting") return true;
+    //
+    // The LEASE is the ownership fact, not the projection: a `fail`/`interrupt` that lands inside a
+    // compaction records the verdict while `run` keeps `compacting`, so the status reads
+    // `error`/`aborted` with the summarizer still writing its checkpoint. Reading only the status
+    // admitted a new turn in exactly that window.
+    if (this.managed.compactions.isRunning() || status === "compacting") return true;
     // A stale (interrupted/superseded) pump still unwinding must not swallow new
     // input into the queues — new submissions execute immediately.
     if (this.currentToken && !this.currentToken.isCurrent) return false;
@@ -845,8 +893,14 @@ export class AgentChatController {
    * Enqueue a pump unless one is already queued. The queued pump re-reads the
    * channel, so a change made after it was scheduled (an approval response, a tool
    * result) is handled by that run rather than needing a second one.
+   *
+   * `continuesTurn` marks the pump this schedules as the NEXT chained pump of the current prompt
+   * (see `turnPhases`). It is recorded before the `runPending()` join on purpose: when a pump is
+   * already scheduled, that one will do the work, so the budget must continue on it rather than
+   * restart.
    */
-  private enqueueRunOnce(options: { startsNewTurn?: boolean } = {}): Promise<void> {
+  private enqueueRunOnce(options: { startsNewTurn?: boolean; continuesTurn?: boolean } = {}): Promise<void> {
+    if (options.continuesTurn) this.pendingContinuesTurn = true;
     if (this.managed.isDestroyed()) return Promise.resolve();
     if (this.runPending()) return this.runChain;
     const epoch = this.lifecycleEpoch;
@@ -1009,6 +1063,13 @@ export class AgentChatController {
     // later message queued with nothing to drain it — and surfaced as an unhandled rejection from
     // `enqueueRunOnce` (which callers fire with `void`). The catch then finalizes as `error`.
     try {
+      // A chain pump continues the SAME prompt: its per-pump phase cap resets, but the turn's
+      // budget must not. Read (and clear) the mark before the admission check below, which can
+      // return — a refused chain pump must not leave the mark for the next real turn.
+      const chained = this.pendingContinuesTurn;
+      this.pendingContinuesTurn = false;
+      if (!chained) this.turnPhases = 0;
+
       // Admission. A pump queued while another one was live can arrive AFTER that pump finished the
       // turn — an approval answered during `applyCommandSafetyPolicy` (an awaited CoreEnv call), or
       // an auto-mode batch landing late. Starting it anyway flips `completed` back to `running` and
@@ -1049,7 +1110,10 @@ export class AgentChatController {
       this.applyCancelledIncompleteTools(false, { cause: "pump-start" });
       this.managed.statusController.prepareRunPhase(this.channel.getMessages());
 
-      for (let toolPhase = 0; toolPhase < MAX_TOOL_PHASES; toolPhase++) {
+      // The TURN's remaining budget, not the per-pump cap: a chain pump continues the prompt the
+      // previous pump already spent phases on (see the cap check in the `keepPumping` branch).
+      const phaseBudget = Math.max(0, MAX_TURN_TOOL_PHASES - this.turnPhases);
+      for (let toolPhase = 0; toolPhase < phaseBudget; toolPhase++) {
         if (hasError) break;
         if (!runToken.isCurrent || epoch !== this.lifecycleEpoch) return;
 
@@ -1120,13 +1184,36 @@ export class AgentChatController {
         if (!this.shouldKeepPumping(after)) break;
       }
 
+      // Accrue before the decision below: the `keepPumping` branch is what asks whether the turn
+      // has any budget left, and it must see the phases this pump just spent.
+      this.turnPhases += toolPhases;
+
       if (runToken.isCurrent) {
         this.syncPlanModeFromMessages();
         let messages = this.channel.getMessages();
         let waitingForUser = hasPendingInteraction(messages);
-        const keepPumping = !waitingForUser && this.shouldKeepPumping(messages);
+        let keepPumping = !waitingForUser && this.shouldKeepPumping(messages);
         // Prefer status already set by executeStream (error/abort) over message-derived waits.
-        const outcomeKind = this.managed.runFinalizer.deriveChatOutcome({ hasError, waitingForUser });
+        let outcomeKind = this.managed.runFinalizer.deriveChatOutcome({ hasError, waitingForUser });
+
+        // The TURN's phase budget, across the chain. Without a ceiling a degenerate response
+        // (a batch whose calls never settle, a stream that ends before its tools) handed off
+        // forever, each pump with a full `maxIterations` allowance, so one prompt could spend an
+        // unbounded number of model calls while every surface reported a fresh 1/max. Treated as a
+        // FAILED turn and left to the shared tail below: that is what denies pending approvals,
+        // settles the held tool calls and drains queued follow-ups. A hand-rolled `finalizeChat`
+        // here skipped all three, leaving exactly the spinning rows this branch exists to stop.
+        if (keepPumping && outcomeKind === "finished" && this.turnPhases >= MAX_TURN_TOOL_PHASES) {
+          this.managed.setError(TURN_PHASE_BUDGET_MESSAGE);
+          this.managed.emitEvent("session:diagnostic", {
+            area: "session",
+            level: "warn",
+            message: TURN_PHASE_BUDGET_MESSAGE,
+            details: { phases: this.turnPhases, budget: MAX_TURN_TOOL_PHASES },
+          });
+          keepPumping = false;
+          outcomeKind = "error";
+        }
 
         // A terminal turn has no unanswered questions. `deriveChatOutcome` ranks error above
         // waiting, so a stream that asked for approval and THEN failed used to end as `error`
@@ -1146,7 +1233,7 @@ export class AgentChatController {
         if (keepPumping && outcomeKind === "finished") {
           this.managed.statusController.reconcileWithPolicy(messages, "during-run");
           this.persistMessages("pump-complete");
-          void this.enqueueRunOnce();
+          void this.enqueueRunOnce({ continuesTurn: true });
           return;
         }
 

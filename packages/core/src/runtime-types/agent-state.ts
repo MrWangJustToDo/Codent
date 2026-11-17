@@ -135,7 +135,7 @@ class IllegalTransition extends Error {}
  * combination keeps the verdict already recorded, and the rest of the event (clearing the wait,
  * leaving the phase) still applies, so reconcile keeps its escape hatch.
  */
-function coerceSettledOutcome(state: AgentState, next: RunOutcome): RunOutcome {
+export function coerceSettledOutcome(state: AgentState, next: RunOutcome): RunOutcome {
   if (state.outcome !== "error" && state.outcome !== "aborted") return next;
   return next === "error" ? "error" : state.outcome;
 }
@@ -276,8 +276,9 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
         outcome: "error",
         stream: "none",
         errorMessage: event.error,
-        // All three lease-phase fields clear together (same rule as `interrupt`): leaving
-        // `resumeStream` behind lets a later `compaction-start` restore a stream from a dead run.
+        // All three lease-phase fields clear together: leaving `resumeStream` behind lets a later
+        // `compaction-start` restore a stream from a dead run. (`interrupt` deliberately does NOT
+        // clear them — it may land while a lease still owns the phase; see its own branch.)
         resumeRun: undefined,
         resumeOutcome: undefined,
         resumeStream: undefined,
@@ -319,6 +320,21 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
       if (state.outcome === "error" || state.outcome === "aborted") {
         // Keep the verdict, but the old "an approval gate dies with the run" rule still holds.
         return state.wait === "approval" ? { ...state, wait: "none" } : state;
+      }
+      // A compaction lease owns the run phase. Record the verdict and let `compaction-end` apply
+      // it — the same rule as `fail` / `settle` / `stream-end`. Clearing the `resume*` fields here
+      // (the previous behaviour) destroyed the lease's restore target while the summarizer kept
+      // running, so `restoreStatusFor`'s `run === "compacting"` guard never matched: the phase
+      // could not be restored, and the projection said `aborted` while the lease still owned the
+      // agent — which is what let a new turn be admitted beside a live checkpoint write.
+      if (state.run === "compacting") {
+        return {
+          ...state,
+          outcome: coerceSettledOutcome(state, "aborted"),
+          stream: "none",
+          ...(state.wait === "approval" ? { wait: "none" as const } : {}),
+          ...(event.error !== undefined ? { errorMessage: event.error } : {}),
+        };
       }
       return {
         ...state,

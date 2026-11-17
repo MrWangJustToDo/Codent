@@ -75,16 +75,44 @@ export class SessionLifecycleService {
     // BEFORE `stopActiveRun`: its abort path clears the queue synchronously, and a later read would
     // only see what survived the abort — not what the user had queued.
     const queued = this.rt.run.peekQueuedInput();
-    this.rt.run.abortManualCompaction(reason);
-    this.rt.run.stopActiveRun(reason);
+    // Every step is independent producer cleanup, so one failing must not abandon the rest. The old
+    // shape let the first throw (a host callback inside `stopActiveRun`, a dead child, a stream hub
+    // already disposed) skip everything after it: children kept streaming into the channel that was
+    // about to be replaced, pre-forked tasks were never discarded, and the switch rolled back with a
+    // HALF-unloaded agent — the state this order exists to make impossible.
+    const failures: Array<{ step: string; error: string }> = [];
+    const critical: string[] = [];
+    // `critical` = the switch cannot commit without it: a live pump or summarizer would keep writing
+    // the transcript that is about to be replaced. The rest are independent cleanups that the
+    // transaction's own reset repeats (`resetTransientState` destroys children, `stop()` clears the
+    // queue), so a failure there is reported and the switch still proceeds.
+    const step = (name: string, run: () => void, mode: "critical" | "best-effort" = "best-effort"): void => {
+      try {
+        run();
+      } catch (error) {
+        failures.push({ step: name, error: errorMessage(error) });
+        if (mode === "critical") critical.push(name);
+      }
+    };
+    step("manual compaction", () => this.rt.run.abortManualCompaction(reason), "critical");
+    step("active run", () => this.rt.run.stopActiveRun(reason), "critical");
     // A manual compaction has no pump, so `stopActiveRun` does not clear its queue; and a
     // compaction aborted by this switch can settle AFTER the caller starts awaiting the restore,
     // where `resumeAfterCompaction()` would drain input into the session being replaced (or start
     // a turn on the new one). Drop it here, where every switch path passes.
-    this.rt.run.clearQueuedInput();
-    this.rt.run.cascadeAbortToChildren(reason);
-    this.rt.run.discardPreforkRuns();
-    this.rt.sidecars.streamHub.endAllCommands();
+    step("queued input", () => this.rt.run.clearQueuedInput());
+    step("child abort", () => this.rt.run.cascadeAbortToChildren(reason));
+    step("prefork discard", () => this.rt.run.discardPreforkRuns());
+    step("command previews", () => this.rt.sidecars.streamHub.endAllCommands());
+    if (failures.length > 0) {
+      // Report first, so a later throw cannot hide which steps failed.
+      this.rt.sidecars.warn?.("session unload completed with errors", { reason, failures });
+    }
+    if (critical.length > 0) {
+      // The caller's recovery path (re-open the departure) is the right outcome: committing a
+      // switch while the old pump/summarizer may still write is worse than not switching at all.
+      throw new Error(`Session unload could not stop ${critical.join(", ")}; the switch was aborted.`);
+    }
     return queued;
   }
 
@@ -585,13 +613,32 @@ export class SessionLifecycleService {
     try {
       await this.rt.transcript.sessionPersistence.restore(leavingId, { repairRuntime: false, silent: true });
     } catch (error) {
-      // Best-effort: the host still gets the original failure, and the in-memory state is already
-      // the departure's (the target was never adopted). The report is itself contained so a broken
-      // logger cannot replace the actionable error.
+      // The reload is what re-points model / effort / mode / approvals at the departure after a
+      // post-read failure applied the target's. When it fails too, the live host is a MIX — the
+      // departure's data with the target's settings — and the next save would write those settings
+      // into the departure's record (the exact corruption the ordering above exists to prevent).
+      // Nothing in memory can prove which half a field came from, so refuse persistence until a
+      // later adoption replaces the session: an unsaved conversation is recoverable, a silently
+      // rewritten one is not.
+      //
+      // Only a departure with a real RECORD can be corrupted. A conversation whose first `/resume`
+      // failed before it was ever written (or a bootstrap stand-in) has nothing to protect, and
+      // blocking it would strand a session that still needs its first save.
+      let hasRecord = true;
       try {
-        this.rt.sidecars.warn?.("failed to re-open the previous session after a failed resume", {
-          error: errorMessage(error),
-        });
+        hasRecord = (await this.rt.transcript.getSessionStore()?.exists(leavingId)) ?? false;
+      } catch {
+        // Unknown (a host without a readable store): be conservative.
+        hasRecord = true;
+      }
+      if (hasRecord) this.rt.transcript.sessionPersistence.blockWrites?.();
+      // Best-effort report: the host still gets the original failure, and the report is itself
+      // contained so a broken logger cannot replace the actionable error.
+      try {
+        this.rt.sidecars.warn?.(
+          "failed to re-open the previous session after a failed resume; session writes are paused",
+          { error: errorMessage(error) }
+        );
       } catch {
         // Nothing else to do.
       }

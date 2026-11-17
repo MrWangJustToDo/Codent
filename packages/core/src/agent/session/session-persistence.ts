@@ -171,6 +171,18 @@ export class SessionPersistence {
   }
 
   /**
+   * Refuse every write until the next session adoption.
+   *
+   * The failed-`/resume` recovery path: the live host is a mix of the departure's data and the
+   * target's settings, and nothing in memory can prove which half a field came from. Persisting it
+   * would rewrite the departure's record with the target's model / effort / plan / approvals, so
+   * the session is left unsaved until a later adoption replaces it.
+   */
+  blockWrites(): void {
+    this.host.session.blockPersist();
+  }
+
+  /**
    * Give up a restore stand-in after a failed load.
    *
    * Without this the refusal in {@link SessionService.setSessionDataPlaceholder} outlives the failed

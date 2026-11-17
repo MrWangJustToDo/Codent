@@ -29,6 +29,7 @@ import {
   DEFAULT_AGENT_SESSION_CHANNELS,
   DEFAULT_EVENT_LOG_RULES,
   EXTENSION_EVENT_VISIBILITY,
+  JobTransitionTracker,
   createJobsExtension,
   registerCoreEnv,
   summarizeJobs,
@@ -478,6 +479,77 @@ function createHarness() {
   assert.equal(plain(summarizeJobs([taskOwed], now)), "✓ 1 pending");
   // …and delivery (the flag the ledger flips) revokes the line.
   assert.equal(summarizeJobs([{ ...taskOwed, pendingPickup: false }], now), null);
+}
+
+// ---------------------------------------------------------------------------
+// 5. `JobTransitionTracker`: one transition per move, restored rows are not news, the start run
+//    is pinned
+// ---------------------------------------------------------------------------
+//
+// The tracker owns the two facts a delta-less notification cannot carry: the previous status (so a
+// move is reported exactly once) and the run that first saw the row (so a unit that outlives its
+// turn is not attributed to whatever run is current when it ends).
+{
+  const row = (jobId, status, extra = {}) => ({
+    jobId,
+    kind: "command",
+    label: `run ${jobId}`,
+    status,
+    exitCode: status === "running" ? null : 0,
+    startedAt: 1,
+    endedAt: status === "running" ? null : 2,
+    pendingPickup: false,
+    ...extra,
+  });
+
+  const tracker = new JobTransitionTracker();
+  const first = tracker.diff([row("a", "running"), row("b", "running")], "run-1");
+  assert.deepEqual(
+    first.map((t) => [t.row.jobId, t.previousStatus, t.startedIn]),
+    [
+      ["a", undefined, "run-1"],
+      ["b", undefined, "run-1"],
+    ],
+    "a starting row is reported once, with no previous status, pinned to the run that saw it"
+  );
+
+  // Same list again: no transition, and the pinned run survives a later `currentRunId`.
+  assert.deepEqual(tracker.diff([row("a", "running"), row("b", "running")], "run-2"), []);
+  const ended = tracker.diff([row("a", "exited"), row("b", "running")], "run-2");
+  assert.deepEqual(
+    ended.map((t) => [t.row.jobId, t.previousStatus, t.row.status, t.startedIn]),
+    [["a", "running", "exited", "run-1"]],
+    "the terminal move carries the previous status and the ORIGINAL run, not the current one"
+  );
+
+  // A terminal row seen for the first time is a restored record, not a transition.
+  assert.deepEqual(tracker.diff([row("a", "exited"), row("restored", "exited")], "run-3"), []);
+  assert.equal(tracker.size, 2, "the restored row is tracked so it cannot report twice");
+
+  // A row that leaves the list is forgotten; a reused id starts a fresh history.
+  assert.deepEqual(tracker.diff([row("a", "exited"), row("restored", "exited")], "run-4"), []);
+  tracker.diff([row("a", "exited")], "run-4");
+  assert.equal(tracker.size, 1, "a removed row stops being tracked");
+  assert.deepEqual(
+    tracker.diff([row("a", "exited"), row("restored", "running")], "run-5").map((t) => [t.row.jobId, t.startedIn]),
+    [["restored", "run-5"]],
+    "a reused id starts over"
+  );
+
+  // A unit first seen outside any run has no attribution; the caller's fallback then applies.
+  const orphan = tracker.diff([row("orphan", "running")], null);
+  assert.deepEqual(
+    orphan.map((t) => t.startedIn),
+    [undefined]
+  );
+
+  tracker.clear();
+  assert.equal(tracker.size, 0, "reset drops every row's history");
+  assert.deepEqual(
+    tracker.diff([row("a", "running")], "run-6").map((t) => t.startedIn),
+    ["run-6"],
+    "and the id is reported as a start again"
+  );
 }
 
 console.log("command-jobs-channel validation passed");

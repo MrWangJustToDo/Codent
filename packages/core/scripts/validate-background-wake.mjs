@@ -197,7 +197,10 @@ for (const stopped of ["aborted", "error"]) {
   );
   await deliver(jobId);
 }
-managed.setStatus("idle", "validator");
+// A settled fault is final (`setStatus("idle")` is refused over one now): `reset` is the explicit
+// way back to a fresh turn.
+managed.transitionStatus({ type: "reset" });
+assert.equal(managed.getStatus(), "idle");
 
 // ============================================================================
 // 4. Manual compaction owns the transcript and is not a pump

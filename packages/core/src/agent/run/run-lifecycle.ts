@@ -238,7 +238,10 @@ export function abortManagedAgentRun(
   // `alreadySettled` still wins: a run that FAILED and is only kept `awaiting_user` by a pending
   // `ask_user` has no running work left, so a teardown must not label it "aborted" (the noise the
   // status read alone was added to suppress — 459 rows vs 58 real cancels).
-  const hadRun = !alreadySettled && (options.hadLiveRun ?? isActiveStatus(host.getStatus()));
+  // An EXPLICIT `hadLiveRun` is authoritative: the caller snapshotted it before an abort path
+  // (the compaction lease) wrote the verdict, so `alreadySettled` here describes the abort itself
+  // rather than the turn that was running before it.
+  const hadRun = options.hadLiveRun ?? (!alreadySettled && isActiveStatus(host.getStatus()));
   if (hadRun) host.emitEvent("agent:abort", { reason: effectiveReason });
   host.run.abort(effectiveReason);
   // The status flip normally already happened in the abort listener above (it fires

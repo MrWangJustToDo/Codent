@@ -335,7 +335,7 @@ const toolDef = (name) => ({
     name: "interceptor",
     activate(ctx) {
       live = ctx;
-      ctx.registerInterceptor("test:lease-probe", () => {
+      ctx.registerInterceptor("tool:before:lease_probe", () => {
         fired += 1;
         return false;
       });
@@ -350,9 +350,9 @@ const toolDef = (name) => ({
   });
 
   assert.deepEqual(await revoked.llm.complete({ prompt: "hi" }), { text: "ok" }, "a live extension may call the model");
-  await revoked.events.intercept({ type: "test:lease-probe", payload: {} });
+  await revoked.events.intercept({ type: "tool:before:lease_probe", payload: {} });
   assert.equal(fired, 1, "a live extension's emit reaches another extension's interceptor");
-  assert.equal(revoked.events.hasInterceptors("test:lease-probe"), true);
+  assert.equal(revoked.events.hasInterceptors("tool:before:lease_probe"), true);
 
   await runner.setEnabled("caller", false);
 
@@ -361,13 +361,13 @@ const toolDef = (name) => ({
     (error) => error?.code === "revoked",
     "a revoked extension's completion is refused (it must not spend tokens)"
   );
-  await revoked.events.intercept({ type: "test:lease-probe", payload: {} });
+  await revoked.events.intercept({ type: "tool:before:lease_probe", payload: {} });
   assert.equal(fired, 1, "and its emit no longer reaches anyone");
-  assert.equal(revoked.events.hasInterceptors("test:lease-probe"), false, "nor does it advertise interceptors");
+  assert.equal(revoked.events.hasInterceptors("tool:before:lease_probe"), false, "nor does it advertise interceptors");
 
   // The live extension is unaffected — this is a lease, not a global switch.
-  assert.equal(live.events.hasInterceptors("test:lease-probe"), true);
-  await live.events.intercept({ type: "test:lease-probe", payload: {} });
+  assert.equal(live.events.hasInterceptors("tool:before:lease_probe"), true);
+  await live.events.intercept({ type: "tool:before:lease_probe", payload: {} });
   assert.equal(fired, 2);
 
   await runner.destroyAll();
@@ -554,6 +554,47 @@ const toolDef = (name) => ({
 
   const on = await runner.setEnabled("hung-deactivate", true);
   assert.equal(on.ok, true, "a hung deactivate must not lock the toggle token forever");
+  await runner.destroyAll();
+}
+
+// ============================================================================
+// A disable aborts the incarnation's in-flight completion
+// ============================================================================
+//
+// The lease refuses a NEW call from a revoked context, but a request already in flight kept running:
+// it billed, emitted side-query rows, and resolved into code the panel already reported as disabled.
+// The incarnation's own abort source is what a disable now pulls.
+{
+  let observedSignal;
+  const runner = new ExtensionRunner({
+    getRuntime: () => ({
+      complete: async (_id, request) => {
+        observedSignal = request.signal;
+        // Never resolves on its own: only the disable can settle this request.
+        return new Promise((_resolve, reject) => {
+          request.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        });
+      },
+    }),
+  });
+  let ctx;
+  await runner.loadExtension({
+    id: "in-flight",
+    name: "in-flight",
+    activate(context) {
+      ctx = context;
+    },
+  });
+  assert.equal(observedSignal, undefined, "no request yet");
+  const settled = ctx.llm.complete({ prompt: "hi" }).then(
+    () => "resolved",
+    () => "rejected"
+  );
+  assert.equal(observedSignal?.aborted, false, "the request carries a live signal");
+
+  await runner.setEnabled("in-flight", false);
+  assert.equal(observedSignal?.aborted, true, "disabling aborts the request that incarnation issued");
+  assert.equal(await settled, "rejected");
   await runner.destroyAll();
 }
 

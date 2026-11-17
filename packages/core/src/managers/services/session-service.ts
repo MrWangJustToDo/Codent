@@ -7,6 +7,7 @@
 
 import { getFirstUserInput } from "../../agent/compaction/message-utils.js";
 import { dehydrateUIMessages, hydrateUIMessages, type MediaHydrationMiss } from "../../agent/media/media-utils.js";
+import { PersistGate } from "../../agent/persistence/persist-gate.js";
 import { SessionLockController } from "../../agent/persistence/session-lock.js";
 import { assertSafeSessionId } from "../../agent/persistence/types.js";
 import { TITLE_SYSTEM_PROMPT } from "../../agent/prompt/session-summary-prompts.js";
@@ -210,6 +211,7 @@ export class SessionService {
 
   setSessionData(data: SessionData): void {
     this.data = data;
+    this.persistGate.clear();
     // Adopting any other session ends a restore placeholder's life (see
     // {@link setSessionDataPlaceholder}).
     if (this.restorePlaceholder && this.restorePlaceholder !== data) this.restorePlaceholder = null;
@@ -261,6 +263,7 @@ export class SessionService {
    * leaving session is a real (not stand-in) record.
    */
   private persistPaused = 0;
+  private readonly persistGate = new PersistGate();
 
   /** Refuse writes while a restore is applying the target's state to the host. Nesting-safe. */
   pausePersist(): void {
@@ -269,6 +272,11 @@ export class SessionService {
 
   resumePersist(): void {
     this.persistPaused = Math.max(0, this.persistPaused - 1);
+  }
+
+  /** Refuse every write until the next session adoption (see `PersistGate`). */
+  blockPersist(): void {
+    this.persistGate.block();
   }
 
   private ensureSession(): void {
@@ -385,6 +393,7 @@ export class SessionService {
     // The direct writer (async title save) is not part of `persistQueue`, so it needs the same
     // lost-lock guard. It does not re-acquire: the queued path owns that recovery.
     if (this.sessionLock.hasLost(data.id)) return false;
+    if (this.persistGate.isBlocked()) return false;
     // Track the direct write too: `generateSessionTitle` calls this outside `persistQueue`, and
     // `close()` must be able to wait for it before the log is deleted.
     const run = (async () => {
@@ -437,7 +446,7 @@ export class SessionService {
     // target's transcript is not loaded yet, so nothing this session writes can be its truth.
     // A paused restore has the same problem with the OPPOSITE identity: the data is still the
     // leaving session while the setters already describe the target.
-    if (this.restorePlaceholder || this.persistPaused > 0) return false;
+    if (this.restorePlaceholder || this.persistPaused > 0 || this.persistGate.isBlocked()) return false;
     const resolveInput = typeof input === "function" ? input : () => input;
 
     // State-only writes keep their own turn: they carry no transcript, so folding them into a

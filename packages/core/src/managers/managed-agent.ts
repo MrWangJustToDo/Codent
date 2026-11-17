@@ -73,6 +73,7 @@ import {
   TASK_JOB_KIND,
   type BackgroundWakeCause,
 } from "../agent/jobs/background-work.js";
+import { JobTransitionTracker } from "../agent/jobs/job-transition-tracker.js";
 import { ModeCoordinator } from "../agent/mode/mode-coordinator.js";
 import { ModeFacet } from "../agent/mode/mode-facet.js";
 import { SESSION_LOCK_TTL_MS } from "../agent/persistence/session-lock.js";
@@ -119,6 +120,7 @@ import { getEnv } from "../env";
 import { offerableReasoningEfforts } from "../models/types.js";
 import { DEFAULT_AGENT_MAX_ITERATIONS } from "../runtime-types/agent-limits.js";
 import {
+  coerceSettledOutcome,
   deriveAgentState,
   projectAgentStatus,
   transition,
@@ -214,7 +216,6 @@ import type {
   AgentSessionSubagentSummary,
   AgentMode,
   SessionInteractionsSnapshot,
-  SessionJobSummary,
   SessionJobsSnapshot,
   QueuedMessagesSnapshot,
   WhenClearStatus,
@@ -618,14 +619,12 @@ export class ManagedAgent {
   private lastModeSignature: string | null = null;
   private lastToolPresentationSignature: string | null = null;
   /**
-   * Last observed status per background job, for the `job:changed` transitions.
+   * Background rows' previous status + first-seen run, for the `job:changed` transitions.
    *
-   * The registry's listener carries the current list but not a delta; a job's start and its
-   * terminal status land in different notifications, so the previous value has to be remembered
-   * here. A terminal row observed for the first time is a RESTORED job (its start predates this
-   * process) and must not be reported as a transition.
+   * The two facts are one piece of state (a row id's history across publishes), so they live in one
+   * owner rather than as two maps on the composition root; see {@link JobTransitionTracker}.
    */
-  private readonly lastJobStatuses = new Map<string, SessionJobSummary["status"]>();
+  private readonly jobTransitions = new JobTransitionTracker();
   readonly sessionPersistence: SessionPersistence;
   /** Session identity + tracker facet (persistence, setSessionData, placeholders). */
   private readonly sessionFacet: SessionFacet;
@@ -1034,7 +1033,7 @@ export class ManagedAgent {
           this.backgroundWork = undefined;
           this.commandService = undefined;
           this.backgroundWakeSignature = null;
-          this.lastJobStatuses.clear();
+          this.jobTransitions.clear();
           if (!work) return Promise.resolve();
           return work.reset(reason).catch((error: unknown) => {
             this.emitDiagnostic("jobs", "Failed to reset background work", {
@@ -1157,6 +1156,21 @@ export class ManagedAgent {
       this.emitDiagnostic("session", "Ignored a status write that would drop a pending wait", {
         level: "warn",
         data: { status, wait: this.agentState.wait },
+      });
+      return;
+    }
+    // A settled fault is final — the rule `coerceSettledOutcome` enforces on the transition path,
+    // which rebuilding the axes from a projection cannot see. A write that would REPLACE it is
+    // ignored outright, like the guards above: the axes a rebuild produces for `running`/`thinking`
+    // are `busy + streaming`, a combination `transition` never creates beside an outcome, and
+    // keeping it left a pure-`setStatus` host unable to start a turn after a failure. `reset` (a
+    // new conversation) and `compaction-end` after `setError("")` (the manual repair the compaction
+    // controller performs) are the explicit escapes.
+    const repaired = event === "reset" || event === "teardown" || (event === "compaction-end" && !this.getError());
+    if (!repaired && coerceSettledOutcome(this.agentState, next.outcome) !== next.outcome) {
+      this.emitDiagnostic("session", "Ignored a status write that would rewrite a settled verdict", {
+        level: "warn",
+        data: { status, outcome: this.agentState.outcome },
       });
       return;
     }
@@ -1422,6 +1436,10 @@ export class ManagedAgent {
 
   /** Clear retained run progress and publish the idle value (`current: 0`). */
   resetIterationProgress(): void {
+    // The turn's phase budget belongs to the conversation that spent it. A `/resume` swaps the
+    // transcript without going through the controller's `clearTranscript` (that is `/new`), so the
+    // session-scoped reset is where both paths must agree.
+    this.getChatController()?.resetTurnBudget();
     // finalizeRun and resetTransientState can both reach a terminal/reset path;
     // only publish when there is progress to clear.
     if (this.run.getIterationState() === null) return;
@@ -1684,7 +1702,7 @@ export class ManagedAgent {
     this.lastModeSignature = null;
     this.lastToolPresentationSignature = null;
     this.lastSubagentsSignature = null;
-    this.lastJobStatuses.clear();
+    this.jobTransitions.clear();
     this.interactionsRevision = -1;
     this.dispatchEvent = (event) => {
       bus.emit(event.type as never, event.payload as never, {
@@ -2688,24 +2706,22 @@ export class ManagedAgent {
    * the footer and the wake cannot disagree about what happened.
    */
   private publishBackgroundWork({ jobs, finished }: BackgroundWorkChange): void {
-    const seen = new Set<string>();
-    for (const job of jobs) {
-      seen.add(job.jobId);
-      const previousStatus = this.lastJobStatuses.get(job.jobId);
-      if (previousStatus === job.status) continue;
-      this.lastJobStatuses.set(job.jobId, job.status);
-      // First observation of a terminal row = a restored job, not a transition.
-      if (previousStatus === undefined && job.status !== "running") continue;
-      this.emitEvent("job:changed", {
-        jobId: job.jobId,
-        kind: job.kind,
-        label: job.label,
-        status: job.status,
-        ...(previousStatus !== undefined ? { previousStatus } : {}),
-        exitCode: job.exitCode,
-      });
+    for (const { row, previousStatus, startedIn } of this.jobTransitions.diff(jobs, this.getCurrentRunId())) {
+      this.emitEvent(
+        "job:changed",
+        {
+          jobId: row.jobId,
+          kind: row.kind,
+          label: row.label,
+          status: row.status,
+          ...(previousStatus !== undefined ? { previousStatus } : {}),
+          exitCode: row.exitCode,
+        },
+        // An explicit run id suppresses the live-run fallback (`emit-agent-telemetry`), so a job
+        // that outlived its turn cannot be stamped with a later one.
+        startedIn ? { runId: startedIn } : undefined
+      );
     }
-    for (const id of [...this.lastJobStatuses.keys()]) if (!seen.has(id)) this.lastJobStatuses.delete(id);
     this.eventBus?.emit("session:jobs", { jobs });
     if (finished.length > 0) {
       // The kind of what just ended is known HERE (the rows carry it), while the pump-exit path only
@@ -3016,11 +3032,19 @@ export class ManagedAgent {
    * any pending tool controllers.
    */
   abort(reason?: string, options: { userCancel?: boolean; hadLiveRun?: boolean } = {}): void {
+    // Snapshot "was there a run to interrupt" BEFORE the compaction branch writes the verdict:
+    // `abortForUserCancel` records `aborted` for an auto/reactive lease, and the shared abort path
+    // would then read a settled turn and drop the `agent:abort` row — the signal `agent:abort`
+    // observers (memory selection discard) run on. A manual `/compact` has no run of its own, so
+    // its cancel must not mint one.
+    const settledBefore = this.agentState.outcome === "error" || this.agentState.outcome === "aborted";
+    const manualCompaction = this.compactions.ownsManual();
+    const hadLiveRun = options.hadLiveRun ?? (!settledBefore && !manualCompaction && isActiveStatus(this.getStatus()));
     // A user stop leaves the terminal verdict to `interrupt` below; a teardown restores the phase
     // because no run remains to publish one.
     if (options.userCancel) this.compactions.abortForUserCancel(reason ?? "user-cancelled");
     else this.compactions.abortForTeardown(reason ?? "aborted");
-    abortManagedAgentRun(this, reason, { hadLiveRun: options.hadLiveRun });
+    abortManagedAgentRun(this, reason, { hadLiveRun });
     // A stopped run must not keep pumping: `pumpToolPhases` only checks `token.isCurrent` after
     // the stream, so without this an aborted/destroyed agent still ran plan sync, auto-approve and
     // the command-safety round trip (a real CoreEnv call on a remote workspace), and could enter
@@ -3205,7 +3229,7 @@ export class ManagedAgent {
     this.backgroundWork = undefined;
     this.commandService = undefined;
     this.backgroundWakeSignature = null;
-    this.lastJobStatuses.clear();
+    this.jobTransitions.clear();
     // No command-source fallback: the source is only ever built through the facade
     // (`getCommandService()` ensures it first), and the two fields are dropped together, so
     // "a source without a facade" does not exist.
@@ -3345,7 +3369,14 @@ export class ManagedAgent {
       // abort above drops this lease, so without this guard teardown would drain the queue and
       // start a turn on an agent that is no longer registered (status `running` → `error`, and a
       // write attempted against the session that was just closed).
-      if (!this.destroyed) this.getChatController()?.resumeAfterCompaction();
+      if (!this.destroyed) {
+        this.getChatController()?.resumeAfterCompaction();
+        // A background unit that finished while the lease owned the agent was refused a wake
+        // (`shouldDeferQueue` reads the lease), and `resumeAfterCompaction` drains only USER input.
+        // With no pump in flight its completion had no path back to a model call, so it waited for
+        // the user's next keystroke — the one case the "an idle session is woken" rule missed.
+        void this.wakeForBackgroundWork();
+      }
     }
   }
 

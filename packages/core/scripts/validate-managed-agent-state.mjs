@@ -400,4 +400,33 @@ registerCoreEnv({
   assert.equal(agent.getL1State().pendingApprovalCount, 0);
 }
 
+// ---------------------------------------------------------------------------
+// 6. A settled fault cannot be rewritten by the legacy status writer
+// ---------------------------------------------------------------------------
+// `setStatus` rebuilds the axes from a status projection, which cannot see the rule `transition`
+// enforces through `coerceSettledOutcome`. A host writing "completed" (or "idle") after a failed turn
+// used to produce a success carrying a stale error — the one verdict no other writer can reach.
+{
+  const manager = new AgentManager();
+  const agent = await manager.createManagedAgent({ name: "set-status-fault", model: "test-model" });
+  agent.transitionStatus({ type: "prepare" });
+  agent.transitionStatus({ type: "stream-end", result: "error", error: "boom" });
+  assert.equal(agent.getStatus(), "error");
+
+  agent.setStatus("completed");
+  assert.equal(agent.getStatus(), "error", "`completed` cannot turn a failure into a success");
+  assert.equal(agent.getAgentState().errorMessage, "boom", "and the message survives the refused write");
+  agent.setStatus("idle");
+  assert.equal(agent.getStatus(), "error", "nor can `idle`");
+
+  const aborted = await manager.createManagedAgent({ name: "set-status-aborted", model: "test-model" });
+  aborted.transitionStatus({ type: "prepare" });
+  aborted.transitionStatus({ type: "interrupt" });
+  assert.equal(aborted.getStatus(), "aborted");
+  aborted.setStatus("completed");
+  assert.equal(aborted.getStatus(), "aborted", "an abort is likewise final");
+  aborted.setStatus("error");
+  assert.equal(aborted.getStatus(), "error", "a failure may replace an abort (the newer fact wins)");
+}
+
 console.log("managed-agent-state validation passed");

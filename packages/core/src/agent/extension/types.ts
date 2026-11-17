@@ -2,6 +2,7 @@ import type { ExtensionContextUsage, ExtensionLlm } from "./context-access.js";
 import type { DispatchRank } from "../dispatch-order.js";
 import type { ExtensionObserverSurface } from "./event-visibility.js";
 import type { ExtensionZod } from "./extension-zod.js";
+import type { InterceptorHook } from "./interceptor-hooks.js";
 import type { MessageTransformer } from "./message-transform-types.js";
 import type { ToolCallResult, ToolExecutionOptions } from "./tool-execution-types.js";
 import type { ExtensionUI } from "./ui-types.js";
@@ -26,6 +27,7 @@ export type { ModelCapability } from "../../models/types.js";
 // (including the one runtime value, `MODEL_CAPABILITY_FLAGS`) have a single home.
 
 export type { ToolCallResult, ToolExecutionOptions } from "./tool-execution-types.js";
+export type { InterceptorHook, StaticInterceptorHook, ToolInterceptorFamily } from "./interceptor-hooks.js";
 export type {
   MessageTransformContext,
   MessageTransformPhase,
@@ -352,9 +354,16 @@ export interface ExtensionEventBus {
   /**
    * Register an interceptor. `rank` is the declaring extension's dispatch position — supplied by
    * the runner so the shared scope node can order interceptors across extensions.
+   *
+   * The hook name is a closed set (see {@link InterceptorHook}): a family typo would register a
+   * handler that never fires, which for a guard is a silent fail-open.
    */
-  on<T extends InterceptableEvent>(type: string, handler: EventInterceptor<T>, rank?: DispatchRank): () => void;
-  off<T extends InterceptableEvent>(type: string, handler: EventInterceptor<T>): void;
+  on<T extends InterceptableEvent>(
+    type: InterceptorHook,
+    handler: EventInterceptor<T>,
+    rank?: DispatchRank
+  ): () => void;
+  off<T extends InterceptableEvent>(type: InterceptorHook, handler: EventInterceptor<T>): void;
 }
 
 // ============================================================================
@@ -486,7 +495,10 @@ export interface ExtensionContext {
    */
   registerToolOutputDecorator(toolName: string, decorator: ToModelOutputDecorator): () => void;
   registerCommand(cmd: ExtensionCommand): void;
-  registerInterceptor<T extends InterceptableEvent>(eventType: string, handler: EventInterceptor<T>): () => void;
+  registerInterceptor<T extends InterceptableEvent>(
+    eventType: InterceptorHook,
+    handler: EventInterceptor<T>
+  ): () => void;
   /**
    * Register this extension's per-turn context injection (enabled content + disabled
    * notice) in one call. Each user turn the runner emits this extension as its own
