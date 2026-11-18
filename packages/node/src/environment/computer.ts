@@ -15,6 +15,12 @@
  * - macOS: the app running Node needs **Accessibility** (input) and **Screen Recording** (capture).
  *   Screen Recording is detectable (an all-black frame, warned about once); Accessibility is NOT —
  *   the display still reports a size and clicks are dropped by the OS without an error.
+ *   A process WITHOUT the permission still reads `getScreenSize` / `getMousePos` / `screenshot`
+ *   perfectly, so an experiment run from a plain shell looks like "the addon is broken" (the pointer
+ *   never moves). Run such an experiment inside the host process that actually holds the permission.
+ *   The coordinate space is the same as `getScreenSize` (logical points): `capture()` returns the
+ *   backing store (2x on a Retina panel), while `moveMouse` / `scrollMouse` / `getMousePos` stay in
+ *   points — which is why the display scaling in this adapter needs no Retina correction.
  * - Linux: needs X11. Wayland reports a screen but refuses injection, so `getScreenSize()` is the
  *   probe that decides presence here too.
  */
@@ -196,12 +202,26 @@ function clamp(value: number, min: number, max: number): number {
  * truncates to 0) or make the PNG encoder throw — an options-validation bug that only shows up as
  * "clicks land in the corner".
  */
+/** Smallest overridden display: below this the screenshot is unreadable and every click collapses. */
+const MIN_DISPLAY = 64;
+
 function normalizeDisplay(
   requested: { width: number; height: number } | undefined,
   screen: { width: number; height: number }
 ) {
   if (requested && Number.isInteger(requested.width) && Number.isInteger(requested.height)) {
-    if (requested.width > 0 && requested.height > 0) return requested;
+    // Bounded: the model-facing frame is the input to the PNG encoder, so `{width: 1e6}` asked it to
+    // allocate terabytes, and `{width: 1}` collapsed every click onto (0,0).
+    const maxWidth = MAX_DISPLAY.width * 4;
+    const maxHeight = MAX_DISPLAY.height * 4;
+    if (
+      requested.width >= MIN_DISPLAY &&
+      requested.height >= MIN_DISPLAY &&
+      requested.width <= maxWidth &&
+      requested.height <= maxHeight
+    ) {
+      return requested;
+    }
   }
   return fitDisplay(screen);
 }

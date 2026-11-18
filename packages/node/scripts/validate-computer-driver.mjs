@@ -200,6 +200,21 @@ function fakeRobot(overrides = {}) {
   );
   assert.deepEqual(computer.capabilities, { zoom: true, cursorPosition: true });
 
+  // A `display` override is bounded: it is the input to the PNG encoder, so an absurd size asked for
+  // terabytes and a 1x1 frame collapsed every click onto (0,0). Sane values are honoured.
+  {
+    const { robot } = fakeRobot();
+    const bound = (display) => createNodeComputer({ robot, display }).display;
+    assert.deepEqual(bound({ width: 640, height: 400 }), { width: 640, height: 400 }, "a usable override");
+    assert.deepEqual(bound({ width: 1, height: 1 }), { width: 1280, height: 720 }, "a 1x1 frame is refused");
+    assert.deepEqual(
+      bound({ width: 1_000_000, height: 1_000_000 }),
+      { width: 1280, height: 720 },
+      "a terabyte frame is refused"
+    );
+    assert.deepEqual(bound({ width: 640.5, height: 400 }), { width: 1280, height: 720 }, "non-integers too");
+  }
+
   // Screenshot: full screen in, display-sized PNG out.
   const shot = readPng(await computer.screenshot());
   assert.equal(shot.width, 1280);
