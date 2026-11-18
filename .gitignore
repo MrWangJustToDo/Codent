@@ -32,6 +32,7 @@ web-ext.config.ts
 */.env
 .claude
 .mcp.json
+.mcp_back.json
 .agents
 tmp/
 skills-lock.json
