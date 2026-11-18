@@ -107,7 +107,10 @@ assert.match(runSrc, /onError: \(message\) => \{\s*failed = true;/, "the task ad
   // the caller's signal, and the `failed = false` reset follows it.
   const verdictStart = runSrc.indexOf("const childState");
   const verdictEnd = runSrc.indexOf("if (aborted) {");
-  assert.ok(verdictStart >= 0 && verdictEnd > verdictStart, "the abort verdict is still an assignment before its branch");
+  assert.ok(
+    verdictStart >= 0 && verdictEnd > verdictStart,
+    "the abort verdict is still an assignment before its branch"
+  );
   const verdict = runSrc.slice(verdictStart, verdictEnd);
   assert.match(verdict, /aborted = aborted \|\|/, "…it starts from the span's own abort flag");
   assert.match(verdict, /result\.aborted/, "…reads the span's abort verdict");
