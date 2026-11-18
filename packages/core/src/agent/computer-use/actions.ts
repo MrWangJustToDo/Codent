@@ -144,8 +144,10 @@ export const computerActionSchema = z.object({
       "Perform several actions in one call, in order. Cheaper than one call per action: it is one " +
         "approval and ONE screenshot at the end, so use it for sequences you are already sure about. " +
         "Set only the fields the action uses — the rest are ignored (a strict provider may require " +
-        "them to be present anyway). Coordinates and `modifiers` are NOT shared between entries: each " +
-        "entry names its own target, and an entry that needs a modifier carries it."
+        "them to be present anyway). A call-level `text` / `keys` / `button` applies to EVERY entry " +
+        "that reads it, so set them per entry when two entries need different values. Coordinates " +
+        "and `modifiers` are NOT shared between entries: each entry names its own target, and an " +
+        "entry that needs a modifier carries it."
     ),
 });
 
@@ -484,9 +486,16 @@ async function runActions(
 /**
  * A batch entry inherits the payload fields it omitted.
  *
- * `modifiers` is deliberately NOT among them: it is a property of one gesture, not of the sequence,
- * and inheriting it made a call-level `modifiers` poison every entry (including a `type`, which
- * refuses them). Coordinates are never inherited either — each entry points at its own place.
+ * `text` / `keys` / `button` ARE inherited, and an inherited value applies to EVERY entry that reads
+ * it (two `type` entries with one call-level `text` type it twice). The asymmetry with `modifiers` is
+ * about failure modes, not about which one is "more per-entry": a wrongly inherited modifier is an
+ * ERROR on every entry — a `type` entry refuses modifiers, so one call-level `modifiers` failed the
+ * whole batch (10 of 13 errors in a measured session) — while a wrongly inherited payload is only a
+ * repeated value, visible in the screenshot that comes back. Refusing a call-level `text` would
+ * recreate the `"type" needs text` failure this inheritance exists to fix.
+ *
+ * `modifiers` is refused at the call level and coordinates are never inherited — each entry points at
+ * its own place, and pointing a second entry at the first one's target is never what was meant.
  */
 function withInheritedDefaults(entry: ComputerActionEntry, outer: ComputerActionInput): ComputerActionEntry {
   const merged: ComputerActionEntry = { ...entry };

@@ -322,17 +322,18 @@ export const agentSessionRoutes = new Hono()
     return c.json({ sessions });
   })
   .delete("/sessions/:sessionId", async (c) => {
-    // `errorMessage` comes from the same dynamic import as the host: this route must not add a static
-    // `@codent/core` runtime import (the dts bundle resolves core as types only).
-    const { createLocalAgentSessionHost, errorMessage } = await loadCore();
+    // `errorMessage` / `SessionLockedError` come from the same dynamic import as the host: this route
+    // must not add a static `@codent/core` runtime import (the dts bundle resolves core as types only).
+    const { createLocalAgentSessionHost, errorMessage, SessionLockedError } = await loadCore();
     const host = createLocalAgentSessionHost({ manager: getServerManager() });
     let removed: boolean;
     try {
       removed = (await host.deleteSession?.(c.req.param("sessionId"))) ?? false;
     } catch (error) {
-      // `deleteSession` refuses a log another PROCESS is writing (`SessionLockedError`). That is a
-      // conflict, not a server fault: without this mapping the message ("open in another process")
-      // was lost behind a bare 500, and a client could not tell "try again later" from "broken".
+      // ONLY a held log is a conflict (retry later). Anything else — a disk fault, a serialization bug
+      // — is the server failing, and mapping it to 409 told the client to wait instead of reporting a
+      // broken server. Everything else falls through to the app's one error boundary (500 + logged).
+      if (!(error instanceof SessionLockedError)) throw error;
       return c.json({ error: true, message: errorMessage(error) }, 409);
     }
     if (!removed) return c.json({ error: true, message: "Session not found" }, 404);
