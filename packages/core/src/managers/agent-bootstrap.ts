@@ -157,12 +157,27 @@ export class AgentBootstrap {
   async bootstrapRoot(): Promise<BootstrapReport> {
     const report = createBootstrapReport();
     await this.loadDocumentation(report);
-    const skillRegistry = await this.loadSkills(report);
-    this.loadMcp();
-    await this.loadMemory(report);
-    await this.loadExtensions(report, skillRegistry);
+    // Base tools exist independently of any resource or extension: `task` was seeded by the skills
+    // loader, which made a core delegation tool look like it depended on `config.skills`.
+    this.seedBaseTools();
+    // Resources are constructed by the loader that consumes them (inside `loadExtensions`), so the
+    // `config.skills` / `config.memory` / `config.mcp` gate exists once — beside the extension it
+    // enables — instead of once here and again there.
+    await this.loadExtensions(report);
     this.logSummary(report);
     return report;
+  }
+
+  /** Seed the built-in tools that belong to the base toolset rather than to a feature. */
+  private seedBaseTools(): void {
+    const { managed } = this.deps;
+    // Through the service, not a direct record write: `task` must exist in the registry's stacks
+    // from the same moment the record has it (approval, presentation and the catalog all read the
+    // registry, and waiting for a later `useTools` left them disagreeing).
+    managed.toolService.seedTool(
+      BUILTIN_TOOL_NAMES.task,
+      createTaskTool({ parentAgentId: managed.id, manager: this.deps.manager })
+    );
   }
 
   private async loadDocumentation(report: BootstrapReport): Promise<void> {
@@ -204,7 +219,13 @@ export class AgentBootstrap {
     };
   }
 
-  private async loadSkills(report: BootstrapReport): Promise<SkillRegistry> {
+  /**
+   * Build the skill index from the configured directories and the bundled defaults.
+   *
+   * Called from the built-in skills extension's load site: the registry is what that extension
+   * (and the post-bootstrap `session:skill` snapshot) reads, so `config.skills` is gated once.
+   */
+  private async createSkillRegistry(report: BootstrapReport): Promise<SkillRegistry> {
     const { managed, config, env, rootPath } = this.deps;
     const skillsConfig = typeof config.skills === "object" && config.skills !== null ? config.skills : undefined;
 
@@ -226,30 +247,33 @@ export class AgentBootstrap {
       skillRegistry.registerAll(BUILTIN_SKILLS);
     }
 
-    // Through the service, not a direct record write: `task` must exist in the registry's stacks
-    // from the same moment the record has it (approval, presentation and the catalog all read the
-    // registry, and waiting for a later `useTools` left them disagreeing).
-    managed.toolService.seedTool(
-      BUILTIN_TOOL_NAMES.task,
-      createTaskTool({ parentAgentId: managed.id, manager: this.deps.manager })
-    );
     report.skills = { count: skillRegistry.size };
     return skillRegistry;
   }
 
-  private loadMcp(): void {
-    // Created (but not connected) here — connection + tool registration happens in the built-in MCP
-    // extension, so MCP participates in the unified extension lifecycle.
+  /**
+   * Construct (but do not connect) the MCP client registry.
+   *
+   * Connection + tool registration belong to the built-in MCP extension, so this is only the
+   * service the extension (and the `mcp` snapshot / `/mcp` / the synchronous teardown `forceKill`)
+   * reads. Called from that extension's load site, so `config.mcp` is gated in exactly one place.
+   */
+  private createMcpManager(): McpManager {
     const mcpManager = new McpManager(this.deps.env, this.deps.mcpElicit ? { elicit: this.deps.mcpElicit } : {});
     this.deps.managed.setMcpManager(mcpManager);
+    return mcpManager;
   }
 
-  private async loadMemory(report: BootstrapReport): Promise<void> {
-    const { managed, config, env, rootPath } = this.deps;
-    if (config.memory === false) {
-      report.memory = { enabled: false };
-      return;
-    }
+  /**
+   * Construct and initialize the memory store, or report why it is unavailable.
+   *
+   * Called from the built-in memory extension's load site: the store is what that extension exposes,
+   * so the `config.memory` gate lives there with it. A failure degrades (a read-only mount or a
+   * restricted remote fs is a legitimate workspace) rather than turning the extension into an
+   * `error`, which is the contract `activate` would impose.
+   */
+  private async createMemoryManager(report: BootstrapReport): Promise<MemoryManager | null> {
+    const { managed, env, rootPath } = this.deps;
     const memoryManager = new MemoryManager({ rootPath, env });
     try {
       await memoryManager.initialize();
@@ -259,13 +283,14 @@ export class AgentBootstrap {
       // made an unwritable cache directory fatal to a conversation that never needed it.
       this.warnBootstrap("memory", `Memory initialization failed; continuing without memory: ${errorMessage(error)}`);
       report.memory = { enabled: false };
-      return;
+      return null;
     }
     managed.setMemoryManager(memoryManager);
     report.memory = { enabled: true };
+    return memoryManager;
   }
 
-  private async loadExtensions(report: BootstrapReport, skillRegistry: SkillRegistry): Promise<void> {
+  private async loadExtensions(report: BootstrapReport): Promise<void> {
     const { managed, config, env, rootPath, manager } = this.deps;
     const publishTools = (): void => {
       managed.publishToolPresentationCatalog();
@@ -429,14 +454,17 @@ export class AgentBootstrap {
       }
     }
 
-    // Built-in Skills extension (enabled unless explicitly disabled).
-    if (config.skills !== false && skillRegistry) {
+    // Built-in Skills extension (enabled unless explicitly disabled). The index is built here, so
+    // a host that turns skills off never scans the directories at all (and then reports none).
+    if (config.skills !== false) {
       try {
         const skillsConfig = typeof config.skills === "object" && config.skills !== null ? config.skills : undefined;
         recordExtensionResult(
           report,
           "codent-skills",
-          await extensionRunner.loadExtension(createSkillsExtension({ skillRegistry, config: skillsConfig }))
+          await extensionRunner.loadExtension(
+            createSkillsExtension({ skillRegistry: await this.createSkillRegistry(report), config: skillsConfig })
+          )
         );
       } catch (err) {
         recordExtensionError(report, "codent-skills", err);
@@ -444,11 +472,13 @@ export class AgentBootstrap {
       }
     }
 
-    // Built-in Memory extension (enabled unless explicitly disabled).
+    // Built-in Memory extension (enabled unless explicitly disabled). The store is constructed
+    // HERE, beside the extension that exposes it: this is the only `config.memory` gate, and the
+    // extension therefore cannot be loaded without the store it reads.
     if (config.memory !== false) {
-      try {
-        const memoryManager = managed.getMemoryManager();
-        if (memoryManager) {
+      const memoryManager = await this.createMemoryManager(report);
+      if (memoryManager) {
+        try {
           const memoryConfig = typeof config.memory === "object" && config.memory !== null ? config.memory : undefined;
           recordExtensionResult(
             report,
@@ -463,11 +493,14 @@ export class AgentBootstrap {
               })
             )
           );
+        } catch (err) {
+          recordExtensionError(report, "codent-memory", err);
+          this.extensionError("config", errorMessage(err), "codent-memory");
         }
-      } catch (err) {
-        recordExtensionError(report, "codent-memory", err);
-        this.extensionError("config", errorMessage(err), "codent-memory");
       }
+    } else {
+      // Disabled by the host: the report still says so (it is a degraded resource, not a failure).
+      report.memory = { enabled: false };
     }
 
     // Built-in Jobs extension. Pure presentation (no tools, no turn-context text).
@@ -478,26 +511,25 @@ export class AgentBootstrap {
       this.extensionError("config", errorMessage(err), "codent-jobs");
     }
 
-    // Built-in MCP extension (enabled unless explicitly disabled).
+    // Built-in MCP extension (enabled unless explicitly disabled). The client registry is
+    // constructed here for the same reason as memory: one gate, beside its consumer.
     if (config.mcp !== false) {
       try {
-        const mcpManager = managed.getMcpManager();
-        if (mcpManager) {
-          const mcpConfig: McpExtensionConfig | undefined =
-            typeof config.mcp === "object" && config.mcp !== null ? config.mcp : undefined;
-          recordExtensionResult(
-            report,
-            "codent-mcp",
-            await extensionRunner.loadExtension(
-              createMcpExtension({
-                mcpManager,
-                configPath: mcpConfig?.configPath ?? config.mcpConfigPath,
-                // Session-supplied servers win over the file (see `mcpConfigFromServers`).
-                servers: mcpConfigFromServers(config.mcpServers),
-              })
-            )
-          );
-        }
+        const mcpManager = this.createMcpManager();
+        const mcpConfig: McpExtensionConfig | undefined =
+          typeof config.mcp === "object" && config.mcp !== null ? config.mcp : undefined;
+        recordExtensionResult(
+          report,
+          "codent-mcp",
+          await extensionRunner.loadExtension(
+            createMcpExtension({
+              mcpManager,
+              configPath: mcpConfig?.configPath ?? config.mcpConfigPath,
+              // Session-supplied servers win over the file (see `mcpConfigFromServers`).
+              servers: mcpConfigFromServers(config.mcpServers),
+            })
+          )
+        );
       } catch (err) {
         recordExtensionError(report, "codent-mcp", err);
         this.extensionError("config", errorMessage(err), "codent-mcp");
