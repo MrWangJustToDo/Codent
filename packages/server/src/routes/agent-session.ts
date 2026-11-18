@@ -322,7 +322,9 @@ export const agentSessionRoutes = new Hono()
     return c.json({ sessions });
   })
   .delete("/sessions/:sessionId", async (c) => {
-    const { createLocalAgentSessionHost } = await loadCore();
+    // `errorMessage` comes from the same dynamic import as the host: this route must not add a static
+    // `@codent/core` runtime import (the dts bundle resolves core as types only).
+    const { createLocalAgentSessionHost, errorMessage } = await loadCore();
     const host = createLocalAgentSessionHost({ manager: getServerManager() });
     let removed: boolean;
     try {
@@ -331,8 +333,7 @@ export const agentSessionRoutes = new Hono()
       // `deleteSession` refuses a log another PROCESS is writing (`SessionLockedError`). That is a
       // conflict, not a server fault: without this mapping the message ("open in another process")
       // was lost behind a bare 500, and a client could not tell "try again later" from "broken".
-      const message = error instanceof Error ? error.message : String(error);
-      return c.json({ error: true, message }, 409);
+      return c.json({ error: true, message: errorMessage(error) }, 409);
     }
     if (!removed) return c.json({ error: true, message: "Session not found" }, 404);
     return c.json({ ok: true });
