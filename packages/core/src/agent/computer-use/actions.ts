@@ -466,8 +466,6 @@ async function runActions(
         summaries.push(await runWithModifiers(computer, entry, held, signal));
       } catch (error) {
         // An abort is the caller's verdict, not a step failure: keep the original error so the run
-        // classifier still sees the signal (wrapping it would only add text to a cancel).
-        // An abort is the caller's verdict, not a step failure: keep the original error so the run
         // classifier still sees it (wrapping would add text to a cancel). `isAbortError` covers an
         // abort that arrived on ANOTHER signal — the caller's own is not aborted in that case.
         if (signal?.aborted || isAbortError(error)) throw error;
