@@ -711,7 +711,12 @@ export function createNodeComputer(options: CreateNodeComputerOptions = {}): Cor
       // the key: Cmd+a typed a literal "a", and a Cmd+V paste typed "v". `keyTap` is the backend's
       // only way to express the flag.
       const { key, modifiers } = splitChord(keys);
-      robot.keyTap(toRobotKey(key), modifiers.length > 0 ? modifiers : undefined);
+      // The second argument must be OMITTED, not passed as `undefined`: robotjs branches on
+      // `info.Length()`, so `keyTap(key, undefined)` takes the two-argument path and fails flag
+      // validation with "Invalid key flag specified." — every modifier-less key (Escape, Enter, Tab,
+      // PageDown, the arrows) threw instead of being pressed.
+      if (modifiers.length > 0) robot.keyTap(toRobotKey(key), modifiers);
+      else robot.keyTap(toRobotKey(key));
     },
 
     async type(text, typeOptions) {

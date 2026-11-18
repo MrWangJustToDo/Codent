@@ -175,7 +175,18 @@ function fakeRobot(overrides = {}) {
     mouseToggle: (down, button) => calls.push(["mouseToggle", down, button]),
     scrollMouse: (x, y) => calls.push(["scrollMouse", x, y]),
     keyToggle: (key, down) => calls.push(["keyToggle", key, down]),
-    keyTap: (key, modifier) => calls.push(["keyTap", key, modifier]),
+    // robotjs branches on `info.Length()`, so the ARGUMENT COUNT is part of the contract: an explicit
+    // second argument of `undefined` takes the two-argument path and fails flag validation with
+    // "Invalid key flag specified." — a modifier-less key then throws instead of being pressed. A fake
+    // that only records arguments cannot see that, so it throws here exactly as the addon does.
+    keyTap: (...args) => {
+      // The addon validates the flag argument BEFORE posting any event, so a permissionless probe sees
+      // the same failure the real call would.
+      if (args.length > 1 && args[1] === undefined) throw new Error("Invalid key flag specified.");
+      // Record the REAL argument count (`...args`), not a fixed triple: whether the flag argument was
+      // present at all is the property this fake has to expose.
+      calls.push(["keyTap", ...args]);
+    },
     typeString: (text) => calls.push(["typeString", text]),
     screen: {
       // The driver always captures the whole screen, so the region arguments are ignored here.
@@ -271,6 +282,13 @@ function fakeRobot(overrides = {}) {
     await computer.press(keys);
     return calls.filter(([name]) => name === "keyTap").map(([, key]) => key);
   };
+  // A modifier-less key must reach the backend as ONE argument. robotjs branches on argument count
+  // and rejects an explicit `undefined` flag, so `press(["Escape"])` used to throw
+  // "Invalid key flag specified." instead of pressing anything — every plain key was dead.
+  calls.length = 0;
+  await computer.press(["Escape"]);
+  assert.equal(calls.length, 1, "one event for a plain key");
+  assert.deepEqual(calls[0], ["keyTap", "escape"], "no flag argument when the chord has no modifier");
   assert.deepEqual(await keyNames(["Enter"]), ["enter"]);
   assert.deepEqual(await keyNames([" "]), ["space"]);
   assert.deepEqual(await keyNames(["ArrowUp"]), ["up"]);
