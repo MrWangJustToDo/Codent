@@ -55,7 +55,8 @@
     "validate:exec-file-status": "pnpm build && node scripts/validate-exec-file-status.mjs",
     "validate:run-command-safety-guard": "pnpm run build && node scripts/validate-run-command-safety-guard.mjs",
     "validate:fs-symlink-containment": "pnpm run build && node scripts/validate-fs-symlink-containment.mjs",
-    "validate:image-to-text": "pnpm run build && node scripts/validate-image-to-text.mjs"
+    "validate:image-to-text": "pnpm run build && node scripts/validate-image-to-text.mjs",
+    "validate:computer-driver": "pnpm run build && node scripts/validate-computer-driver.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "^0.0.75",
@@ -68,6 +69,7 @@
     "web-tree-sitter": "^0.25.10"
   },
   "optionalDependencies": {
+    "@jitsi/robotjs": "^0.6.24",
     "@tanstack/ai-isolate-node": "^1.1.0",
     "sharp": "^0.35.5"
   },

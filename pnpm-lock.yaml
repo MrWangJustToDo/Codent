@@ -245,6 +245,9 @@ importers:
         specifier: ^4.5.4
         version: 4.6.5
     optionalDependencies:
+      '@jitsi/robotjs':
+        specifier: ^0.6.24
+        version: 0.6.24
       isolated-vm:
         specifier: 7.0.1
         version: 7.0.1
@@ -443,6 +446,9 @@ importers:
         specifier: ^5.6.3
         version: 5.9.3
     optionalDependencies:
+      '@jitsi/robotjs':
+        specifier: ^0.6.24
+        version: 0.6.24
       '@tanstack/ai-isolate-node':
         specifier: ^1.1.0
         version: 1.1.0(@tanstack/ai-code-mode@1.1.1(@tanstack/ai@1.4.0(@opentelemetry/api@1.9.1)(zod@4.6.5))(zod@4.6.5))
@@ -1280,6 +1286,9 @@ packages:
     engines: {node: '>=20.9.0'}
     cpu: [x64]
     os: [win32]
+
+  '@jitsi/robotjs@0.6.24':
+    resolution: {integrity: sha512-mJrOMfvrI4aqG8jmGruXC3jtIccCptVM1JIcGXgKRyHqXVJIzz8Eb/L9dsJCIDJ2UFvd7yPcgNX819ZlsrJahg==}
 
   '@jridgewell/gen-mapping@0.3.13':
     resolution: {integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==}
@@ -4241,6 +4250,10 @@ packages:
   natural-compare@1.4.0:
     resolution: {integrity: sha512-OWND8ei3VtNC9h7V60qff3SVobHr996CTwgxubgyQYEpg290h9J0buyECNNJexkFm5sOajh5G116RYA1c8ZMSw==}
 
+  node-addon-api@8.9.2:
+    resolution: {integrity: sha512-VijLXbi3UACN69I0JVXJsX4tjACjNoQDgv2gTF6sx2wWEi8tkSg2eX8p5gSIFi8z2+DL3oHmY6OyKce38SDolg==}
+    engines: {node: ^18 || ^20 || >= 21}
+
   node-exports-info@1.6.2:
     resolution: {integrity: sha512-kXs9Go0cah0qHVV2v389IXQLdLCeE1xfFtjOAF+iobu0OIoG1pje8At2vMHyaPMiPMnG/LWP50twML21eMcAag==}
     engines: {node: '>= 0.4'}
@@ -6172,6 +6185,12 @@ snapshots:
     optional: true
 
   '@img/sharp-win32-x64@0.35.5':
+    optional: true
+
+  '@jitsi/robotjs@0.6.24':
+    dependencies:
+      node-addon-api: 8.9.2
+      node-gyp-build: 4.8.4
     optional: true
 
   '@jridgewell/gen-mapping@0.3.13':
@@ -8961,6 +8980,9 @@ snapshots:
   napi-postinstall@0.3.4: {}
 
   natural-compare@1.4.0: {}
+
+  node-addon-api@8.9.2:
+    optional: true
 
   node-exports-info@1.6.2:
     dependencies:

@@ -21,6 +21,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { scanPathForCommand } from "./environment/command-lookup.js";
+import { createNodeComputer } from "./environment/computer.js";
 import { createNodeIsolateDriver } from "./environment/isolate-driver.js";
 import { resolveLocalEnvironmentMode } from "./environment/local.js";
 import { createNativeFilesystem } from "./environment/native-fs.js";
@@ -244,6 +245,11 @@ export function createNodeEnv(options: CreateNodeEnvOptions): CoreEnv {
     extraReadRoots: [homeAgents],
   });
 
+  // Probed once, at env creation, so "can this host drive a screen?" has one answer for the whole
+  // session. `null` (addon absent, no display server, permission refused) leaves `computer` off the
+  // env entirely, which is what makes the computer-use extension register nothing.
+  const computer = createNodeComputer();
+
   return {
     rootPath,
 
@@ -373,6 +379,9 @@ export function createNodeEnv(options: CreateNodeEnvOptions): CoreEnv {
     },
 
     destroy: async () => {
+      // The optional capability owns whatever the native addon holds (today: nothing — robotjs keeps
+      // a process-wide display — but the contract says it is called, so it is).
+      await computer?.destroy?.();
       if (useOsSandbox) {
         await resetOsSandbox();
       }
@@ -410,6 +419,8 @@ export function createNodeEnv(options: CreateNodeEnvOptions): CoreEnv {
     locateTreeSitterGrammar,
 
     createIsolateDriver: createNodeIsolateDriver,
+
+    ...(computer ? { computer } : {}),
 
     resizeImage: async (buffer, { maxWidth = 1024, quality = 80 } = {}) => {
       try {

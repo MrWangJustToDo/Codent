@@ -64,8 +64,12 @@ const ALLOWED_EXTERNALS = [
  *   - `sharp`        → image downscaling behind CoreEnv `resizeImage`
  *   - `isolated-vm`  → the code-mode isolate; `@tanstack/ai-isolate-node` is
  *                      inlined and resolves this by path at call time
+ *   - `@jitsi/robotjs` → native screen + input behind CoreEnv `computer`; it is
+ *                      `createRequire`d by path (which the specifier scan cannot
+ *                      see, same blind spot as isolated-vm) and its absence is
+ *                      the documented "no computer-use tools" degradation
  */
-const ALLOWED_OPTIONAL_EXTERNALS = ["sharp", "isolated-vm"];
+const ALLOWED_OPTIONAL_EXTERNALS = ["sharp", "isolated-vm", "@jitsi/robotjs"];
 
 const failures = [];
 

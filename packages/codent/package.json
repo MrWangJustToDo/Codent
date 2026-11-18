@@ -61,7 +61,8 @@
   },
   "optionalDependencies": {
     "sharp": "^0.35.5",
-    "isolated-vm": "7.0.1"
+    "isolated-vm": "7.0.1",
+    "@jitsi/robotjs": "^0.6.24"
   },
   "devDependencies": {
     "@codent/acp": "workspace:*",

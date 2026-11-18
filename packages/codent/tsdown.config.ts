@@ -23,8 +23,10 @@ import { defineConfig } from "tsdown";
 //        - `web-tree-sitter` → `tree-sitter.wasm`
 //        - `sharp` → its `@img/sharp-*` prebuilt binding, found by path
 //        - `isolated-vm` → its `prebuilds/<platform>/` addon, found by path
+//        - `@jitsi/robotjs` → its `prebuilds/<platform>/` addon, required at call
+//          time by the computer-use driver
 //
-//      The last two ship as `optionalDependencies` rather than `dependencies`.
+//      Those three ship as `optionalDependencies` rather than `dependencies`.
 //      A native addon cannot be inlined — the binary is not JS — and inlining
 //      its loader is worse than leaving it out: the loader resolves relative to
 //      itself, so an inlined copy looks for `prebuilds/` next to *our* `dist`
@@ -82,9 +84,12 @@ export default defineConfig({
       // Native addons: inlining the loader breaks it (see the header note).
       // `sharp` is reached by `resizeImage`'s dynamic `import("sharp")`; the
       // `isolated-vm` entry is what `@tanstack/ai-isolate-node` (inlined)
-      // resolves by path once its JS is bundled.
+      // resolves by path once its JS is bundled; `@jitsi/robotjs` is required
+      // at call time by `@codent/node`'s `createNodeComputer`, whose N-API
+      // prebuilds must stay in a real on-disk layout.
       "sharp",
       "isolated-vm",
+      "@jitsi/robotjs",
     ],
     // The app / core / node layers are inlined on purpose, including their
     // dynamic `import()`s (PDF extraction, clipboard, …): those are lazy loads,

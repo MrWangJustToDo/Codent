@@ -266,6 +266,82 @@ export interface CoreEnvImageTextResult {
   region: CoreEnvImageRegion;
 }
 
+// ============================================================================
+// Computer control (optional host capability)
+// ============================================================================
+
+/** A mouse button the host can press. */
+export type CoreEnvMouseButton = "left" | "right" | "middle" | "back" | "forward";
+
+/** The options of one computer action; `signal` is the abort signal of the tool call. */
+export interface CoreEnvComputerActionOptions {
+  signal?: AbortSignal;
+}
+
+/**
+ * Model-facing screen geometry for {@link CoreEnvComputer}.
+ *
+ * `screenshot()` returns an image of exactly this size, and every coordinate in the interface is in
+ * THIS space — the host owns the mapping to the physical screen. One space, one owner: a 4K screen
+ * scaled down for the model would otherwise make every click land at a quarter of the point the
+ * model picked, because two layers each scaled by “display / screen”.
+ */
+export interface CoreEnvComputerDisplay {
+  width: number;
+  height: number;
+}
+
+/** The kind of computer the host drives. */
+export type CoreEnvComputerEnvironment = "linux" | "mac" | "windows";
+
+/**
+ * Native screen and input control (optional host capability).
+ *
+ * One object carries every primitive, so **presence is the only feature test**: a host that cannot
+ * drive its screen omits `CoreEnv.computer` entirely (no addon, no display server, no OS
+ * permission) and the computer-use extension registers nothing. There is deliberately no
+ * "half capability" state — a partially working screen is worse than none, because the model cannot
+ * tell a failed click from a slow page.
+ *
+ * Coordinates are pixels in {@link CoreEnvComputerDisplay} space; key names are
+ * `KeyboardEvent.key` names (`"Enter"`, `"Control"`, `"a"`).
+ */
+export interface CoreEnvComputer {
+  /** Model-facing screen size. Screenshots have this size; coordinates are in this space. */
+  display: CoreEnvComputerDisplay;
+  environment: CoreEnvComputerEnvironment;
+  /** The optional methods this host actually implements. */
+  capabilities: { zoom: boolean; cursorPosition: boolean };
+  /** Full-screen capture as PNG bytes at `display` size. `null` when the capture failed. */
+  screenshot(options?: CoreEnvComputerActionOptions): Promise<Uint8Array | null>;
+  /** One region of the screen at full size, for zooming into detail. */
+  zoom?(region: CoreEnvImageRegion, options?: CoreEnvComputerActionOptions): Promise<Uint8Array | null>;
+  /** The current mouse position, in `display` space. */
+  cursorPosition?(options?: CoreEnvComputerActionOptions): Promise<{ x: number; y: number }>;
+  /** Click `count` times at the point. */
+  click(
+    x: number,
+    y: number,
+    options?: { button?: CoreEnvMouseButton; count?: number; signal?: AbortSignal }
+  ): Promise<void>;
+  /** Move the pointer to the point. */
+  move(x: number, y: number, options?: CoreEnvComputerActionOptions): Promise<void>;
+  mouseDown(button: CoreEnvMouseButton, options?: CoreEnvComputerActionOptions): Promise<void>;
+  /** Release a button. Gets no signal: it releases what an aborted action held down. */
+  mouseUp(button: CoreEnvMouseButton): Promise<void>;
+  /** Scroll at the point; deltas are pixels in `display` space. */
+  scroll(x: number, y: number, deltaX: number, deltaY: number, options?: CoreEnvComputerActionOptions): Promise<void>;
+  keyDown(key: string, options?: CoreEnvComputerActionOptions): Promise<void>;
+  /** Release one key; gets no signal, for the same reason as {@link mouseUp}. */
+  keyUp(key: string): Promise<void>;
+  /** Press one key combo, like `["Control", "s"]`. */
+  press(keys: string[], options?: CoreEnvComputerActionOptions): Promise<void>;
+  /** Type text as a user does. */
+  type(text: string, options?: CoreEnvComputerActionOptions): Promise<void>;
+  /** Release anything the host holds for this capability (called on session teardown). */
+  destroy?(): Promise<void> | void;
+}
+
 /**
  * Options for {@link CoreEnv.execFile}.
  *
@@ -513,6 +589,17 @@ export interface CoreEnv {
    * (does not register `execute_typescript`) when absent.
    */
   createIsolateDriver?(): Promise<IsolateDriver | null> | IsolateDriver | null;
+
+  /**
+   * Native screen + input control (optional).
+   *
+   * Implemented by hosts that can drive their own screen (`@codent/node` through a lazily loaded
+   * `@jitsi/robotjs`, whose N-API prebuilds cover linux/darwin/win32); omitted by hosts that cannot
+   * (browser, WebContainer) and by a host whose addon, display server, or OS permission probe
+   * failed. The computer-use extension is registered only when this is present — and can also be
+   * turned off by `computerUse: false`.
+   */
+  computer?: CoreEnvComputer;
 }
 
 // ============================================================================

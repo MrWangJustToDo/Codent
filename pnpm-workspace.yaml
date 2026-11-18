@@ -1,6 +1,7 @@
 packages:
   - "packages/*"
 allowBuilds:
+  "@jitsi/robotjs": true
   esbuild: false
   isolated-vm: true
   sharp: true

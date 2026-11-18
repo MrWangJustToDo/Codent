@@ -35,3 +35,9 @@ export { resetOsSandbox, ensureOsSandbox, buildOsSandboxConfig } from "./os-sand
 
 // Code-mode isolate driver (native, loaded lazily; degrades to null)
 export { createNodeIsolateDriver } from "./isolate-driver.js";
+
+// Native screen + input control (optional addon; null when this host cannot drive a screen)
+export { createNodeComputer, type NodeComputerRobot, type CreateNodeComputerOptions } from "./computer.js";
+
+// Screen capture → PNG (no codec dependency; also what the driver returns)
+export { encodeScreenPng, type ScreenBitmap } from "./png.js";

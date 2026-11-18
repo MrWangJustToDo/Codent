@@ -21,6 +21,11 @@ export {
   type CoreEnvImageRegion,
   type CoreEnvImageTextResult,
   type CoreEnvImageToTextOptions,
+  type CoreEnvComputer,
+  type CoreEnvComputerDisplay,
+  type CoreEnvComputerEnvironment,
+  type CoreEnvComputerActionOptions,
+  type CoreEnvMouseButton,
   type McpStdioTransportConfig,
   type McpProcessHandle,
 } from "./env";
