@@ -368,6 +368,17 @@ const NO_MARKER_REASON = {
     file: "agent/skills/extension.ts",
     why: "local skill index read; instant, nothing partial",
   },
+  computer_screenshot: {
+    file: "agent/computer-use/extension.ts",
+    why: "the capture IS the output; a cancelled one keeps nothing, and the delivered row says cancelled",
+  },
+  computer: {
+    file: "agent/computer-use/extension.ts",
+    why:
+      "a cancelled gesture releases what it held (modifiers/buttons) and rethrows, so the row is the " +
+      "standard cancelled one; the model re-observes with a screenshot rather than being told which " +
+      "half of the sequence landed",
+  },
   load_skill: {
     file: "agent/skills/extension.ts",
     why: "one local file read; instant, nothing partial",

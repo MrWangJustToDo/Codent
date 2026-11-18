@@ -161,6 +161,7 @@ import type { AgentLog } from "../agent/agent-log";
 import type { ApprovalRequirement } from "../agent/approval/approval-requirement.js";
 import type { CodeModeExtensionConfig } from "../agent/code-mode";
 import type { CompactionConfig, CompactionConfigInput } from "../agent/compaction/types.js";
+import type { ComputerUseExtensionConfig } from "../agent/computer-use/extension.js";
 import type { DispatchRank } from "../agent/dispatch-order.js";
 import type {
   ExtensionCommand,
@@ -375,6 +376,17 @@ export type ManagedAgentConfig<T = ManagedAgent> = AgentConfig & {
    * host does not provide a `createIsolateDriver` capability.
    */
   codeMode?: boolean | CodeModeExtensionConfig;
+  /**
+   * Enable the built-in computer-use extension (default: true). Set to `false` to refuse the model
+   * any screen access even on a host that can provide it.
+   *
+   * Presence is decided by the HOST, not by this flag: the extension is loaded only when
+   * `CoreEnv.computer` exists (`@codent/node` reports it when the optional native addon loads AND a
+   * display server answers), so a browser host, a container without `DISPLAY`, or a machine where the
+   * OS refused accessibility gets no screen tools at all. Pass an object to cap the screenshot
+   * history or the settle delay (see {@link ComputerUseExtensionConfig}).
+   */
+  computerUse?: boolean | ComputerUseExtensionConfig;
   /**
    * Tune lazy-tool discovery for top-level tools marked `lazy: true` (how much of
    * each lazy tool's description appears in the pre-discovery catalog). Defaults

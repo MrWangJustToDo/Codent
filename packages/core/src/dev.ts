@@ -135,6 +135,18 @@ export { normalizeBindingName, renameCodeModeTools } from "./agent/code-mode/bin
 // built from the real list, not a copy that can drift from `agent-bootstrap`.
 export { CODE_MODE_LAZY_TOOL_NAMES, CODE_MODE_TOOL_NAMES } from "./agent/code-mode/curated-tools.js";
 
+// Computer use. The extension is one provider-agnostic capability (tool call + vision) over an
+// optional `CoreEnv.computer`; the validator drives it with a fake driver, so the assertions hold on
+// a headless CI box that could never open a display.
+export {
+  COMPUTER_ACTION_TOOL,
+  COMPUTER_SCREENSHOT_TOOL,
+  capScreenshotHistory,
+  createComputerUseExtension,
+} from "./agent/computer-use/extension.js";
+export { COMPUTER_ACTIONS, MAX_WAIT_MS, performComputerAction } from "./agent/computer-use/actions.js";
+export { SCREENSHOT_MARKER, screenModelParts } from "./agent/computer-use/screenshot.js";
+
 // MCP client wiring. `validate:mcp-client` asserts the exact options the manager sends — approval
 // derivation, the capability set on the wire, and what an elicit answer becomes — instead of a
 // replica of that wiring, which is how a guard stops guarding.

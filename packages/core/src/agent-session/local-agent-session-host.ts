@@ -84,7 +84,7 @@ function toManagedConfig(options: AgentSessionCreateOptions): ManagedAgentConfig
   const { builtins, continueSession: _continueSession, resumeSessionId: _resumeSessionId, ...forwarded } = options;
   // `undefined` inside the alias group means "keep the built-in default", not "set undefined" —
   // spreading it directly would overwrite a `false` that a runtime default merged in.
-  const { lsp, skills, memory, mcp, codeMode } = builtins ?? {};
+  const { lsp, skills, memory, mcp, codeMode, computerUse } = builtins ?? {};
   return {
     ...forwarded,
     // `AgentConfig` types this as required (the schema's `.default()` makes the parsed output
@@ -95,6 +95,7 @@ function toManagedConfig(options: AgentSessionCreateOptions): ManagedAgentConfig
     ...(memory !== undefined ? { memory } : {}),
     ...(mcp !== undefined ? { mcp } : {}),
     ...(codeMode !== undefined ? { codeMode } : {}),
+    ...(computerUse !== undefined ? { computerUse } : {}),
   };
 }
 

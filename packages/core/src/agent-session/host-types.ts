@@ -40,6 +40,7 @@ export interface AgentSessionBuiltins {
   memory?: boolean;
   mcp?: boolean;
   codeMode?: boolean;
+  computerUse?: boolean;
 }
 
 /**

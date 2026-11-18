@@ -76,6 +76,10 @@ export const BUILTIN_TOOL_NAMES = {
   // Code mode (sandboxed TypeScript).
   executeTypescript: "execute_typescript",
   discoverTools: "discover_tools",
+
+  // Computer use (native screen + input; registered only when `env.computer` exists).
+  computerScreenshot: "computer_screenshot",
+  computerAction: "computer",
 } as const;
 
 /**

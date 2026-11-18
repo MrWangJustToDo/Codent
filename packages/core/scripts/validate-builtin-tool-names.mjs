@@ -30,6 +30,13 @@ const DYNAMIC_TABLE_ONLY = new Set(["discover_tools", "execute_typescript"]);
 /** The summary marker is defined by a const and carries no `present` block. */
 const CONST_NAMED = ["begin_summary"];
 
+/**
+ * Named by an exported const in an extension module (`name: COMPUTER_ACTION_TOOL`), so the literal
+ * scanner below cannot see them. They must be reachable through the registry anyway: a host
+ * classifies a row by identity, and a name it cannot look up is a name it has to spell.
+ */
+const EXTENSION_CONST_NAMED = ["computer_screenshot", "computer"];
+
 function walk(dir) {
   return readdirSync(dir).flatMap((entry) => {
     const path = join(dir, entry);
@@ -75,7 +82,13 @@ function collectTable() {
   return names;
 }
 
-const expected = new Set([...collectTable(), ...collectDeclared(), ...DYNAMIC_TABLE_ONLY, ...CONST_NAMED]);
+const expected = new Set([
+  ...collectTable(),
+  ...collectDeclared(),
+  ...DYNAMIC_TABLE_ONLY,
+  ...CONST_NAMED,
+  ...EXTENSION_CONST_NAMED,
+]);
 const actual = Object.values(BUILTIN_TOOL_NAMES);
 
 assert.ok(expected.size > 30, `expected set derived (${expected.size} names)`);

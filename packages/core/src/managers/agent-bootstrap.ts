@@ -8,6 +8,7 @@
  */
 
 import { CODE_MODE_LAZY_TOOL_NAMES, CODE_MODE_TOOL_NAMES, createCodeModeExtension } from "../agent/code-mode";
+import { createComputerUseExtension } from "../agent/computer-use/extension.js";
 import { ExtensionLoader, ExtensionRunner, getDefaultExtensionDirs } from "../agent/extension";
 import { readExtensionSummary } from "../agent/extension/extension-summary.js";
 import { createJobsExtension } from "../agent/jobs/extension.js";
@@ -524,6 +525,25 @@ export class AgentBootstrap {
       } catch (err) {
         recordExtensionError(report, "codent-code-mode", err);
         this.extensionError("config", errorMessage(err), "codent-code-mode");
+      }
+    }
+
+    // Built-in computer-use extension. Loaded only when the HOST reports the capability — the
+    // addon loaded, a display server answered, the OS granted access — because a screen the model
+    // cannot actually see or drive is worse than no screen tools at all. `computerUse: false`
+    // refuses it even on a capable host.
+    if (config.computerUse !== false && env.computer) {
+      try {
+        const computerUseConfig =
+          typeof config.computerUse === "object" && config.computerUse !== null ? config.computerUse : undefined;
+        recordExtensionResult(
+          report,
+          "codent-computer-use",
+          await extensionRunner.loadExtension(createComputerUseExtension(env.computer, computerUseConfig))
+        );
+      } catch (err) {
+        recordExtensionError(report, "codent-computer-use", err);
+        this.extensionError("config", errorMessage(err), "codent-computer-use");
       }
     }
   }

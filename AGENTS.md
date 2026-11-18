@@ -84,7 +84,9 @@ interface CoreEnv {
   //   its "binary file" placeholder),
   //   locateTreeSitterGrammar,
   //   createMCPStdioTransport, getMCPTransportProcess, createLspConnection,
-  //   createIsolateDriver (code-mode TS sandbox backend)
+  //   createIsolateDriver (code-mode TS sandbox backend),
+  //   computer (native screen + input: screenshot/zoom/click/type/scroll; absent ⇒ the
+  //   computer-use extension registers nothing)
   // Capability marker (not a feature): `remote?: boolean` — true when fs/commands live in another
   // process (`createRemoteEnv`). `loadExtensions` skips DISK discovery for it, because those files
   // are discovered through the remote fs and then `import()`ed in the client process; in-process
@@ -634,6 +636,71 @@ final result is dropped. Internal workers (no `parentTaskToolCallId`) are never 
 `pnpm --filter @codent/acp run validate:acp:subagents` (the projector/host halves
 `validate-acp-subagents.mjs` + `validate-acp-subagents-host.mjs`; also in `validate:acp`). The mock
 sessions/app harness lives in `scripts/acp-subagent-scenario.mjs`.
+
+### Computer use (native screen control)
+
+Provider-agnostic by construction: the capability is **tool call + vision**, never a provider's native
+computer tool. The plane is `CoreEnv.computer?` (`packages/core/src/env/index.ts`), one object carrying
+every primitive — `display`, `environment`, `capabilities`, `screenshot`/`zoom`/`cursorPosition`,
+`click`/`move`/`drag`-building blocks/`scroll`/`key`/`type`. Coordinates are pixels in **`display`**,
+the size the screenshots come back at; the host owns the mapping to real screen pixels, so the model's
+clicks cannot drift by a layer of double scaling.
+
+| Piece | File | Responsibility |
+|---|---|---|
+| capability type | `packages/core/src/env/index.ts` | `CoreEnvComputer` + the optional `computer` member (absent = the feature does not exist) |
+| node driver | `packages/node/src/environment/computer.ts` | lazily `require`s the optional `@jitsi/robotjs` (N-API prebuilds for linux/darwin/win32), computes `display` (screen fitted into 1280×800), scales points, maps `KeyboardEvent.key` names and per-platform scroll units |
+| capture encoder | `packages/node/src/environment/png.ts` | raw BGRA bitmap → RGB PNG with `node:zlib` only, box-filtered to `display` — deliberately no `sharp` dependency, so a missing image codec cannot disable computer use |
+| extension | `packages/core/src/agent/computer-use/` | two tools over the driver, the approval split, and the screenshot budget |
+
+**Presence is the feature test.** `createNodeComputer()` returns `null` when the addon is missing or no
+usable display answers (headless CI, containers, `DISPLAY` pointing at a dead X server). `createNodeEnv`
+then omits `computer`, and bootstrap loads the extension only when `config.computerUse !== false &&
+env.computer` — a screen the model cannot actually see or drive is worse than no screen tools.
+
+Presence is decided by a **child process** on Linux, because the addon's headless failure is a
+segfault (`getScreenSize()` dereferences a NULL `Display*`), not an exception — nothing in-process can
+catch it. The probe result is memoized per process, and the driver calls `setXDisplayName($DISPLAY)`
+first: the addon otherwise opens a hardcoded `":0.0"` before falling back to `$DISPLAY`, so on a
+multi-X machine (`DISPLAY=:1`, `ssh -X`) every capture and click would land on the wrong screen with
+no diagnostic at all.
+
+**Two permission states are NOT detectable, and the docs say so.** macOS Screen Recording refused
+shows up as an all-black frame (warned about once, since it is a *valid* PNG); Accessibility (input)
+refused shows up as nothing at all — the display still reports a size and the OS silently drops
+injected clicks. Neither is reported as `null`, because neither can be told apart from a working
+screen.
+
+**Two tools, because approval is per tool.** `needsApproval` is a static boolean in both the SDK and
+core's approval registry (no per-call predicate exists), so one mixed tool could only be all-free or
+all-prompted. `computer_screenshot` is `reads`/free; `computer` is `edits`/approval-gated — which also
+means plan mode withholds the write half for free (`agent/plan/plan-tools.ts`).
+
+**Screenshots are context.** Every action returns a fresh one, so a message transformer keeps the newest
+3 and replaces older images with a text stub (wire-only; the session keeps its transcript), and a model
+without `vision` gets the text alone.
+
+**The action tool carries what a driver alone cannot express.** `modifiers` holds a key around one
+gesture (Ctrl+click, Shift+click, Ctrl+scroll) instead of three calls; `actions` batches a sequence into
+one call — one approval and one screenshot at the end, which is the only reason a ten-field form is not
+ten images; `steps` interpolates a drag, because robotjs teleports the pointer and native drag-and-drop
+never sees a gesture. The reference implementations are the argument: Anthropic's computer tool spells
+held keys as `key`/`text` on the action, OpenAI's CUA carries `keys: string[]` on every pointer action,
+a `path` of drag waypoints and a batched `actions[]`.
+
+**Two host-level failures are reported, not hidden.** Linux/X11 cannot type non-ASCII through the addon
+(robotjs casts each code point to a single `char`), so the driver routes such text through `xdotool` and
+*refuses with instructions* when it is missing — typing plausible-looking ASCII instead is the failure
+mode that leaves the model unable to tell which layer mangled the text. macOS/Windows carry BMP text
+correctly but truncate anything outside it (a 16-bit `UniChar`/`wScan`), so astral input (emoji) is
+refused there rather than typed as a wrong character. An all-black capture (macOS without Screen
+Recording, or a locked display) is a valid PNG, so the driver warns once per process instead of feeding
+the model a black rectangle; only full-screen captures are judged, since a deliberately dark region is
+what `zoom` is for.
+
+Validate: `validate:computer-use` (core, fake driver) and `validate:computer-driver` (node, fake robot —
+PNG bytes, coordinate scaling, key/scroll mapping, modifiers/batch/drag interpolation, the non-ASCII
+path, the blank-capture warning, and the headless `null`), both runnable without a display.
 
 ## CoreEnv Server (Remote Mode)
 

@@ -154,6 +154,9 @@ const createBodySchema = z.object({
       memory: z.boolean().optional(),
       mcp: z.boolean().optional(),
       codeMode: z.boolean().optional(),
+      // Computer use drives THIS machine's screen, so the toggle has to survive the wire: dropping it
+      // here (zod strips unknown keys) would make `computerUse: false` a no-op over `--remote-session`.
+      computerUse: z.boolean().optional(),
     })
     .optional(),
   modelInfo: z.record(z.string(), z.unknown()).optional(),
