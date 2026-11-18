@@ -353,14 +353,20 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
   );
   assert.equal(output.summary, 'type "search" → press Enter → wait 1ms — screen 1280x800 · pointer 10,20');
 
-  // A shared modifier applies to every entry that does not override it.
+  // A call-level `modifiers` on a BATCH is refused: inheritance used to apply it to every entry, so a
+  // single `type` in the batch failed the whole call (10 of 13 errors in a measured session).
+  await assert.rejects(
+    () => write.execute({ modifiers: ["Shift"], actions: [{ action: "click", x: 1, y: 1 }] }, OPTS),
+    /Put `modifiers` on the action that needs them/
+  );
+
+  // An entry that carries its own modifiers still works (the pointer gesture holds them).
   calls.length = 0;
   await write.execute(
     {
-      modifiers: ["Shift"],
       actions: [
-        { action: "click", x: 1, y: 1 },
-        { action: "click", x: 2, y: 2 },
+        { action: "click", x: 1, y: 1, modifiers: ["Shift"] },
+        { action: "click", x: 2, y: 2, modifiers: ["Shift"] },
       ],
     },
     OPTS
@@ -368,6 +374,15 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
   assert.deepEqual(
     calls.filter(([name]) => name === "keyDown").map(([, key]) => key),
     ["Shift", "Shift"]
+  );
+
+  // A `key` chord sends its modifiers WITH the key (the driver turns them into the event's flags) —
+  // holding them as separate events typed a literal "a" on macOS.
+  calls.length = 0;
+  await write.execute({ action: "key", keys: ["a"], modifiers: ["Control"] }, OPTS);
+  assert.deepEqual(
+    calls.filter(([name]) => name !== "screenshot"),
+    [["press", ["Control", "a"]]]
   );
 
   // The schema refuses an empty batch, and accepts a one-entry one.

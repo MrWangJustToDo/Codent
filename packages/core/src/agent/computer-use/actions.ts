@@ -113,9 +113,10 @@ const actionShape = {
     .max(4)
     .optional()
     .describe(
-      "Modifier keys held down for the whole action and released after it: " +
-        '["Control"] to Ctrl+click, ["Shift"] to extend a selection, ["Control"] with scroll to zoom. ' +
-        "Only Control / Shift / Alt / Meta — to press any other key, use the `key` action."
+      'Modifier keys for THIS action: ["Control"] to Ctrl+click, ["Shift"] to extend a selection, ' +
+        '["Control"] with scroll to zoom. Only Control / Shift / Alt / Meta — for any other key use ' +
+        "`key`. On `key` they are attached to the keystroke; in a batch put them on the entry that " +
+        "needs them (entries do not inherit the call's). On macOS Control+click IS the secondary click."
     ),
   steps: z
     .number()
@@ -143,7 +144,8 @@ export const computerActionSchema = z.object({
       "Perform several actions in one call, in order. Cheaper than one call per action: it is one " +
         "approval and ONE screenshot at the end, so use it for sequences you are already sure about. " +
         "An entry may omit `text`, `keys` and `button`: the call's value is used for it. Coordinates " +
-        "are never shared — each entry names its own target."
+        "and `modifiers` are NOT shared — each entry names its own target, and an entry that needs a " +
+        "modifier carries it."
     ),
 });
 
@@ -367,6 +369,17 @@ async function runWithModifiers(
     );
   }
 
+  // A chord's modifiers are the EVENT's flags, not a held state (see `CoreEnvComputer.keyDown`):
+  // merge them into the key list so the backend sends `Cmd+a` as one event instead of a literal "a".
+  if (input.action === "key") {
+    const keys = input.keys ?? [];
+    return dispatchAction(computer, { ...input, keys: [...modifiers, ...keys] }, held, signal);
+  }
+
+  if (input.action === "wait") {
+    throw new Error('"wait" cannot take modifiers.');
+  }
+
   // Pressed one at a time and tracked AS they land: a `keyDown` that throws (abort is the common
   // case) must release what already went down, and the loop cannot be trusted to have finished.
   for (const key of modifiers) {
@@ -420,6 +433,17 @@ async function runActions(
 ): Promise<string> {
   const batch = input.actions;
   if (batch && batch.length > 0) {
+    // A batch entry does NOT inherit the call's `modifiers`. It used to, and a single `type` entry
+    // then failed the whole batch (10 of 13 errors in a measured session: the model wrote
+    // `modifiers` on the call, every entry inherited it, and `type` refuses it). Refusing the shape
+    // outright says where the modifiers belong instead of silently applying them to some entries.
+    if (input.modifiers !== undefined) {
+      throw new Error(
+        "Put `modifiers` on the action that needs them: a batch entry does not inherit the call's " +
+          "modifiers (one `type` entry would otherwise fail the whole batch)."
+      );
+    }
+
     // The tool has one static timeout, so a batch of maximum-length waits would be cut off from the
     // middle (leaving whatever it pressed). Refuse it up front with a message the model can act on.
     const waits = batch.reduce((total, entry) => total + (entry.action === "wait" ? (entry.ms ?? 1000) : 0), 0);
@@ -455,19 +479,16 @@ async function runActions(
 }
 
 /**
- * A batch entry inherits the gesture-wide fields it omitted.
+ * A batch entry inherits the payload fields it omitted.
  *
- * `modifiers` was the only inherited field, so a model that put `text` on the CALL (a natural
- * reading of "one call, one text") got `"type" needs text` while the text sat in its own argument
- * object. The inherited set is what describes the SEQUENCE rather than a target: payload (`text`,
- * `keys`), the button, and held keys. Coordinates are never inherited — each entry points at its own
- * place, and inheriting one would silently repeat a click at a stale point.
+ * `modifiers` is deliberately NOT among them: it is a property of one gesture, not of the sequence,
+ * and inheriting it made a call-level `modifiers` poison every entry (including a `type`, which
+ * refuses them). Coordinates are never inherited either — each entry points at its own place.
  */
 function withInheritedDefaults(entry: ComputerActionEntry, outer: ComputerActionInput): ComputerActionEntry {
   const merged: ComputerActionEntry = { ...entry };
   if (merged.button === undefined && outer.button !== undefined) merged.button = outer.button;
   if (merged.text === undefined && outer.text !== undefined) merged.text = outer.text;
   if (merged.keys === undefined && outer.keys !== undefined) merged.keys = outer.keys;
-  if (merged.modifiers === undefined && outer.modifiers !== undefined) merged.modifiers = outer.modifiers;
   return merged;
 }
