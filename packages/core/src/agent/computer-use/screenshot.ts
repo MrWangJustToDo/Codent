@@ -11,6 +11,7 @@
  *   looking at. That text is also what the message transformer keeps when it drops an old image.
  */
 import { defaultBase64Encode } from "../../env";
+import { tryReadImageDimensions } from "../../models/estimate-image-tokens.js";
 
 import type { CoreEnv, CoreEnvComputer, CoreEnvImageRegion } from "../../env";
 import type { ContentPart } from "@tanstack/ai";
@@ -27,8 +28,21 @@ export interface CapturedScreen {
   summary: string;
   base64: string;
   mimeType: string;
+  /** `display` for a full screenshot; the requested region's size for a zoom. */
   width: number;
   height: number;
+  /**
+   * Pixel size of the image ACTUALLY attached (after the host's codec step), when it could be read.
+   *
+   * A zoom is captured at the screen's physical resolution, so this is 1×–3× the region on a HiDPI
+   * panel, and the model cannot infer the factor from the region alone. `undefined` means the bytes
+   * were not a shape we can measure — then no claim is made at all, rather than assuming 1:1 (the
+   * host may have magnified without us, and a false "this image is the screen" is worse than the
+   * conservative "do not use this image's pixels").
+   */
+  image?: { width: number; height: number };
+  /** `image.width / region.width`, when both are known. `screen = region + image / scale`. */
+  scale?: number;
   /** Set for a zoom: the display-space region this image magnifies. */
   region?: CoreEnvImageRegion;
   cursor?: { x: number; y: number };
@@ -55,6 +69,15 @@ export interface ScreenToolOutput {
   region?: CoreEnvImageRegion;
   mimeType?: string;
   base64?: string;
+  /**
+   * Pixel size of the attached image when it is NOT the display frame (a zoom), plus the factor that
+   * maps it back to screen pixels: `screen = region + image / scale`.
+   *
+   * Without it the model had to assume a scaling factor (it guessed 2.0 on a 2.25× panel) and every
+   * click derived from a magnified read landed ~12% short.
+   */
+  image?: { width: number; height: number };
+  scale?: number;
   /** Tool results are open records (see `ToolCallResult`); the index signature keeps that honest. */
   [key: string]: unknown;
 }
@@ -102,7 +125,17 @@ export async function captureScreen(
   if (signal?.aborted) throw signal.reason;
   const resized = await env.resizeImage?.(bytes, { maxWidth });
   const mimeType = resized ? "image/jpeg" : "image/png";
-  const base64 = (env.base64Encode ?? defaultBase64Encode)(resized ?? bytes);
+  const encoded = resized ?? bytes;
+  const base64 = (env.base64Encode ?? defaultBase64Encode)(encoded);
+  // The ATTACHED image's size, not the frame's. For a zoom these differ by the panel's scale factor
+  // (1×–3×), which is exactly what the model needs to map a magnified position back. Unmeasurable
+  // bytes stay `undefined`: assuming the region's size would claim a 1:1 image we cannot verify.
+  const measured = tryReadImageDimensions(encoded);
+  const image = measured && measured.width > 0 && measured.height > 0 ? measured : undefined;
+  // One computation, one rounded value: the tool output carries it and the text prints it, so the
+  // two cannot disagree.
+  const rawScale = region && image && region.width > 0 ? image.width / region.width : undefined;
+  const scale = rawScale !== undefined && Number.isFinite(rawScale) ? Math.round(rawScale * 100) / 100 : undefined;
 
   let cursor: { x: number; y: number } | undefined;
   if (computer.capabilities.cursorPosition && computer.cursorPosition) {
@@ -122,7 +155,17 @@ export async function captureScreen(
     .filter(Boolean)
     .join(" · ");
 
-  return { summary, base64, mimeType, width, height, ...(region ? { region } : {}), ...(cursor ? { cursor } : {}) };
+  return {
+    summary,
+    base64,
+    mimeType,
+    width,
+    height,
+    ...(image ? { image } : {}),
+    ...(scale !== undefined ? { scale } : {}),
+    ...(region ? { region } : {}),
+    ...(cursor ? { cursor } : {}),
+  };
 }
 
 /**
@@ -150,7 +193,9 @@ export function screenModelParts(output: ScreenToolOutput): ContentPart[] {
  * resolution, so its pixels are denser than `display`. The rule that follows is Anthropic's
  * (`computer_20251124`: "The model keeps emitting coordinates in screenshot pixels afterwards; the
  * zoom image itself is never a coordinate frame") — state it, or the model will scale the click it
- * just computed and miss.
+ * just computed and miss. Stating the rule is not enough on its own: the model also needs the actual
+ * factor, because a 2.25× panel with no `scale` field invited it to assume 2.0× and land ~12% short,
+ * so the mapping is given explicitly, in arithmetic it can apply.
  */
 function describeFrame(output: ScreenToolOutput): string {
   const { width, height } = output.display;
@@ -162,6 +207,30 @@ function describeFrame(output: ScreenToolOutput): string {
   }
 
   const { x, y, width: w, height: h } = output.region;
+  const image = output.image;
+  const scale = output.scale ?? (image && w > 0 ? image.width / w : undefined);
+  if (image && scale !== undefined && Number.isFinite(scale)) {
+    // 1:1 is not a magnification (a 1x panel): say so, because "MAGNIFIED" on an image that is
+    // exactly the region makes the model divide by 1 anyway and distrust the number. The mapping is
+    // still spelled out — the region usually has an OFFSET, and a model that sends the local pixel
+    // lands `x`,`y` away from the target.
+    if (Math.abs(scale - 1) < 0.01) {
+      return (
+        `${SCREENSHOT_MARKER} ${output.summary}. This is the screen region (${x},${y})-(${x + w},${y + h}) ` +
+        `at 1:1 (${image.width}x${image.height}) in the ${width}x${height} screen space. ` +
+        `To place a point you see in it: screen_x = ${x} + image_x, screen_y = ${y} + image_y. ` +
+        `Coordinates you SEND are screen pixels in (0,0)-(${width},${height}), where ${origin}.`
+      );
+    }
+    const factor = Math.round(scale * 100) / 100;
+    return (
+      `${SCREENSHOT_MARKER} ${output.summary}. This is a MAGNIFIED view: the image is ` +
+      `${image.width}x${image.height} = ${factor}x the screen region (${x},${y})-(${x + w},${y + h}) ` +
+      `in the ${width}x${height} screen space. ` +
+      `To place a point you see in it: screen_x = ${x} + image_x / ${factor}, screen_y = ${y} + image_y / ${factor}. ` +
+      `Coordinates you SEND are always screen pixels in (0,0)-(${width},${height}), where ${origin}.`
+    );
+  }
   return (
     `${SCREENSHOT_MARKER} ${output.summary}. This is a MAGNIFIED view of the screen region ` +
     `(${x},${y})-(${x + w},${y + h}) in the ${width}x${height} screen space. ` +

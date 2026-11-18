@@ -23,6 +23,8 @@
  */
 import { z } from "zod";
 
+import { isAbortError } from "../../runtime-types/abort.js";
+import { errorMessage } from "../../utils/errors.js";
 import { truncateText } from "../../utils/text-truncation.js";
 
 import type { CoreEnvComputer, CoreEnvMouseButton } from "../../env";
@@ -47,13 +49,23 @@ export type ComputerAction = (typeof COMPUTER_ACTIONS)[number];
 export const MAX_WAIT_MS = 10_000;
 
 /** How long an action is given to take effect before the screenshot is taken. */
-export const DEFAULT_SETTLE_MS = 400;
+export const DEFAULT_SETTLE_MS = 800;
 
 /** A batch is a convenience, not a scripting language: past this it should be its own turn. */
 export const MAX_BATCH_ACTIONS = 12;
 
 /** Total wait a batch may spend, kept under the tool's own timeout so a cut cannot strand input. */
 export const MAX_BATCH_WAIT_MS = 20_000;
+
+/**
+ * The only keys a gesture may hold down.
+ *
+ * `modifiers` used to accept any string, so "hold this key while clicking" was expressible with a
+ * NON-modifier: `["Backspace"]` + click cleared a search field, and `["Meta"]` + click became
+ * Cmd+click. A held key is a modifier by definition — everything else belongs in `key`.
+ */
+export const MODIFIER_KEYS = ["Control", "Shift", "Alt", "Meta"] as const;
+export type ComputerModifier = (typeof MODIFIER_KEYS)[number];
 
 /** Longest interpolated drag. Enough for a smooth drag, short enough to stay one visible gesture. */
 const MAX_DRAG_STEPS = 60;
@@ -80,17 +92,30 @@ const actionShape = {
     .min(1)
     .optional()
     .describe('Keys to press together, using KeyboardEvent.key names — e.g. ["Control", "c"], ["Enter"].'),
-  delta_x: z.number().optional().describe("Horizontal scroll in pixels; positive scrolls right."),
-  delta_y: z.number().optional().describe("Vertical scroll in pixels; positive scrolls down."),
+  delta_x: z
+    .number()
+    .optional()
+    .describe(
+      "Horizontal scroll in screenshot pixels; positive scrolls right. Linux/Windows convert it to " +
+        "wheel notches (100 px ≈ one notch), so it is a gesture size, not a physical distance."
+    ),
+  delta_y: z
+    .number()
+    .optional()
+    .describe(
+      "Vertical scroll in screenshot pixels; positive scrolls down. Linux/Windows convert it to " +
+        "wheel notches (100 px ≈ one notch). A scroll needs a non-zero delta."
+    ),
   ms: z.number().int().min(0).max(MAX_WAIT_MS).optional().describe("Milliseconds to wait (wait only)."),
   modifiers: z
-    .array(z.string())
+    .array(z.enum(MODIFIER_KEYS))
     .min(1)
     .max(4)
     .optional()
     .describe(
-      'Keys held down for the whole action and released after it, e.g. ["Control"] to Ctrl+click, ' +
-        '["Shift"] to extend a selection, ["Control"] with scroll to zoom.'
+      "Modifier keys held down for the whole action and released after it: " +
+        '["Control"] to Ctrl+click, ["Shift"] to extend a selection, ["Control"] with scroll to zoom. ' +
+        "Only Control / Shift / Alt / Meta — to press any other key, use the `key` action."
     ),
   steps: z
     .number()
@@ -116,7 +141,9 @@ export const computerActionSchema = z.object({
     .optional()
     .describe(
       "Perform several actions in one call, in order. Cheaper than one call per action: it is one " +
-        "approval and ONE screenshot at the end, so use it for sequences you are already sure about."
+        "approval and ONE screenshot at the end, so use it for sequences you are already sure about. " +
+        "An entry may omit `text`, `keys` and `button`: the call's value is used for it. Coordinates " +
+        "are never shared — each entry names its own target."
     ),
 });
 
@@ -146,6 +173,10 @@ export function delay(ms: number, signal?: AbortSignal): Promise<void> {
 function requirePoint(input: ComputerActionInput | ComputerActionEntry, action: ComputerAction) {
   if (typeof input.x !== "number" || typeof input.y !== "number") {
     throw new Error(`"${action}" needs x and y, in the pixels of the screenshot you are looking at.`);
+  }
+  // Zod accepts Infinity; the driver would hand it to the OS. One bad coordinate is a misfire.
+  if (!Number.isFinite(input.x) || !Number.isFinite(input.y)) {
+    throw new Error(`"${action}" needs finite x and y.`);
   }
   return { x: input.x, y: input.y };
 }
@@ -261,8 +292,18 @@ async function dispatchAction(
 
     case "scroll": {
       const point = requirePoint(input, "scroll");
-      await computer.scroll(point.x, point.y, input.delta_x ?? 0, input.delta_y ?? 0, { signal });
-      return `scroll ${input.delta_x ?? 0},${input.delta_y ?? 0} at ${point.x},${point.y}`;
+      const deltaX = input.delta_x ?? 0;
+      const deltaY = input.delta_y ?? 0;
+      if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) {
+        throw new Error('"scroll" needs finite delta_x and delta_y.');
+      }
+      // A scroll with no delta is a no-op that still costs an approval and a screenshot, and its
+      // summary ("scroll 0,0") reads as success — so the model retries the same nothing.
+      if (deltaX === 0 && deltaY === 0) {
+        throw new Error('"scroll" needs a non-zero delta_x or delta_y (positive scrolls right/down).');
+      }
+      await computer.scroll(point.x, point.y, deltaX, deltaY, { signal });
+      return `scroll ${deltaX},${deltaY} at ${point.x},${point.y}`;
     }
 
     case "type": {
@@ -283,13 +324,13 @@ async function dispatchAction(
 
     case "mouse_down": {
       // A press lands wherever the pointer is (Anthropic's `left_mouse_down` has no coordinate).
-      // Accepting a point means "move there first", which is what a hand-built drag wants.
-      if (typeof input.x === "number" && typeof input.y === "number") {
-        await computer.move(input.x, input.y, { signal });
-      }
+      // Accepting a point means "move there first", which is what a hand-built drag wants — and the
+      // summary says which one happened, so a log can tell a press-in-place from a press-at-point.
+      const at = typeof input.x === "number" && typeof input.y === "number" ? { x: input.x, y: input.y } : null;
+      if (at) await computer.move(at.x, at.y, { signal });
       await computer.mouseDown(button, { signal });
       held.buttons.push(button);
-      return `mouse down ${button}`;
+      return at ? `mouse down ${button} at ${at.x},${at.y}` : `mouse down ${button}`;
     }
 
     case "mouse_up": {
@@ -315,6 +356,16 @@ async function runWithModifiers(
 ): Promise<string> {
   const modifiers = input.modifiers ?? [];
   if (modifiers.length === 0) return dispatchAction(computer, input, held, signal);
+
+  // `type` injects the text as a whole (on macOS through the pasteboard), so a held key does not
+  // modify the characters — it modifies the GESTURE: Cmd+V becomes Cmd+Shift+V, a different command
+  // in most apps. Refuse it instead of silently changing what was asked for.
+  if (input.action === "type") {
+    throw new Error(
+      '"type" cannot take modifiers: the text is injected as a whole, and a held key turns the ' +
+        'paste into a different shortcut. Use "key" for a modified keystroke.'
+    );
+  }
 
   // Pressed one at a time and tracked AS they land: a `keyDown` that throws (abort is the common
   // case) must release what already went down, and the loop cannot be trusted to have finished.
@@ -380,13 +431,43 @@ async function runActions(
     }
 
     const summaries: string[] = [];
-    for (const entry of batch) {
-      // A shared `modifiers` value applies to every entry that does not override it: "hold Shift"
-      // is a property of the sequence, and repeating it per entry is a way to forget it once.
-      const withModifiers = entry.modifiers ? entry : { ...entry, modifiers: input.modifiers };
-      summaries.push(await runWithModifiers(computer, withModifiers, held, signal));
+    for (let index = 0; index < batch.length; index += 1) {
+      const entry = withInheritedDefaults(batch[index]!, input);
+      try {
+        summaries.push(await runWithModifiers(computer, entry, held, signal));
+      } catch (error) {
+        // An abort is the caller's verdict, not a step failure: keep the original error so the run
+        // classifier still sees the signal (wrapping it would only add text to a cancel).
+        // An abort is the caller's verdict, not a step failure: keep the original error so the run
+        // classifier still sees it (wrapping would add text to a cancel). `isAbortError` covers an
+        // abort that arrived on ANOTHER signal — the caller's own is not aborted in that case.
+        if (signal?.aborted || isAbortError(error)) throw error;
+        // Name the step. A batch is one call, so "the call failed" left the model guessing WHICH of
+        // its four actions broke — and it usually retried the whole sequence.
+        const action = entry.action ?? "action";
+        const done = summaries.length > 0 ? ` after: ${summaries.join(" → ")}` : "";
+        throw new Error(`Action #${index + 1} of ${batch.length} (${action}) failed${done}: ${errorMessage(error)}`);
+      }
     }
     return summaries.join(" → ");
   }
   return runWithModifiers(computer, input, held, signal);
+}
+
+/**
+ * A batch entry inherits the gesture-wide fields it omitted.
+ *
+ * `modifiers` was the only inherited field, so a model that put `text` on the CALL (a natural
+ * reading of "one call, one text") got `"type" needs text` while the text sat in its own argument
+ * object. The inherited set is what describes the SEQUENCE rather than a target: payload (`text`,
+ * `keys`), the button, and held keys. Coordinates are never inherited — each entry points at its own
+ * place, and inheriting one would silently repeat a click at a stale point.
+ */
+function withInheritedDefaults(entry: ComputerActionEntry, outer: ComputerActionInput): ComputerActionEntry {
+  const merged: ComputerActionEntry = { ...entry };
+  if (merged.button === undefined && outer.button !== undefined) merged.button = outer.button;
+  if (merged.text === undefined && outer.text !== undefined) merged.text = outer.text;
+  if (merged.keys === undefined && outer.keys !== undefined) merged.keys = outer.keys;
+  if (merged.modifiers === undefined && outer.modifiers !== undefined) merged.modifiers = outer.modifiers;
+  return merged;
 }

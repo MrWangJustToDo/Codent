@@ -69,7 +69,7 @@ function fakeComputer(overrides = {}) {
 }
 
 /** The narrow slice of `ExtensionContext` the extension touches. */
-function activate(computer, config) {
+function activate(computer, config, envOverrides = {}) {
   const tools = new Map();
   let transformer;
   /**
@@ -87,6 +87,7 @@ function activate(computer, config) {
         resizes.push(options.maxWidth);
         return null; // no codec: exercise the PNG fallback path
       },
+      ...envOverrides,
     },
     registerTool: (definition) => {
       tools.set(definition.name, definition);
@@ -178,12 +179,17 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
   // "MAGNIFIED", and the whole zoom feature did nothing on a host that owns an image codec.
   assert.equal(resizes.at(-1), 1568, "a zoom keeps the host's native resolution; only the MAX_ZOOM_WIDTH cap applies");
 
-  // A zoom image is NOT a coordinate frame: pixels come back at full resolution, so a model that
-  // reused the image's own pixels would click somewhere else entirely. The text has to say so.
+  // Unmeasurable bytes (this fake returns an 8-byte header) must NOT be assumed to be 1:1: the host
+  // may have magnified, so the conservative "do not use this image's pixels" rule is the only honest
+  // one. A measurable 1:1 crop and the JPEG codec path are asserted below.
   const zoomParts = read.toModelOutput({ output: zoomed });
-  assert.ok(zoomParts[0].content.includes("MAGNIFIED"), "a zoom result is labelled as magnified");
-  assert.ok(zoomParts[0].content.includes("(0,0)-(320,200)"), "…and names the region in screen space");
-  assert.ok(zoomParts[0].content.includes("keep sending screen coordinates"), "…and restates the rule");
+  assert.equal(zoomed.image, undefined, "unmeasurable bytes carry no size claim");
+  assert.equal(zoomed.scale, undefined);
+  assert.ok(
+    zoomParts[0].content.includes("Do NOT use this image's own pixels"),
+    "…and the text falls back to the conservative rule"
+  );
+  assert.ok(zoomParts[0].content.includes("(0,0)-(320,200)"), "…still naming the region in screen space");
   assert.ok(read.toModelOutput({ output: output })[0].content.includes("pixels in THIS image"));
 }
 
@@ -290,6 +296,15 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
 
   // Validation is the model's error message, so it has to name the missing argument.
   await assert.rejects(() => write.execute({ action: "click" }, OPTS), /needs x and y/);
+
+  // A scroll with no delta is a no-op that still costs an approval and a screenshot, and its
+  // summary reads as success — refuse it instead of returning "scroll 0,0 at x,y".
+  await assert.rejects(() => write.execute({ action: "scroll", x: 1, y: 1 }, OPTS), /non-zero delta_x or delta_y/);
+  await assert.rejects(
+    () => write.execute({ action: "scroll", x: 1, y: 1, delta_x: 0, delta_y: 0 }, OPTS),
+    /non-zero delta_x or delta_y/
+  );
+  assert.equal(write.inputSchema.safeParse({ action: "scroll", x: 1, y: 1, delta_y: 200 }).success, true);
   await assert.rejects(() => write.execute({ action: "drag", x: 1, y: 2 }, OPTS), /needs to_x and to_y/);
   await assert.rejects(() => write.execute({ action: "type", text: "" }, OPTS), /needs text/);
   await assert.rejects(() => write.execute({ action: "key" }, OPTS), /needs keys/);
@@ -358,6 +373,191 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
   // The schema refuses an empty batch, and accepts a one-entry one.
   assert.equal(write.inputSchema.safeParse({ actions: [] }).success, false);
   assert.equal(write.inputSchema.safeParse({ actions: [{ action: "click", x: 1, y: 1 }] }).success, true);
+}
+
+// ============================================================================
+// Action schema: held keys, batch inheritance, step-indexed failures
+// ============================================================================
+//
+// Every case here is a measured failure from a real session: a `click` with
+// `modifiers: ["Backspace"]` (which cleared the field), a batch whose `text` sat on the CALL and
+// produced `"type" needs text`, and a four-action batch whose error named no step.
+{
+  const { computer, calls } = fakeComputer();
+  const { tools } = activate(computer, { settleMs: 0 });
+  const write = tools.get(COMPUTER_ACTION_TOOL);
+
+  // A held key must be a MODIFIER. Anything else belongs in `key` — as a held key it silently
+  // rewrites the action (Backspace+click cleared a search box).
+  for (const modifier of ["Control", "Shift", "Alt", "Meta"]) {
+    assert.equal(
+      write.inputSchema.safeParse({ action: "click", x: 1, y: 1, modifiers: [modifier] }).success,
+      true,
+      `${modifier} is a held modifier`
+    );
+  }
+  assert.equal(
+    write.inputSchema.safeParse({ action: "click", x: 1, y: 1, modifiers: ["Backspace"] }).success,
+    false,
+    "a non-modifier cannot be held for a gesture"
+  );
+
+  // The payload fields travel from the call into the entries that omit them — `text` on the CALL
+  // used to produce `"type" needs text` while the text was right there.
+  calls.length = 0;
+  const inherited = await write.execute(
+    {
+      text: "hi",
+      keys: ["Enter"],
+      button: "right",
+      actions: [{ action: "type" }, { action: "click", x: 3, y: 4 }, { action: "key" }],
+    },
+    OPTS
+  );
+  assert.deepEqual(
+    calls.filter(([name]) => name !== "screenshot"),
+    [
+      ["type", "hi"],
+      ["click", 3, 4, "right", 1],
+      ["press", ["Enter"]],
+    ],
+    "text / keys / button are inherited; coordinates are not"
+  );
+  assert.match(inherited.summary, /type "hi" → click 3,4 right → press Enter/);
+
+  // Coordinates are NEVER inherited: an entry that names no point is refused, not silently sent to
+  // the call's point (which would click somewhere the model did not ask for).
+  await assert.rejects(
+    () => write.execute({ x: 9, y: 9, actions: [{ action: "click" }] }, OPTS),
+    /needs x and y/,
+    "an entry without a point is refused, not pointed at the call's coordinates"
+  );
+
+  // A held modifier on `type` changes the GESTURE (Cmd+V → Cmd+Shift+V), not the text.
+  await assert.rejects(
+    () => write.execute({ action: "type", text: "x", modifiers: ["Shift"] }, OPTS),
+    /cannot take modifiers/
+  );
+
+  // An abort that arrives from ANOTHER signal keeps its identity: the step context must not wrap it
+  // into `Action #2 …`, or a cancel is reported as a tool failure.
+  {
+    const aborted = Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
+    const { computer: aborting } = fakeComputer({
+      mouseDown: async () => {
+        throw aborted;
+      },
+    });
+    const abortingTools = activate(aborting, { settleMs: 0 }).tools;
+    await assert.rejects(
+      () =>
+        abortingTools
+          .get(COMPUTER_ACTION_TOOL)
+          .execute({ actions: [{ action: "click", x: 1, y: 1 }, { action: "mouse_down" }] }, OPTS),
+      (error) => error === aborted,
+      "an abort is rethrown as-is"
+    );
+  }
+
+  // A failure names the step, so the model does not re-run the whole sequence.
+  {
+    const { computer: failing } = fakeComputer({
+      mouseDown: async () => {
+        throw new Error("no button");
+      },
+    });
+    const failingTools = activate(failing, { settleMs: 0 }).tools;
+    await assert.rejects(
+      () =>
+        failingTools
+          .get(COMPUTER_ACTION_TOOL)
+          .execute({ actions: [{ action: "click", x: 1, y: 1 }, { action: "mouse_down" }] }, OPTS),
+      /Action #2 of 2 \(mouse_down\) failed after: click 1,1 left: no button/
+    );
+  }
+
+  // A press that moved the pointer says so; a press in place does not claim a position.
+  assert.match((await write.execute({ action: "mouse_down", x: 5, y: 6 }, OPTS)).summary, /mouse down left at 5,6/);
+  assert.match((await write.execute({ action: "mouse_up" }, OPTS)).summary, /mouse up left/);
+}
+
+// ============================================================================
+// Zoom reports the factor it magnified by
+// ============================================================================
+//
+// A crop is captured at the panel's physical resolution, so on a 2.25x display a 400x200 region
+// comes back 900x450. The model used to be told "this is magnified" and nothing else, assumed 2.0,
+// and every click it derived from a zoom landed ~12% short.
+function jpegBytes(width, height) {
+  // 32 bytes: the dimension probe refuses anything shorter than 24 before it even looks at the
+  // signature, so a minimal 20-byte SOF header would have been rejected as "unmeasurable".
+  const bytes = Buffer.alloc(32);
+  bytes[0] = 0xff;
+  bytes[1] = 0xd8; // SOI
+  bytes[2] = 0xff;
+  bytes[3] = 0xc0; // SOF0
+  bytes.writeUInt16BE(17, 4);
+  bytes[6] = 8; // precision
+  bytes.writeUInt16BE(height, 7);
+  bytes.writeUInt16BE(width, 9);
+  return new Uint8Array(bytes);
+}
+
+function pngBytes(width, height) {
+  const bytes = Buffer.alloc(24);
+  Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(bytes, 0);
+  bytes.writeUInt32BE(13, 8);
+  bytes.write("IHDR", 12, "latin1");
+  bytes.writeUInt32BE(width, 16);
+  bytes.writeUInt32BE(height, 20);
+  return new Uint8Array(bytes);
+}
+
+{
+  const { computer } = fakeComputer({ zoom: async () => pngBytes(900, 450) });
+  const { tools } = activate(computer, { settleMs: 0 });
+  const read = tools.get(COMPUTER_SCREENSHOT_TOOL);
+
+  const zoomed = await read.execute({ zoom: { x: 100, y: 50, width: 400, height: 200 } }, OPTS);
+  assert.deepEqual(zoomed.image, { width: 900, height: 450 }, "the attached image's own size");
+  assert.equal(zoomed.scale, 2.25, "…and the factor that maps it back");
+
+  const text = read.toModelOutput({ output: zoomed })[0].content;
+  assert.match(text, /900x450 = 2\.25x the screen region \(100,50\)-\(500,250\)/, "the real factor is stated");
+  assert.match(text, /screen_x = 100 \+ image_x \/ 2\.25/, "…with the arithmetic to apply it");
+  assert.match(text, /Coordinates you SEND are always screen pixels/, "and the invariant");
+
+  // A full screenshot is not magnified: no region, no scale, and the image is the display frame.
+  const shot = await read.execute({}, OPTS);
+  assert.equal(shot.region, undefined);
+  assert.equal(shot.scale, undefined);
+  assert.match(read.toModelOutput({ output: shot })[0].content, /pixels in THIS image/);
+}
+
+// A crop that is exactly the region (a 1x panel) says "1:1", and gives the OFFSET mapping — a model
+// that sends the local pixel without adding the region origin lands `x`,`y` away from the target.
+{
+  const { computer } = fakeComputer({ zoom: async () => pngBytes(320, 200) });
+  const { tools } = activate(computer, { settleMs: 0 });
+  const read = tools.get(COMPUTER_SCREENSHOT_TOOL);
+  const zoomed = await read.execute({ zoom: { x: 100, y: 50, width: 320, height: 200 } }, OPTS);
+  assert.equal(zoomed.scale, 1);
+  const text = read.toModelOutput({ output: zoomed })[0].content;
+  assert.match(text, /at 1:1/, "1:1 is stated as such, not as a magnification");
+  assert.match(text, /screen_x = 100 \+ image_x, screen_y = 50 \+ image_y/, "…with the region offset");
+}
+
+// The production codec path: with a host that compresses, the attached image is a JPEG, so the size
+// must come from a JPEG header (the PNG branch would return null and drop the factor).
+{
+  const jpeg = jpegBytes(900, 450);
+  const { computer } = fakeComputer({ zoom: async () => pngBytes(1800, 900) });
+  const { tools } = activate(computer, { settleMs: 0 }, { resizeImage: async () => jpeg });
+  const read = tools.get(COMPUTER_SCREENSHOT_TOOL);
+  const zoomed = await read.execute({ zoom: { x: 0, y: 0, width: 400, height: 200 } }, OPTS);
+  assert.equal(zoomed.mimeType, "image/jpeg");
+  assert.deepEqual(zoomed.image, { width: 900, height: 450 }, "measured from the JPEG the host produced");
+  assert.equal(zoomed.scale, 2.25);
 }
 
 // ============================================================================

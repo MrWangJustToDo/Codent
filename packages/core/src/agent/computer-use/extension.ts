@@ -61,7 +61,7 @@ export interface ComputerUseExtensionConfig {
    * call. Pick it only when a stable prompt prefix is worth more than that bandwidth.
    */
   screenshotHistory?: number | false;
-  /** Delay after an action before the screenshot is taken, so the UI has settled. Default 400 ms. */
+  /** Delay after an action before the screenshot is taken, so the UI has settled. Default 800 ms. */
   settleMs?: number;
 }
 
@@ -103,16 +103,17 @@ export function createComputerUseExtension(
         name: COMPUTER_SCREENSHOT_TOOL,
         description:
           `Take a screenshot of the user's screen and look at it. ${space} ` +
-          `Use "zoom" to read small text at full resolution — the result is magnified, and ` +
-          `coordinates stay in the ${width}x${height} screen space. ` +
+          `Use "zoom" to read small text at full resolution — a zoom result states its own pixel size ` +
+          `and the factor to divide by when you convert a position back to screen coordinates; the ` +
+          `coordinates you SEND stay in the ${width}x${height} screen space. ` +
           `This does not change anything on the screen.`,
         inputSchema: z.object({
           zoom: z
             .object({
               x: z.number().describe("Left edge, in screenshot pixels."),
               y: z.number().describe("Top edge, in screenshot pixels."),
-              width: z.number().describe("Region width, in screenshot pixels."),
-              height: z.number().describe("Region height, in screenshot pixels."),
+              width: z.number().positive().describe("Region width, in screenshot pixels."),
+              height: z.number().positive().describe("Region height, in screenshot pixels."),
             })
             .optional()
             .describe("Capture only this region, at full resolution."),
@@ -145,9 +146,15 @@ export function createComputerUseExtension(
           `Each call returns a fresh screenshot of the result. ` +
           `Look before you act (${COMPUTER_SCREENSHOT_TOOL}), and prefer keyboard shortcuts over ` +
           `clicking coordinates when you can. ` +
-          `Use \`modifiers\` for a held key (Ctrl+click, Shift+click, Ctrl+scroll) and \`actions\` to ` +
+          `Use \`modifiers\` for a held modifier (Ctrl+click, Shift+click, Ctrl+scroll) and \`actions\` to ` +
           `batch a sure sequence into ONE call — a batch is one approval and one screenshot. ` +
           `If a drag does not register, retry it with \`steps\` so the pointer travels. ` +
+          `If a name matches more than one target (a group chat and a contact called the same thing), ` +
+          `ask the user which one before acting — guessing costs many actions to undo. ` +
+          `Shell tools MAY not be able to launch or activate GUI apps on this host (a sandboxed ` +
+          `shell has no GUI session): do that here, not with run_command. ` +
+          `If two attempts at the same coordinates — or two rounds of the same strategy — fail, change ` +
+          `approach (keyboard, menu bar, scroll, search) instead of nudging the pointer. ` +
           `The user approves each call.`,
         inputSchema: computerActionSchema,
         // Static by design: the SDK's engine stamps the approval, so a per-action predicate cannot
@@ -181,16 +188,28 @@ export function createComputerUseExtension(
 
 /** Shape one capture as tool output (what `present.text` reads and `toModelOutput` projects). */
 function toToolOutput(
-  captured: { summary: string; base64: string; mimeType: string; region?: CoreEnvImageRegion },
+  captured: {
+    summary: string;
+    base64: string;
+    mimeType: string;
+    image?: { width: number; height: number };
+    scale?: number;
+    region?: CoreEnvImageRegion;
+  },
   computer: CoreEnvComputer,
   summary: string
 ): ScreenToolOutput {
+  // `image` / `scale` come from the capture (computed once there) and are present only when the
+  // attached image could actually be measured. An unmeasurable zoom carries neither, so the text
+  // falls back to the conservative "do not use this image's pixels" instead of claiming 1:1.
   return {
     summary,
     display: computer.display,
     environment: computer.environment,
     base64: captured.base64,
     mimeType: captured.mimeType,
+    ...(captured.image ? { image: captured.image } : {}),
+    ...(captured.scale !== undefined ? { scale: captured.scale } : {}),
     ...(captured.region ? { region: captured.region } : {}),
   };
 }
