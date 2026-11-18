@@ -324,7 +324,16 @@ export const agentSessionRoutes = new Hono()
   .delete("/sessions/:sessionId", async (c) => {
     const { createLocalAgentSessionHost } = await loadCore();
     const host = createLocalAgentSessionHost({ manager: getServerManager() });
-    const removed = (await host.deleteSession?.(c.req.param("sessionId"))) ?? false;
+    let removed: boolean;
+    try {
+      removed = (await host.deleteSession?.(c.req.param("sessionId"))) ?? false;
+    } catch (error) {
+      // `deleteSession` refuses a log another PROCESS is writing (`SessionLockedError`). That is a
+      // conflict, not a server fault: without this mapping the message ("open in another process")
+      // was lost behind a bare 500, and a client could not tell "try again later" from "broken".
+      const message = error instanceof Error ? error.message : String(error);
+      return c.json({ error: true, message }, 409);
+    }
     if (!removed) return c.json({ error: true, message: "Session not found" }, 404);
     return c.json({ ok: true });
   })

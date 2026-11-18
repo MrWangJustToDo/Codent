@@ -252,6 +252,24 @@ async function probeExecFileSupport(client: ReturnType<typeof hc<AppType>>, base
 }
 
 /**
+ * Stable identity of a remote server for process-local arbitration.
+ *
+ * Object identity cannot answer "is this the same filesystem?" (two clients of one server are two
+ * objects) and `rootPath` cannot either (two servers commonly report `/workspace`). `URL` also
+ * normalizes what a human writes differently: scheme/host case, default ports, a trailing slash.
+ * Two mounts of the same origin under different path prefixes stay distinct.
+ */
+function remoteServerKey(baseUrl: string): string {
+  try {
+    const url = new URL(baseUrl);
+    return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
+  } catch {
+    // Not a parseable URL (a custom transport): fall back to the string the caller gave us.
+    return baseUrl;
+  }
+}
+
+/**
  * Create a {@link CoreEnv} that delegates to a remote CoreEnv HTTP server via Hono RPC.
  *
  * Synchronous utilities (`path`, `byteLength`, `base64*`) use core defaults locally.
@@ -303,6 +321,9 @@ export async function createRemoteEnv(serverUrl: string): Promise<CoreEnv> {
     // discover files THROUGH this env and then execute them locally (disk extensions) must not
     // run — see `CoreEnv.remote`.
     remote: true,
+    // Two `createRemoteEnv(sameUrl)` clients are two objects over ONE filesystem: the session claim
+    // table keys on this instead of object identity so they cannot both claim one session id.
+    remoteKey: remoteServerKey(baseUrl),
 
     path,
 
