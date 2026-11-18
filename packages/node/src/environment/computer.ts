@@ -74,11 +74,15 @@ export interface CreateNodeComputerOptions {
   /** The robot that drives the machine. Defaults to a lazily required `@jitsi/robotjs`. */
   robot?: NodeComputerRobot;
   /**
-   * The platform whose input semantics to use. Defaults to `process.platform`.
+   * The platform whose INPUT semantics to use. Defaults to `process.platform`.
    *
    * Exposed because the capability is host-supplied (a host may drive another machine's screen) and
    * because the non-ASCII typing channel differs per platform — the matrix is only assertable on a
    * Linux CI if the branch is reachable.
+   *
+   * It changes typing / scroll units / the reported `environment` only. Presence probing still follows
+   * the RUNNING OS, because the native addon is built for it: a host that emulates another platform
+   * must still provide a `robot`.
    */
   platform?: NodeJS.Platform;
   /** Writes text to the pasteboard for macOS `type`. Defaults to `pbcopy`. */
