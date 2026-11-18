@@ -376,10 +376,21 @@ export function createNodeComputer(options: CreateNodeComputerOptions = {}): Cor
 
   const display = normalizeDisplay(options.display, screen);
 
+  /**
+   * The screen size to map coordinates against, read per call.
+   *
+   * `display` is FIXED (the model's coordinate space and the tool text must not move), and every
+   * capture is re-fitted into it — so the image the model looks at always matches `display`. The
+   * mapping must therefore follow the LIVE screen: after an undock, a resolution change or a
+   * display-scaling change the capture adapts, but a size cached at creation does not, and every
+   * click lands at `cached / real` of the point the model picked (half the distance for 1080p → 4K).
+   */
+  const liveScreen = () => currentScreenSize(robot) ?? screen;
+
   /** Model display point → real screen point. */
-  const toScreen = (x: number, y: number) => ({
-    x: Math.round((x * screen.width) / display.width),
-    y: Math.round((y * screen.height) / display.height),
+  const toScreen = (x: number, y: number, live: { width: number; height: number } = liveScreen()) => ({
+    x: Math.round((x * live.width) / display.width),
+    y: Math.round((y * live.height) / display.height),
   });
   /**
    * Real screen point → model display point.
@@ -388,13 +399,13 @@ export function createNodeComputer(options: CreateNodeComputerOptions = {}): Cor
    * 1280-wide display) maps the last pixel to `display.width` after rounding, and the model would be
    * told the pointer sits outside the frame it is looking at.
    */
-  const toDisplay = (x: number, y: number) => ({
-    x: clamp(Math.round((x * display.width) / screen.width), 0, display.width - 1),
-    y: clamp(Math.round((y * display.height) / screen.height), 0, display.height - 1),
+  const toDisplay = (x: number, y: number, live: { width: number; height: number } = liveScreen()) => ({
+    x: clamp(Math.round((x * display.width) / live.width), 0, display.width - 1),
+    y: clamp(Math.round((y * display.height) / live.height), 0, display.height - 1),
   });
 
-  const moveTo = (x: number, y: number) => {
-    const point = toScreen(x, y);
+  const moveTo = (x: number, y: number, live: { width: number; height: number } = liveScreen()) => {
+    const point = toScreen(x, y, live);
     robot.moveMouse(point.x, point.y);
   };
 
@@ -425,9 +436,11 @@ export function createNodeComputer(options: CreateNodeComputerOptions = {}): Cor
       options?.signal?.throwIfAborted();
       // Re-read the screen: a laptop that changed resolution (or unplugged a monitor) would
       // otherwise be clamped against the old size and robotjs can crash on an out-of-range capture.
-      const live = currentScreenSize(robot) ?? screen;
-      const start = toScreen(region.x, region.y);
-      const end = toScreen(region.x + region.width, region.y + region.height);
+      // The SAME live size maps the region — mixing it with the cached one (clamp live, convert
+      // cached) magnified a region the model never asked for.
+      const live = liveScreen();
+      const start = toScreen(region.x, region.y, live);
+      const end = toScreen(region.x + region.width, region.y + region.height, live);
       // robotjs does not validate the region and can crash Node on out-of-screen bounds.
       const x = clamp(start.x, 0, live.width - 1);
       const y = clamp(start.y, 0, live.height - 1);
@@ -477,8 +490,13 @@ export function createNodeComputer(options: CreateNodeComputerOptions = {}): Cor
 
     async scroll(x, y, deltaX, deltaY, scrollOptions) {
       scrollOptions?.signal?.throwIfAborted();
-      moveTo(x, y);
-      const delta = toScreen(deltaX, deltaY);
+      const live = liveScreen();
+      moveTo(x, y, live);
+      // macOS scrolls in PIXELS, so a display-space delta must become screen pixels. Linux and
+      // Windows scroll in whole wheel notches — LOGICAL units that already describe the gesture:
+      // scaling them by the display ratio made the same `delta_y: 100` scroll three times further on
+      // a 4K screen than on a 1080p one (same logical desktop, same gesture).
+      const delta = process.platform === "darwin" ? toScreen(deltaX, deltaY, live) : { x: deltaX, y: deltaY };
       // robotjs scrolls right and down for NEGATIVE values.
       robot.scrollMouse(scrollUnits(-delta.x), scrollUnits(-delta.y));
     },

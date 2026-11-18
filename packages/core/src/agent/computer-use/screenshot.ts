@@ -91,7 +91,12 @@ export async function captureScreen(
   // Resize is a codec step, not a coordinate step — the image keeps the frame's dimensions so the
   // reminder below ("this image is the screen") stays true. A zoom is allowed a larger frame (its
   // whole point is legible detail), capped so a 4K region does not become a 25 MB upload.
-  const maxWidth = region ? Math.min(region.width, MAX_ZOOM_WIDTH) : computer.display.width;
+  //
+  // The cap is `MAX_ZOOM_WIDTH`, NOT `region.width`: `region` is in DISPLAY space, and the host's
+  // resize is `withoutEnlargement`, so clamping to it re-encoded the driver's native-resolution
+  // crop back down to exactly display density — a zoom never magnified anything (and both 1568
+  // constants became dead). `region.width` only describes WHERE the crop is, never its resolution.
+  const maxWidth = region ? MAX_ZOOM_WIDTH : computer.display.width;
   // Hosts encode/copy synchronously, so an abort that arrived while the capture was in flight would
   // still pay for the whole frame. Cheap to check, and the work is discarded anyway.
   if (signal?.aborted) throw signal.reason;

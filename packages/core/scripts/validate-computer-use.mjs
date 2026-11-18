@@ -72,11 +72,19 @@ function fakeComputer(overrides = {}) {
 function activate(computer, config) {
   const tools = new Map();
   let transformer;
+  /**
+   * The `maxWidth` requested from the host's image codec, in call order.
+   *
+   * Recorded even though the fake returns `null` (no codec): the REQUESTED width is what decides
+   * the image's density, and it is the one thing the extension controls.
+   */
+  const resizes = [];
   const ctx = {
     coreEnv: {
       rootPath: "/tmp",
       base64Encode: (bytes) => Buffer.from(bytes).toString("base64"),
-      async resizeImage() {
+      async resizeImage(_bytes, options = {}) {
+        resizes.push(options.maxWidth);
         return null; // no codec: exercise the PNG fallback path
       },
     },
@@ -91,7 +99,7 @@ function activate(computer, config) {
   };
   const api = createComputerUseExtension(computer, config);
   api.activate(ctx);
-  return { api, tools, transformer: () => transformer };
+  return { api, tools, transformer: () => transformer, resizes };
 }
 
 const OPTS = { toolCallId: "call_1", abortSignal: undefined };
@@ -132,7 +140,7 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
 
 {
   const { computer, calls } = fakeComputer();
-  const { tools } = activate(computer, { settleMs: 0 });
+  const { tools, resizes } = activate(computer, { settleMs: 0 });
   const read = tools.get(COMPUTER_SCREENSHOT_TOOL);
 
   const output = await read.execute({}, OPTS);
@@ -142,6 +150,7 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
   assert.equal(output.summary, "screen 1280x800 · pointer 10,20");
   assert.deepEqual(output.display, DISPLAY);
   assert.equal(read.present.text(output), output.summary);
+  assert.equal(resizes.at(-1), DISPLAY.width, "a full screenshot is capped at the display width");
 
   const parts = read.toModelOutput({ output });
   assert.ok(Array.isArray(parts), "the projection is content parts");
@@ -163,6 +172,11 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
   assert.deepEqual(calls.at(-1), ["zoom", { x: 0, y: 0, width: 320, height: 200 }]);
   assert.equal(zoomed.summary, "screen region 320x200 · pointer 10,20");
   assert.deepEqual(zoomed.region, { x: 0, y: 0, width: 320, height: 200 }, "the region travels with the result");
+  // The codec cap is `MAX_ZOOM_WIDTH` (1568), NOT the region's width: the host's resize never
+  // enlarges, so capping a zoom at `region.width` (a DISPLAY-space number) re-encoded the driver's
+  // native-resolution crop back to display density — the model got a plain crop, labelled
+  // "MAGNIFIED", and the whole zoom feature did nothing on a host that owns an image codec.
+  assert.equal(resizes.at(-1), 1568, "a zoom keeps the host's native resolution; only the MAX_ZOOM_WIDTH cap applies");
 
   // A zoom image is NOT a coordinate frame: pixels come back at full resolution, so a model that
   // reused the image's own pixels would click somewhere else entirely. The text has to say so.
@@ -401,6 +415,50 @@ function hasImage(message) {
   // Nothing to do ⇒ the very same array (no cache invalidation for a run with no screenshots).
   const fewEnough = [screenshotMessage(1), screenshotMessage(2)];
   assert.equal(capScreenshotHistory(fewEnough, 3, true), fewEnough);
+
+  // The elided form is MEMOIZED per message: the same input must yield the same elided bytes on
+  // every call. This is the cache property, not an optimization detail — a re-serialized payload
+  // that differs by one byte silently invalidates the prefix from that message on.
+  {
+    const first = capScreenshotHistory(messages, 2, true);
+    const second = capScreenshotHistory(messages, 2, true);
+    assert.equal(second[1], first[1], "an already-elided message is returned by reference, never re-encoded");
+    assert.equal(second[2], first[2], "…for string content too (the stringified tool result)");
+    assert.equal(second[1].content, first[1].content);
+    assert.equal(second[2].content, first[2].content);
+  }
+
+  // A message that is already blinded is returned AS-IS — never re-serialized (the bytes are the
+  // cache key), for both content shapes.
+  {
+    assert.equal(capScreenshotHistory([capped[1]], 1, true)[0], capped[1], "object content: no rewrite");
+    assert.equal(capScreenshotHistory([capped[2]], 1, true)[0], capped[2], "string content: no re-encode");
+  }
+
+  // `screenshotHistory: false` is the cache-first opt-out: no elision at all, so the wire stays
+  // append-only. A vision-less model still gets every image dropped (it cannot read them).
+  {
+    assert.equal(capScreenshotHistory(messages, false, true), messages, "false disables the cap");
+    const blind = capScreenshotHistory(messages, false, false);
+    assert.equal(
+      blind.filter((message) => message.role === "tool" && hasImage(message)).length,
+      0,
+      "false does not keep images for a model that cannot see them"
+    );
+    assert.equal(
+      capScreenshotHistory(messages, 0, true).filter((message) => message.role === "tool" && hasImage(message)).length,
+      0,
+      "an explicit 0 keeps none (it must not degrade to slice(0) = keep all)"
+    );
+
+    const wiredOff = activate(fakeComputer().computer, { screenshotHistory: false, settleMs: 0 }).transformer();
+    assert.equal(
+      wiredOff({ messages, modelHasVision: true }).filter((message) => message.role === "tool" && hasImage(message))
+        .length,
+      4,
+      "the extension accepts the opt-out"
+    );
+  }
 
   // The cap only matters if the extension WIRES it: calling the pure function proves the budget
   // arithmetic, not that the budget is applied. Without this, dropping `registerMessageTransformer`

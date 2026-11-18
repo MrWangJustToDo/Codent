@@ -227,17 +227,20 @@ function fakeRobot(overrides = {}) {
   // Cursor position comes back in display space (the inverse mapping).
   assert.deepEqual(await computer.cursorPosition(), { x: 320, y: 200 });
 
-  // Scroll deltas are scaled, then converted to the platform's wheel unit.
+  // Scroll: pixels on macOS (a display-space delta scaled to the real screen), whole notches
+  // elsewhere. Notches are LOGICAL units, so the same gesture must not scroll further just because
+  // the panel is denser — scaling them by the display ratio made `delta_y: 200` four notches here
+  // and two on a 1080p screen (same logical desktop, same swipe).
   calls.length = 0;
   await computer.scroll(100, 100, 0, 200);
   const scroll = calls.at(-1);
   assert.equal(scroll[0], "scrollMouse");
   const expected =
     {
-      darwin: -400, // pixels
-      win32: -480, // 120 units per notch
-      linux: -4, // whole notches
-    }[process.platform] ?? -4;
+      darwin: -400, // pixels: the display-space delta scaled to the 2x screen
+      win32: -240, // 120 units per notch
+      linux: -2, // whole notches
+    }[process.platform] ?? -2;
   assert.equal(scroll[2], expected, `scroll units on ${process.platform}`);
 
   // Keys: `KeyboardEvent.key` names → robotjs names, and a combo releases in reverse order.
@@ -301,6 +304,63 @@ function fakeRobot(overrides = {}) {
   const clamped = readPng(await computer.zoom({ x: 1200, y: 700, width: 500, height: 500 }));
   assert.equal(clamped.width, 160, "clamped to the screen's right edge");
   assert.equal(clamped.height, 40, "clamped to the screen's bottom edge");
+}
+
+// ============================================================================
+// The screen changes after creation (undock / resolution / display scaling)
+// ============================================================================
+//
+// `display` is fixed and every capture is re-fitted into it, so the picture the model sees keeps
+// matching its coordinate space. The MAPPING must follow the live screen: a size cached at creation
+// sent the click to `cached / real` of the point the model picked — half the distance for
+// 1080p -> 4K — while the screenshot still looked perfect, which is the worst failure to debug.
+{
+  let live = { width: 2560, height: 1440 };
+  const { robot, calls } = fakeRobot({
+    getScreenSize: () => live,
+    getMousePos: () => ({ x: 640, y: 360 }),
+    screen: {
+      capture: (_x = 0, _y = 0, w = live.width, h = live.height) => bitmap(w, h, () => [200, 210, 220]),
+    },
+  });
+  const computer = createNodeComputer({ robot });
+  assert.ok(computer);
+  assert.deepEqual(computer.display, { width: 1280, height: 720 }, "the model's space is fixed at creation");
+
+  calls.length = 0;
+  await computer.click(640, 360);
+  assert.deepEqual(calls.at(-2), ["moveMouse", 1280, 720], "2x screen: the display point scales by 2");
+
+  // Undocked, or the display scaling changed: the real screen is now 1:1 with the model's space.
+  live = { width: 1280, height: 720 };
+
+  const shot = readPng(await computer.screenshot());
+  assert.equal(shot.width, 1280, "the screenshot still matches the model's display");
+
+  calls.length = 0;
+  await computer.click(640, 360);
+  assert.deepEqual(
+    calls.at(-2),
+    ["moveMouse", 640, 360],
+    "the click follows the live screen, not the size cached at creation"
+  );
+  assert.deepEqual(await computer.cursorPosition(), { x: 640, y: 360 }, "the reported pointer moves with it too");
+
+  // A zoom converts the region with the same live size it clamps against — mixing the two
+  // magnified a region the model never asked for.
+  const zoomed = readPng(await computer.zoom({ x: 0, y: 0, width: 640, height: 360 }));
+  assert.equal(zoomed.width, 640, "the region is 1:1 now, not doubled by the old scale");
+
+  // One gesture, one scroll distance, whatever the panel's density (pixels are macOS-only).
+  calls.length = 0;
+  await computer.scroll(640, 360, 0, 200);
+  const expected =
+    {
+      darwin: -200, // pixels: 1:1 now
+      win32: -240, // logical notches, unchanged by the resolution
+      linux: -2,
+    }[process.platform] ?? -2;
+  assert.equal(calls.at(-1)[2], expected, `scroll distance on ${process.platform}`);
 }
 
 // ============================================================================

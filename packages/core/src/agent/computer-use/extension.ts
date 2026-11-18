@@ -16,8 +16,9 @@
  *
  * Screenshot history is capped (default 3, newest kept) by a message transformer: every action
  * returns a fresh screenshot, so without a cap a 20-step task would carry 20 full-screen images and
- * blow both the context window and the prompt cache. The transformer is wire-only, so the session
- * keeps its full transcript and only the model's view is trimmed.
+ * blow both the context window and the upload. The transformer is wire-only, so the session keeps
+ * its full transcript and only the model's view is trimmed — see {@link capScreenshotHistory} for
+ * what that trim costs a prefix cache, and `screenshotHistory: false` for the opt-out.
  */
 import { z } from "zod";
 
@@ -54,8 +55,12 @@ export interface ComputerUseExtensionConfig {
    * How many screenshots stay visible to the model. Older ones keep their text line and lose the
    * image. Default 3: enough to reason about "before, after, now", few enough that a long session
    * does not carry a wall of full-screen images.
+   *
+   * `false` removes the cap: every screenshot stays an image. This is the cache-optimal setting —
+   * see {@link capScreenshotHistory} — at the cost of uploading one image per action on every later
+   * call. Pick it only when a stable prompt prefix is worth more than that bandwidth.
    */
-  screenshotHistory?: number;
+  screenshotHistory?: number | false;
   /** Delay after an action before the screenshot is taken, so the UI has settled. Default 400 ms. */
   settleMs?: number;
 }
@@ -73,11 +78,15 @@ export function createComputerUseExtension(
   computer: CoreEnvComputer,
   config: ComputerUseExtensionConfig = {}
 ): ExtensionAPI {
-  // `Number.isFinite` first: `Math.max(1, Math.trunc(NaN))` is still `NaN`, and `slice(-NaN)` is
-  // `slice(0)` — the cap would silently keep every screenshot instead of failing loudly.
-  const history = Number.isFinite(config.screenshotHistory)
-    ? Math.max(1, Math.trunc(config.screenshotHistory as number))
-    : DEFAULT_SCREENSHOT_HISTORY;
+  // `false` is an explicit opt-out, not `NaN`: `Math.max(1, Math.trunc(NaN))` is still `NaN`, and
+  // `slice(-NaN)` is `slice(0)` — the cap would silently keep EVERY screenshot instead of failing
+  // loudly (which is now the documented meaning of `false`, so it must be spelled on purpose).
+  const history: number | false =
+    config.screenshotHistory === false
+      ? false
+      : Number.isFinite(config.screenshotHistory)
+        ? Math.max(0, Math.trunc(config.screenshotHistory as number))
+        : DEFAULT_SCREENSHOT_HISTORY;
   const settleMs = Number.isFinite(config.settleMs) ? Math.max(0, config.settleMs as number) : DEFAULT_SETTLE_MS;
   const { width, height } = computer.display;
   const space = `The screen is ${width}x${height} pixels, which is exactly the size of the screenshots you see.`;
@@ -196,12 +205,31 @@ function toToolOutput(
  * Identification is by the text marker our own projection writes, not by tool-call id: the wire is
  * rebuilt from the persisted transcript on resume, where an id set held in memory is empty and every
  * old screenshot would be re-sent at full size.
+ *
+ * **What this costs, and why it is still the right boundary.** This is a WIRE transform: the durable
+ * transcript keeps every image (persistence reads the channel, not this array), so history is never
+ * edited on disk. But the provider's prompt cache is prefix-based, and dropping an image changes the
+ * bytes of a message that was already sent — the cache misses from that message onward. Any bounded
+ * image policy has that cost; keeping the OLDEST kept message as the one that changes is the
+ * minimum-damage placement, because the invalidated suffix is exactly the images still on screen.
+ *
+ * Anthropic's reference computer-use demo does the same (`only_n_most_recent_images`, default 3).
+ * The alternatives that avoid the rewrite entirely are provider-side: server-held conversation state
+ * (OpenAI's `previous_response_id`, where old screenshots are simply never re-sent) or context
+ * editing that clears old tool results on the provider. Neither survives a wire rebuilt from a local
+ * transcript, which is what makes this plugin work across providers. `screenshotHistory: false` is
+ * the escape hatch for a host that prefers a byte-stable prefix over the bandwidth of keeping them.
  */
 export function capScreenshotHistory(
   messages: ModelMessage[],
-  history: number,
+  history: number | false,
   modelHasVision: boolean
 ): ModelMessage[] {
+  // No cap, and the model can see: the wire stays append-only, so every call re-sends the exact
+  // prefix it sent before. A vision-less model still gets every screenshot blinded below (an image
+  // it cannot read is pure payload), so this early return is only for the model that can use them.
+  if (history === false && modelHasVision) return messages;
+
   const ours: number[] = [];
   for (let i = 0; i < messages.length; i++) {
     const content = readParts(messages[i]);
@@ -209,11 +237,15 @@ export function capScreenshotHistory(
   }
   if (ours.length === 0) return messages;
 
-  const keep = new Set(ours.slice(-history));
+  // `history > 0`, not `slice(-history)`: `slice(-0)` is `slice(0)`, so a configured 0 (keep none)
+  // would keep ALL of them. A vision-less model keeps none whatever the budget says — an image it
+  // cannot read is pure payload.
+  const keep = new Set(modelHasVision && history !== false && history > 0 ? ours.slice(-history) : []);
+  const screenshotIndexes = new Set(ours);
   let changed = false;
   const next = messages.map((message, index) => {
-    if (!ours.includes(index)) return message;
-    if (modelHasVision && keep.has(index)) return message;
+    if (!screenshotIndexes.has(index)) return message;
+    if (keep.has(index)) return message;
     changed = true;
     return stripMessageImages(message);
   });
@@ -245,16 +277,38 @@ function isScreenshotContent(parts: ContentPart[]): boolean {
 /**
  * Drop the images from a screenshot result, keeping its text line.
  *
- * The content KEEPS ITS FORM: string `tool` content stays a string (that is the only shape Chat
- * Completions accepts, and an array here would hand the adapter something it must re-stringify),
- * while an array stays an array.
+ * Memoized per input message. The transform runs on every model call, and without the memo each
+ * call re-decoded every already-elided tool payload (`readParts` → `JSON.parse` of a full
+ * JPEG-in-JSON string) and re-encoded it: ~5 MB of parse per call in a 50-screenshot session, plus
+ * a second chance to drift the prefix by a byte. The elided form depends only on the message, and
+ * the window only ever moves forward — a message cannot become visible again after it was elided —
+ * so caching it is safe.
  */
+const elidedByMessage = new WeakMap<ModelMessage, ModelMessage>();
+
 function stripMessageImages(message: ModelMessage): ModelMessage {
-  const kept = (readParts(message) ?? []).filter((part) => part?.type !== "image");
+  const memoized = elidedByMessage.get(message);
+  if (memoized) return memoized;
+  const elided = elideMessageImages(message);
+  elidedByMessage.set(message, elided);
+  return elided;
+}
+
+function elideMessageImages(message: ModelMessage): ModelMessage {
+  const parts = readParts(message);
+  // Not a content shape we understand, or nothing left to drop (already blinded): return the
+  // message ITSELF. Re-serializing a message that was already sent is a needless chance to change
+  // its bytes, and those bytes are the cache key.
+  if (!parts || !parts.some((part) => part?.type === "image")) return message;
+
+  const kept = parts.filter((part) => part?.type !== "image");
   const hasElision = kept.some(
     (part) => part?.type === "text" && (part as { content?: unknown }).content === ELIDED_SCREENSHOT
   );
-  const parts: ContentPart[] = hasElision ? kept : [...kept, { type: "text", content: ELIDED_SCREENSHOT }];
-  const content = typeof message.content === "string" ? JSON.stringify(parts) : parts;
+  const next: ContentPart[] = hasElision ? kept : [...kept, { type: "text", content: ELIDED_SCREENSHOT }];
+  // The content KEEPS ITS FORM: string `tool` content stays a string (that is the only shape Chat
+  // Completions accepts, and an array here would hand the adapter something it must re-stringify),
+  // while an array stays an array.
+  const content = typeof message.content === "string" ? JSON.stringify(next) : next;
   return { ...message, content } as ModelMessage;
 }
