@@ -43,6 +43,14 @@ export interface NodeComputerRobot {
   mouseToggle(down?: string, button?: string): void;
   scrollMouse(x: number, y: number): void;
   keyToggle(key: string, down: string): void;
+  /**
+   * Press `key` with `modifier` attached as the event's flags.
+   *
+   * The third argument is not optional in spirit: on macOS `keyToggle(key, down)` calls
+   * `CGEventSetFlags(event, 0)`, so a modifier "held" by a previous event does not travel with this
+   * one. `keyTap` is the only way to express a chord (Cmd+V, Ctrl+A) through this backend.
+   */
+  keyTap(key: string, modifier?: string | string[]): void;
   typeString(text: string): void;
   /** Linux only: which X display to talk to. Absent on other platforms' builds. */
   setXDisplayName?(name: string): void;
@@ -102,6 +110,48 @@ function toRobotButton(button: CoreEnvMouseButton) {
     throw new Error(`This computer has no "${button}" mouse button.`);
   }
   return button;
+}
+
+/**
+ * The modifier names a chord may carry, mapped to the backend's flag spelling.
+ *
+ * `KeyboardEvent.key` names are what the model sends (`Meta`, `Control`, `Alt`, `Shift`), the
+ * backend wants `command` / `control` / `alt` / `shift`, and a few aliases are common enough that
+ * rejecting them would just teach the model to retry (`Cmd`, `Option`, `Ctrl`).
+ */
+const ROBOT_MODIFIERS = new Map<string, string>([
+  ["control", "control"],
+  ["ctrl", "control"],
+  ["shift", "shift"],
+  ["alt", "alt"],
+  ["option", "alt"],
+  ["meta", "command"],
+  ["command", "command"],
+  ["cmd", "command"],
+]);
+
+/**
+ * Split `["Control", "Shift", "a"]` into the key and its modifier flags.
+ *
+ * Leading entries must be modifiers: `press(["a", "b"])` is not a chord, and passing `"a"` as a
+ * backend flag throws a message about an "Invalid key flag" that tells the model nothing.
+ */
+function splitChord(keys: string[]): { key: string; modifiers: string[] } {
+  if (keys.length === 0) throw new Error("A key press needs at least one key name.");
+  const modifiers: string[] = [];
+  for (let index = 0; index < keys.length - 1; index += 1) {
+    const source = keys[index]!;
+    const mapped = ROBOT_MODIFIERS.get(source.trim().toLowerCase());
+    if (!mapped) {
+      throw new Error(
+        `"${
+          source
+        }" is not a modifier: a chord is modifier names (Control / Shift / Alt / Meta) followed by ONE key, e.g. ["Control", "a"].`
+      );
+    }
+    modifiers.push(mapped);
+  }
+  return { key: keys[keys.length - 1]!, modifiers };
 }
 
 function currentEnvironment(platform: string): CoreEnvComputerEnvironment {
@@ -372,7 +422,7 @@ function copyToMacPasteboard(text: string, signal?: AbortSignal): Promise<void> 
 }
 
 async function typeViaPasteboard(
-  robot: Pick<NodeComputerRobot, "keyToggle">,
+  robot: Pick<NodeComputerRobot, "keyTap">,
   write: (text: string, signal?: AbortSignal) => Promise<void>,
   text: string,
   signal?: AbortSignal
@@ -387,15 +437,10 @@ async function typeViaPasteboard(
         `text has to go through the pasteboard, and nothing else can reach it.`
     );
   }
-  // A real paste: the focused field accepts one text run, with no IME composition involved.
-  robot.keyToggle(toRobotKey("Meta"), "down");
-  try {
-    robot.keyToggle("v", "down");
-    robot.keyToggle("v", "up");
-  } finally {
-    // A stuck Command key breaks every later keystroke.
-    robot.keyToggle(toRobotKey("Meta"), "up");
-  }
+  // ONE event with the Command flag attached. Two separate events (`command` down, then `v` down)
+  // send `v` with flags=0 on macOS — `CGEventSetFlags` is set from the argument, defaulting to none —
+  // so the field received a literal "v" instead of a paste.
+  robot.keyTap("v", "command");
 }
 
 /**
@@ -638,18 +683,13 @@ export function createNodeComputer(options: CreateNodeComputerOptions = {}): Cor
 
     async press(keys, pressOptions) {
       pressOptions?.signal?.throwIfAborted();
-      const pressed: string[] = [];
-      try {
-        for (const key of keys) {
-          const name = toRobotKey(key);
-          robot.keyToggle(name, "down");
-          pressed.push(name);
-        }
-      } finally {
-        // Release what went down even when a later key was invalid — otherwise the user's
-        // keyboard is left with a modifier held.
-        for (const name of pressed.reverse()) robot.keyToggle(name, "up");
-      }
+      // A chord is ONE event carrying its modifiers as flags. The old implementation pressed each
+      // key as its own event (`keyToggle(mod,"down")` then `keyToggle(key,"down")`), and macOS sets
+      // `CGEventSetFlags` from the ARGUMENT — defaulting to none — so a "held" Command never reached
+      // the key: Cmd+a typed a literal "a", and a Cmd+V paste typed "v". `keyTap` is the backend's
+      // only way to express the flag.
+      const { key, modifiers } = splitChord(keys);
+      robot.keyTap(toRobotKey(key), modifiers.length > 0 ? modifiers : undefined);
     },
 
     async type(text, typeOptions) {

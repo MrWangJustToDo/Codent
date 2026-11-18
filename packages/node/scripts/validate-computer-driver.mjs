@@ -175,6 +175,7 @@ function fakeRobot(overrides = {}) {
     mouseToggle: (down, button) => calls.push(["mouseToggle", down, button]),
     scrollMouse: (x, y) => calls.push(["scrollMouse", x, y]),
     keyToggle: (key, down) => calls.push(["keyToggle", key, down]),
+    keyTap: (key, modifier) => calls.push(["keyTap", key, modifier]),
     typeString: (text) => calls.push(["typeString", text]),
     screen: {
       // The driver always captures the whole screen, so the region arguments are ignored here.
@@ -243,20 +244,17 @@ function fakeRobot(overrides = {}) {
     }[process.platform] ?? -2;
   assert.equal(scroll[2], expected, `scroll units on ${process.platform}`);
 
-  // Keys: `KeyboardEvent.key` names → robotjs names, and a combo releases in reverse order.
+  // Keys: `KeyboardEvent.key` names → robotjs names. A chord is ONE event with its modifiers as
+  // FLAGS — pressing them as separate events sends the key with flags=0 on macOS
+  // (`CGEventSetFlags` is set from the argument), so Cmd+a typed a literal "a".
   calls.length = 0;
   await computer.press(["Control", "a"]);
-  assert.deepEqual(calls, [
-    ["keyToggle", "control", "down"],
-    ["keyToggle", "a", "down"],
-    ["keyToggle", "a", "up"],
-    ["keyToggle", "control", "up"],
-  ]);
+  assert.deepEqual(calls, [["keyTap", "a", ["control"]]], "one chord, modifier attached as a flag");
 
   const keyNames = async (keys) => {
     calls.length = 0;
     await computer.press(keys);
-    return calls.filter(([name, , down]) => name === "keyToggle" && down === "down").map(([, key]) => key);
+    return calls.filter(([name]) => name === "keyTap").map(([, key]) => key);
   };
   assert.deepEqual(await keyNames(["Enter"]), ["enter"]);
   assert.deepEqual(await keyNames([" "]), ["space"]);
@@ -268,24 +266,19 @@ function fakeRobot(overrides = {}) {
   assert.deepEqual(await keyNames(["A"]), ["A"]);
   assert.deepEqual(await keyNames(["/"]), ["/"]);
 
-  // A failed key must not leave a modifier held down.
-  calls.length = 0;
-  const failsOnB = fakeRobot({
-    keyToggle: (key, down) => {
-      if (key === "b" && down === "down") throw new Error("bad key");
-      calls.push(["keyToggle", key, down]);
-    },
+  // Two "keys" that are not a chord are refused with an explanation: passing "a" as a backend flag
+  // fails with "Invalid key flag", which tells the model nothing about what it did wrong.
+  await assert.rejects(() => computer.press(["a", "b"]), /is not a modifier/);
+
+  // A backend failure propagates (there is no held modifier left behind: the chord is one call).
+  const broken = createNodeComputer({
+    robot: fakeRobot({
+      keyTap: () => {
+        throw new Error("bad key");
+      },
+    }).robot,
   });
-  const strict = createNodeComputer({ robot: failsOnB.robot });
-  await assert.rejects(() => strict.press(["Control", "b"]), /bad key/);
-  assert.deepEqual(
-    calls,
-    [
-      ["keyToggle", "control", "down"],
-      ["keyToggle", "control", "up"],
-    ],
-    "the held modifier is released in the finally"
-  );
+  await assert.rejects(() => broken.press(["Control", "b"]), /bad key/);
 
   // Typing goes through the OS's own typing (layout-aware), not synthesized key codes.
   calls.length = 0;
@@ -471,13 +464,8 @@ function fakeRobot(overrides = {}) {
   assert.deepEqual(written, ["王恒🙂"], "the WHOLE string goes to the pasteboard, one text run");
   assert.deepEqual(
     calls,
-    [
-      ["keyToggle", "command", "down"],
-      ["keyToggle", "v", "down"],
-      ["keyToggle", "v", "up"],
-      ["keyToggle", "command", "up"],
-    ],
-    "and it is pasted with Cmd+V, releasing the modifier last"
+    [["keyTap", "v", "command"]],
+    "and it is pasted with ONE Cmd+V event (a held Command would send v with flags=0)"
   );
 
   // A failed write is explained, not silently typed character by character.

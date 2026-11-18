@@ -331,10 +331,23 @@ export interface CoreEnvComputer {
   mouseUp(button: CoreEnvMouseButton): Promise<void>;
   /** Scroll at the point; deltas are pixels in `display` space. */
   scroll(x: number, y: number, deltaX: number, deltaY: number, options?: CoreEnvComputerActionOptions): Promise<void>;
+  /**
+   * Hold a key down.
+   *
+   * Its effect does NOT carry into a later key event on macOS: a synthesized keyboard event carries
+   * its own `flags` (the backend sets them per event, defaulting to none), so "hold Command, then
+   * send `v`" types a literal `v`. Use {@link press} for a chord — this primitive is for a modifier
+   * held across a POINTER gesture, where the application reads the modifier state.
+   */
   keyDown(key: string, options?: CoreEnvComputerActionOptions): Promise<void>;
   /** Release one key; gets no signal, for the same reason as {@link mouseUp}. */
   keyUp(key: string): Promise<void>;
-  /** Press one key combo, like `["Control", "s"]`. */
+  /**
+   * Press one key combo, like `["Control", "s"]`.
+   *
+   * Leading modifier names are attached as the EVENT's modifier flags (one chord), not pressed as
+   * separate events — see {@link keyDown}.
+   */
   press(keys: string[], options?: CoreEnvComputerActionOptions): Promise<void>;
   /** Type text as a user does. */
   type(text: string, options?: CoreEnvComputerActionOptions): Promise<void>;
