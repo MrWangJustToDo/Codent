@@ -101,11 +101,25 @@ assert.match(span, /managed\.isAbortError\(err\)/, "abort classification is shar
 const resultSrc = read("agent/subagent/task-result.ts");
 const runSrc = read("agent/subagent/run-subagent.ts");
 assert.match(runSrc, /onError: \(message\) => \{\s*failed = true;/, "the task adapter marks the run failed");
-assert.match(
-  runSrc,
-  /aborted = aborted \|\| result\.aborted(?:\s*\|\|\s*abortSignal\?\.aborted === true)?;[\s\S]{0,200}if \(aborted\) \{\s*failed = false;/,
-  "an abort outranks a captured fault"
-);
+{
+  // An abort outranks a captured fault — EXCEPT when the child already finished (a late Esc must not
+  // relabel a completed run). Two things are guarded: the verdict reads both its own abort flag and
+  // the caller's signal, and the `failed = false` reset follows it.
+  const verdictStart = runSrc.indexOf("const childState");
+  const verdictEnd = runSrc.indexOf("if (aborted) {");
+  assert.ok(verdictStart >= 0 && verdictEnd > verdictStart, "the abort verdict is still an assignment before its branch");
+  const verdict = runSrc.slice(verdictStart, verdictEnd);
+  assert.match(verdict, /aborted = aborted \|\|/, "…it starts from the span's own abort flag");
+  assert.match(verdict, /result\.aborted/, "…reads the span's abort verdict");
+  assert.match(verdict, /abortSignal\?\.aborted === true/, "…and the caller's signal");
+  // The completed-child exemption is deliberate: dropping it makes a late Esc rewrite a finished run.
+  assert.match(verdict, /isSettledCompletion\(/, "a completed child is exempt from the late abort");
+  assert.match(
+    runSrc.slice(verdictEnd, verdictEnd + 200),
+    /if \(aborted\) \{\s*failed = false;/,
+    "an abort clears the captured fault"
+  );
+}
 assert.ok(!/\bthrow err\b/.test(resultSrc), "the task result must not rethrow");
 assert.match(resultSrc, /channel\.failRun\(errorMessage\)/, "panel cleanup is applied after precedence");
 assert.match(resultSrc, /aborted \|\| failed \? "subagent:error" : "subagent:completed"/);
