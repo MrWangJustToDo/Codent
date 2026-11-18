@@ -206,6 +206,12 @@ export class AgentStatusController {
     // A tool_calls finish is a tool phase, not the turn: the pump continues. Settling here made
     // every phase publish `completed` and reset the stream duration between phases.
     if (finishReason === "tool_calls") return;
+    // `length` is a provisional finish: the recovery layer escalates max_tokens or arms a
+    // continuation and restarts the stream. Settling here published a `completed` frame (and
+    // consumed the stream duration, so the footer's "Completed in" only covered the truncated
+    // prefix) that the next attempt immediately overwrote with `running`. The pump's own
+    // finalize settles the turn when the continuation budget is exhausted.
+    if (finishReason === "length") return;
     this.dispatch({ type: "settle", result: this.deps.getError() ? "error" : "completed" });
   }
 

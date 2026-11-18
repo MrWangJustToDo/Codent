@@ -211,4 +211,51 @@ assert.equal(shouldDeferMidRunQueue({ pumpDepth: 0, status: "idle" }), false, "i
   assert.match(interrupt, /toolCallsBefore: baselines\.toolCalls/, "…tool-call baseline");
 }
 
+// ---------------------------------------------------------------------------
+// Answering an approval / a client tool RESUMES the parked turn
+// ---------------------------------------------------------------------------
+//
+// `MAX_TURN_TOOL_PHASES` is per RUN, but a resumed pump arrives without the chain-pump mark and
+// used to reset it — so asking for approval often enough bypassed the ceiling. The flag is the
+// seam; the budget only becomes observable after 40 phases of a real model loop, so a dropped flag
+// is invisible until then. Asserted against the source for the same reason the phase-order checks
+// above are: the wiring is the contract.
+{
+  const controllerSrc = readFileSync(
+    fileURLToPath(new URL("../src/agent/run/chat-controller.ts", import.meta.url)),
+    "utf8"
+  );
+  const approvalSrc = readFileSync(
+    fileURLToPath(new URL("../src/agent/approval/approval-decision-coordinator.ts", import.meta.url)),
+    "utf8"
+  );
+
+  // The mark is recorded BEFORE the join: when a pump is already queued, THAT one does the work, so
+  // the budget must continue on it rather than restart.
+  const enqueue = controllerSrc.slice(controllerSrc.indexOf("private enqueueRunOnce("));
+  const markAt = enqueue.indexOf("this.pendingContinuesTurn = true");
+  const joinAt = enqueue.indexOf("this.runPending()");
+  assert.ok(markAt >= 0, "enqueueRunOnce records the continues-turn mark");
+  assert.ok(joinAt > markAt, "…before joining an already-queued pump");
+
+  // A client tool's result is the end of a wait: the pump it schedules continues the same turn.
+  assert.ok(
+    controllerSrc.includes("else await this.enqueueRunOnce({ continuesTurn: true });"),
+    "addToolResult resumes the turn instead of restarting its budget"
+  );
+  assert.ok(controllerSrc.includes("this.startRun({ continuesTurn: true })"), "…including the fire-and-forget path");
+
+  // Both approval resume paths (a user decision, and policy/auto approval) do the same.
+  assert.equal(
+    (approvalSrc.match(/enqueueRun\(\{ continuesTurn: true \}\)/g) ?? []).length,
+    2,
+    "both approval resume paths continue the turn"
+  );
+  assert.equal(
+    (approvalSrc.match(/enqueueRun\(\)/g) ?? []).length,
+    0,
+    "no approval resume path restarts the turn budget"
+  );
+}
+
 console.log("validate:pump-continuation passed");

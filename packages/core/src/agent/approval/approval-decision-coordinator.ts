@@ -54,8 +54,13 @@ export interface ApprovalDecisionCoordinatorDeps {
   /** Status reconcile + persistence after a batch of decisions. */
   reconcile: () => void;
   persist: () => void;
-  /** Join a queued pump; exactly one call per user/auto-mode decision batch. */
-  enqueueRun: () => Promise<void>;
+  /**
+   * Join a queued pump; exactly one call per user/auto-mode decision batch.
+   *
+   * `continuesTurn` is set for a decision: the pump it schedules resumes the SAME prompt (the
+   * turn was parked on this gate), so it must not restart the turn's tool-phase budget.
+   */
+  enqueueRun: (options?: { continuesTurn?: boolean }) => Promise<void>;
   /**
    * True while a session switch (unload → load) is in flight. Decisions are dropped, not written:
    * the approval table and channel they would mutate are about to be replaced.
@@ -135,7 +140,7 @@ export class ApprovalDecisionCoordinator {
     // The decision is durable here (channel + table). Do NOT await the pump: the command plane is
     // remote-facing, and a pump runs for the whole remaining turn — blocking the response on it
     // made a slow turn look like a failed approval, and a client retry re-answered a decided call.
-    void this.deps.enqueueRun().catch(() => undefined);
+    void this.deps.enqueueRun({ continuesTurn: true }).catch(() => undefined);
     return true;
   }
 
@@ -152,7 +157,7 @@ export class ApprovalDecisionCoordinator {
     if (!handled) return;
     // The decisions are durable now; the caller (auto-mode, plan execution, a remote command) must
     // not block for the rest of the pump.
-    void this.deps.enqueueRun().catch(() => undefined);
+    void this.deps.enqueueRun({ continuesTurn: true }).catch(() => undefined);
   }
 
   /**

@@ -28,9 +28,29 @@ const sharedLocalByRoot = new Map<string, SessionOwnership>();
  */
 const sharedRemoteByEnv = new WeakMap<object, SessionOwnership>();
 
+/**
+ * Remote claims keyed by the SERVER's identity (`CoreEnv.remoteKey`), when the host supplies one.
+ *
+ * This is the fix for "two clients of one server": object identity made `createRemoteEnv(url)`
+ * called twice look like two workspaces, so both runtimes claimed the same session id and
+ * interleaved its transcript — the exact collision the local table prevents.
+ */
+const sharedRemoteByKey = new Map<string, SessionOwnership>();
+
 /** The shared ownership table for one workspace. */
 export function sharedSessionOwnership(env: ResolvedCoreEnv, identity: object = env): SessionOwnership {
   if (env.remote === true) {
+    // The server's identity when the host supplies one, else this client object. Two clients of
+    // one server must share the table (same filesystem, same session ids); two different servers
+    // must not, even though both report `/workspace`.
+    if (env.remoteKey !== undefined) {
+      let ownership = sharedRemoteByKey.get(env.remoteKey);
+      if (!ownership) {
+        ownership = new SessionOwnership();
+        sharedRemoteByKey.set(env.remoteKey, ownership);
+      }
+      return ownership;
+    }
     let ownership = sharedRemoteByEnv.get(identity);
     if (!ownership) {
       ownership = new SessionOwnership();

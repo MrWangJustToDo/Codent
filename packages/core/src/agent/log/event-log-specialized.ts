@@ -51,9 +51,28 @@ function entry(
  * new category cannot be accepted by the sink but silently downgraded to `hooks` here. */
 const LOG_CATEGORIES: readonly LogCategory[] = logCategorySchema.options as readonly LogCategory[];
 
+/** Last `session:mcp` snapshot written per log.
+ *
+ * The event is RETAINED — a snapshot re-published whenever an extension's state changes — but its
+ * rule cell is a specialized handler, not `false`. Logging it verbatim therefore wrote the SAME
+ * fact once per extension transition (one measured session had 33 identical "No MCP servers
+ * configured" rows, seven of them inside 40ms). A snapshot is news only when it changed. */
+const lastMcpSnapshot = new WeakMap<AgentLog, string>();
+
 function logSessionMcp(log: AgentLog, event: AgentEvent): void {
   const configSourceKind = p(event).configSourceKind as McpConfigSourceKind | undefined;
   const configLoadedFrom = p(event).configLoadedFrom as string | undefined;
+  const servers = (p(event).servers as McpServerStatus[] | undefined) ?? [];
+  // Order-insensitive: a reconnect repopulates the list through `Promise.allSettled`, so the same
+  // set can arrive in a different order and a positional signature would treat it as news.
+  const signature = JSON.stringify([
+    configSourceKind ?? null,
+    configLoadedFrom ?? null,
+    [...servers].sort((a, b) => a.name.localeCompare(b.name)),
+  ]);
+  if (lastMcpSnapshot.get(log) === signature) return;
+  lastMcpSnapshot.set(log, signature);
+
   // The source is the answer to "why did my mcp.json not apply?", so a session-options session
   // says so explicitly — without it the absence of a config path reads as "no config found".
   if (configSourceKind === "session-options") {
@@ -67,7 +86,6 @@ function logSessionMcp(log: AgentLog, event: AgentEvent): void {
   } else if (configLoadedFrom) {
     entry(log, event, "info", "system", `MCP config: ${configLoadedFrom}`);
   }
-  const servers = (p(event).servers as McpServerStatus[] | undefined) ?? [];
   if (servers.length === 0) {
     entry(log, event, "debug", "system", "No MCP servers configured");
     return;

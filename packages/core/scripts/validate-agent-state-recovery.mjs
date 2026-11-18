@@ -25,6 +25,12 @@
  * 10. A user stop while `run: compacting, outcome: error` restores the phase (no wedge).
  * 11. A manual compaction's user cancel does not fabricate a run abort.
  * 12. A state batch emits ONE merged `agent:status` (and nested/empty batches emit none).
+ * 13. A `length` finish is PROVISIONAL (max_tokens continuation): it must not settle the turn or
+ *     consume the duration, or a truncated attempt published a fake `completed` and the footer's
+ *     "Completed in" covered only the prefix.
+ * 14. A settled completion's verdict is final on the LEGACY `setStatus` path too: a projection
+ *     rebuild cannot relabel it as aborted/error, while a move to `running`/`idle` (the next turn
+ *     or a reset) stays allowed.
  *
  * Run: pnpm --filter @codent/core run validate:agent-state-recovery
  */
@@ -478,6 +484,72 @@ const CHUNK = { type: "REASONING_MESSAGE_CONTENT", delta: "hmm" };
   agent.transitionStatus({ type: "interrupt" }); // running → aborted, names `interrupt`
   agent.endStateBatch();
   assert.deepEqual(rows[0], { from: "running", to: "aborted", event: "interrupt" }, "the last event is preserved");
+}
+
+// ---------------------------------------------------------------------------
+// 13. `length` is a provisional finish: the recovery layer continues the stream
+// ---------------------------------------------------------------------------
+//
+// `onRunFinish("length")` used to settle `completed` and consume `streamStartedAt`. Every truncated
+// attempt therefore published a terminal frame (overwritten with `running` by the continuation
+// ~2s later) and the turn's duration only covered the first, cut-off prefix.
+{
+  const agent = await makeAgent("length-is-provisional");
+  agent.transitionStatus({ type: "prepare" });
+  agent.statusController.onStreamChunk(CHUNK);
+  const liveStatus = agent.getStatus();
+  assert.notEqual(liveStatus, "completed", "a streaming turn is not already terminal");
+
+  agent.setStreamStartedAt(Date.now() - 1500);
+  agent.statusController.onRunFinish("length");
+  assert.equal(agent.getStatus(), liveStatus, "a truncated attempt does not move the status");
+  assert.equal(agent.getAgentState().outcome, "none", "and records no verdict");
+  assert.equal(agent.getLastStreamDurationMs(), 0, "nor consumes the turn's duration");
+
+  // `tool_calls` is the same class (a phase, not a turn end) — the pre-existing rule, asserted here
+  // so the two provisional finishes cannot diverge.
+  agent.statusController.onRunFinish("tool_calls");
+  assert.equal(agent.getStatus(), liveStatus, "a tool phase does not settle the turn either");
+
+  // The real end still settles, and records the WHOLE turn once.
+  agent.statusController.onRunFinish("stop");
+  assert.equal(agent.getStatus(), "completed", "a real finish settles the turn");
+  assert.ok(agent.getLastStreamDurationMs() >= 1000, "the real end records the whole turn, not the truncated prefix");
+}
+
+// ---------------------------------------------------------------------------
+// 14. A settled completion is final on the legacy `setStatus` path too
+// ---------------------------------------------------------------------------
+//
+// `interrupt` refuses to relabel a completed turn, but `setStatus` rebuilds the axes from a status
+// string and bypassed that rule — a host writing `aborted` (a late Esc projection) turned a finished
+// turn into a cancel, flipping the turn summary and the ACP stop reason.
+{
+  const agent = await makeAgent("completed-verdict-is-final");
+  const diagnostics = [];
+  agent.getEventBus()?.on("session:diagnostic", (event) => diagnostics.push(event.payload), { replay: false });
+
+  agent.transitionStatus({ type: "prepare" });
+  agent.transitionStatus({ type: "settle", result: "completed" });
+  assert.equal(agent.getStatus(), "completed");
+
+  agent.setStatus("aborted");
+  assert.equal(agent.getStatus(), "completed", "a legacy write cannot relabel a finished turn as cancelled");
+  assert.equal(agent.getAgentState().outcome, "completed", "the axis keeps the verdict");
+
+  agent.setStatus("error");
+  assert.equal(agent.getStatus(), "completed", "nor as a failure");
+  assert.equal(
+    diagnostics.filter((entry) => /settled verdict/.test(String(entry.message ?? ""))).length,
+    2,
+    "each refusal is reported, never silent"
+  );
+
+  // A new run and a reset are NOT rewrites of the verdict: the guard must not wedge the agent.
+  agent.setStatus("running");
+  assert.equal(agent.getStatus(), "running", "the next turn may start, so the label must leave completed");
+  agent.setStatus("idle");
+  assert.equal(agent.getStatus(), "idle", "a reset may return to idle");
 }
 
 for (const manager of managers) {

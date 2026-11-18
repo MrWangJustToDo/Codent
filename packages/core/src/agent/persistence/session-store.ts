@@ -28,6 +28,7 @@ import {
   readMessageUpdatedAt,
   writeLog,
 } from "./session-journal.js";
+import { throwIfLockedByAnotherProcess } from "./session-lock.js";
 import { fingerprintUIMessage } from "./session-sync-tracker.js";
 import {
   SESSION_DIR,
@@ -437,6 +438,10 @@ export class SessionStore {
    */
   async delete(id: string): Promise<boolean> {
     if (!isSafeSessionId(id)) return false;
+    // Refuse a log another process is writing (see `throwIfLockedByAnotherProcess`): deleting it
+    // would make that writer recreate the file from its own delta, resurrecting the conversation
+    // as a truncated transcript.
+    await throwIfLockedByAnotherProcess(this.env, id);
     const logPath = this.getLogPath(id);
     const key = this.getLogKey(id);
     // Mark before waiting: a save queued after this point must not restart the session. An

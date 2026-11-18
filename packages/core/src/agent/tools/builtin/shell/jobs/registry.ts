@@ -15,6 +15,7 @@
 import { CORE_ENV_SOURCE } from "../../../../../env";
 import { registerEnvTeardownHook } from "../../../../../env/teardown.js";
 import { generateId } from "../../../../../utils/generate-id.js";
+import { withCallbackTimeout } from "../../../../extension/callback-timeout.js";
 import {
   COMMAND_JOB_KIND,
   isVisibleToSession,
@@ -137,6 +138,15 @@ const TRIM_THRESHOLD_CHARS = 512_000;
 /** Max finished jobs kept before the oldest (already notified) are evicted. */
 const MAX_FINISHED_JOBS = 50;
 
+/**
+ * Upper bound on one job's kill during teardown.
+ *
+ * Short on purpose: a kill is a signal or one HTTP call. The teardown that calls `destroyAll` has
+ * its own 60s budget, and this must leave room for the bookkeeping that follows, so the bound is
+ * per job rather than for the batch.
+ */
+const KILL_TIMEOUT_MS = 10_000;
+
 export interface CompletedCommandJob {
   id: string;
   toolCallId?: string;
@@ -227,7 +237,7 @@ export class CommandJobRegistry {
 
   private readonly jobs = new Map<string, CommandJobRecord>();
   /** Lazily restores durable records; tools/middleware await this before touching the registry. */
-  private restorePromise?: Promise<void>;
+  private restorePromise?: Promise<void> | null;
 
   /** The owning session id, resolved lazily (see {@link CommandJobRegistryOptions.ownerSessionId}). */
   private get ownerSessionId(): string | undefined {
@@ -255,7 +265,14 @@ export class CommandJobRegistry {
       // Not resolvable yet (no env/owner): do NOT cache the empty result — a later call, after
       // `ensureSessionData()` has minted/restored the id, must still restore.
       if (!this.env || !this.ownerSessionId) return Promise.resolve();
-      this.restorePromise = this.restore();
+      // A rejected promise is NOT cached: one transient fs/HTTP read failure used to disable
+      // background commands for the rest of the session (every later `ready()`/`startBackground()`
+      // re-used it, and `pending()` reported "completions unavailable" forever). Clearing it makes
+      // the next call retry.
+      this.restorePromise = this.restore().catch((error: unknown) => {
+        this.restorePromise = null;
+        throw error;
+      });
     }
     return this.restorePromise;
   }
@@ -791,12 +808,28 @@ export class CommandJobRegistry {
     );
     // Best-effort teardown: one rejected kill/log cleanup must not leave every other
     // job registered (and the reset path must still finish its bookkeeping).
-    await Promise.allSettled(ids.map((id) => this.kill(id)));
+    //
+    // Each kill is bounded INDIVIDUALLY: the outer switch/teardown already has a budget, and an
+    // unbounded `allSettled` here meant a kill that never returned skipped the bookkeeping below —
+    // the whole registry (and every job's output) stayed reachable for the life of the process,
+    // accumulating one per timed-out session switch.
+    const kills = await Promise.allSettled(
+      ids.map((id) => withCallbackTimeout(this.kill(id), `kill ${id}`, KILL_TIMEOUT_MS))
+    );
+    // A rejected (or timed-out) kill means a REAL process is still out there. Its record (which
+    // carries the pid) and its log are the only way to find or stop it later, so they must survive:
+    // deleting them made the orphan unrecoverable — gone from `liveRegistries`, gone from disk,
+    // absent from the next resume. The log keeps no output past this point (in-memory appends stop
+    // when the registry is dropped), so what survives is the record plus the log's last bytes.
+    const killFailed = new Set<string>();
+    kills.forEach((result, index) => {
+      if (result.status === "rejected") killFailed.add(ids[index]!);
+    });
     for (const id of ids) {
       this.jobs.delete(id);
       this.notifiedJobIds.delete(id);
     }
-    const disposable = ids.filter((id) => !preserve.has(id));
+    const disposable = ids.filter((id) => !preserve.has(id) && !killFailed.has(id));
     await Promise.allSettled(disposable.map((id) => this.disposeLog(id)));
     await Promise.allSettled(disposable.map((id) => this.removeRecord(id)));
     liveRegistries.delete(this);

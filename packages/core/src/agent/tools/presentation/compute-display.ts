@@ -1,4 +1,10 @@
-import { isSyntheticCancelOutput, syntheticCancelMessage } from "../../../runtime-types/abort.js";
+import {
+  TOOL_CANCELLED_MESSAGE,
+  isCancelledOutputMarker,
+  isSyntheticCancelOutput,
+  syntheticCancelMessage,
+} from "../../../runtime-types/abort.js";
+import { formatExtensionDeniedOutput, isExtensionDeniedOutput } from "../../../runtime-types/tool-denial.js";
 import { isBareToolErrorResult } from "../../../runtime-types/tool-error.js";
 import {
   TRUNCATED_TOOL_CALL_SUMMARY,
@@ -71,10 +77,27 @@ export function computeToolDisplay(
     return { text: interruptedToolMessage(output), summary: TRUNCATED_TOOL_CALL_SUMMARY };
   }
 
+  // An extension's refusal is the same class of shared shape: `denied` is the marker, not any
+  // tool's output schema. It also carries `success: false`, so without this branch it fell into
+  // the error short-circuit below and every host that reads only `part.display` (remote / ACP)
+  // got an empty body while the in-process formatter rendered "Denied: …".
+  //
+  // Order note: `formatToolOutput` checks denied BEFORE interrupted, this function checks it after.
+  // The markers are mutually exclusive, so the two agree today; keep them adjacent in meaning and
+  // re-check both when a third shared marker appears.
+  if (isExtensionDeniedOutput(output)) {
+    return { text: formatExtensionDeniedOutput(output) };
+  }
+
   // A failed call is rendered by the error path (the part's `errorText`), never by the
   // tool's success-shaped renderers: `{ error: "denied by user" }` used to summarize as
   // "updated" / "applied" / "saved", and that wrong text is persisted with the session.
-  if (isErrorOutput(output)) return undefined;
+  //
+  // A tool that caught its OWN abort is the exception: it carries `success: false` plus a real
+  // result (`run_command` includes the stdout produced before the stop). Blanking it here made
+  // the cross-process display lose output the local formatter still showed.
+  const carriesCancelMarker = isCancelledOutputMarker(output);
+  if (isErrorOutput(output) && !carriesCancelMarker) return undefined;
 
   const present = safe(() => resolvePresentation(name));
   // Only the SYNTHETIC framework payload is replaced wholesale: it carries no output at all (the
@@ -90,6 +113,13 @@ export function computeToolDisplay(
   const head = nonEmpty(summary);
   if (head) display.summary = head;
   if (label) display.label = label;
+
+  // A cancel marker with partial output and no renderer of its own: say what happened rather than
+  // returning an empty payload that leaves the row blank cross-process.
+  if (carriesCancelMarker && !display.text && !display.summary) {
+    display.text = TOOL_CANCELLED_MESSAGE;
+    display.summary = "cancelled";
+  }
 
   return Object.keys(display).length > 0 ? display : undefined;
 }

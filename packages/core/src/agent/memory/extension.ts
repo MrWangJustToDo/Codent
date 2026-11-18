@@ -21,8 +21,8 @@
  * End-of-turn extraction/consolidation also belongs to `MemoryService`: it needs the finished
  * turn's model-visible window and runs after finalize, which a context provider cannot express.
  *
- * Runtime-agnostic: all I/O goes through the injected `MemoryManager`, which uses the global
- * CoreEnv (`getEnv()`), and all model access goes through `ctx.llm`.
+ * Runtime-agnostic: all I/O goes through the injected `MemoryManager` (built with the runtime's
+ * own CoreEnv, never the ambient `getEnv()`), and all model access goes through `ctx.llm`.
  */
 
 import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";

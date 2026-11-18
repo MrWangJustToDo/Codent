@@ -79,7 +79,7 @@ function toManagedConfig(options: AgentSessionCreateOptions): ManagedAgentConfig
   // reasoningEffort / compaction / skillDirs / … did nothing through `host.create`).
   //
   // Only the host-owned keys are destructured out: `continueSession` / `resumeSessionId` are
-  // consumed by `create()` before this point, and `builtins` is an alias group for five
+  // consumed by `create()` before this point, and `builtins` is an alias group for six
   // `ManagedAgentConfig` keys.
   const { builtins, continueSession: _continueSession, resumeSessionId: _resumeSessionId, ...forwarded } = options;
   // `undefined` inside the alias group means "keep the built-in default", not "set undefined" —
@@ -402,6 +402,10 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
       const parentId = entry.getSnapshot().parentId;
       if (id === agentId || parentId === agentId) {
         this.sessions.delete(id);
+        // Release the handle's bus subscription with it. `destroyAgent` clears the agent scope,
+        // which happens to detach the readers too, but relying on that left a closed handle able to
+        // re-subscribe to a disposed bus.
+        void entry.close?.().catch(() => undefined);
       }
     }
     this.manager.destroyAgent(agentId);

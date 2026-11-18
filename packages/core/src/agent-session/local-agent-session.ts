@@ -6,6 +6,7 @@
 import { AGENT_EVENT_META as EVENT_META } from "../agent/agent-event-bus";
 import { Emitter } from "../utils/emitter.js";
 import { errorMessage } from "../utils/errors.js";
+import { truncateText } from "../utils/text-truncation.js";
 
 import { dispatchLocalAgentSessionCommand } from "./local-session-dispatch.js";
 import { readLocalAgentSessionSnapshot } from "./local-session-snapshot.js";
@@ -86,6 +87,20 @@ const warnedRetainedChannels = new Set<AgentSessionChannel>();
 const CHANNEL_DROPPED_PAYLOAD_KEYS = ["tool_input", "tool_output", "output"] as const;
 
 /**
+ * Text fields that are MODEL OUTPUT rather than identity.
+ *
+ * They cannot be dropped — a subagent's `summary` IS its result, and an `error` is the only signal
+ * that a unit failed — but they are unbounded: the `task` tool runs with `SUBAGENT_NO_TRUNCATE`, so
+ * `summary` is the full report, and the lifecycle channel serializes the ENTIRE envelope into every
+ * SSE frame. The log policy already knows this field is unbounded and truncates it for the same
+ * reason. A preview keeps the frame small; a transcript reader uses `messages`, which carries the
+ * full text.
+ */
+const CHANNEL_PREVIEW_TEXT_KEYS = ["summary", "error", "stack", "prompt"] as const;
+/** Generous enough for a real error message; a 50KB task report still fits in `messages`. */
+const CHANNEL_TEXT_PREVIEW_CHARS = 1000;
+
+/**
  * One event whose `output` is the FACT, not an arbitrary tool result.
  *
  * `agent:client-tool-result` carries the host's answer to a client tool (`ask_user`). Dropping
@@ -103,6 +118,12 @@ function channelSafeLifecycleEvent(event: AgentEvent): AgentEvent {
     if (!(key in payload)) continue;
     next ??= { ...payload };
     delete next[key];
+  }
+  for (const key of CHANNEL_PREVIEW_TEXT_KEYS) {
+    const value = payload[key];
+    if (typeof value !== "string" || value.length <= CHANNEL_TEXT_PREVIEW_CHARS) continue;
+    next ??= { ...payload };
+    next[key] = truncateText(value, CHANNEL_TEXT_PREVIEW_CHARS);
   }
   return next ? ({ ...event, payload: next } as AgentEvent) : event;
 }
@@ -186,6 +207,14 @@ class LocalAgentSessionImpl implements AgentSession {
   private sourceTeardown: (() => void) | null = null;
   /** True only when the bus was present at wiring time; a bus-less wiring is retried on subscribe. */
   private sourceWired = false;
+  /**
+   * Incremented every time the shared bus subscription is detached.
+   *
+   * A disposable from a previous incarnation is inert: `close()` releases the ONE subscription, so
+   * the disposers outstanding at that moment must not decrement the NEXT incarnation's ref count
+   * (that went negative, then to zero under a later subscriber and tore down its only subscription).
+   */
+  private sourceGeneration = 0;
 
   constructor(options: CreateLocalAgentSessionOptions) {
     this.managed = options.managed;
@@ -324,6 +353,7 @@ class LocalAgentSessionImpl implements AgentSession {
     // subscribe() call: each subscriber registers its handler on the shared bus
     // above, and a per-subscribe wiring would duplicate every event per
     // subscriber (N subscribers → N copies).
+    const generation = this.sourceGeneration;
     this.sourceRefCount += 1;
     // Wire only once, and only when the bus exists. `wireSource` returns a no-op teardown when the
     // bus is absent; storing that as the "wired" handle made a session created before `setEventBus`
@@ -335,7 +365,7 @@ class LocalAgentSessionImpl implements AgentSession {
         this.sourceTeardown = teardown;
       }
     }
-    unsubs.push(() => this.releaseSource());
+    unsubs.push(() => this.releaseSource(generation));
 
     let active = true;
     return () => {
@@ -367,9 +397,29 @@ class LocalAgentSessionImpl implements AgentSession {
     });
   }
 
-  private releaseSource(): void {
+  private releaseSource(generation: number): void {
+    // A disposer from a previous incarnation is inert (see `sourceGeneration`).
+    if (generation !== this.sourceGeneration) return;
     this.sourceRefCount -= 1;
     if (this.sourceRefCount > 0) return;
+    this.teardownSource();
+  }
+
+  /**
+   * Detach this handle's bus subscription.
+   *
+   * `close()` exists because a host that holds the session handle does not necessarily hold the
+   * disposer `subscribe()` returned; without it the only way to stop projecting was to destroy the
+   * whole agent. It releases the ONE shared subscription (not just the caller's), so every
+   * outstanding disposer becomes inert; a later `subscribe()` wires a fresh one. Idempotent.
+   */
+  async close(): Promise<void> {
+    if (!this.sourceTeardown && this.sourceRefCount === 0) return;
+    this.teardownSource();
+  }
+
+  private teardownSource(): void {
+    this.sourceGeneration += 1;
     this.sourceRefCount = 0;
     const teardown = this.sourceTeardown;
     this.sourceTeardown = null;

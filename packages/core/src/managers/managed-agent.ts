@@ -122,6 +122,7 @@ import { DEFAULT_AGENT_MAX_ITERATIONS } from "../runtime-types/agent-limits.js";
 import {
   coerceSettledOutcome,
   deriveAgentState,
+  isSettledCompletion,
   projectAgentStatus,
   transition,
   type AgentState,
@@ -1179,7 +1180,13 @@ export class ManagedAgent {
     // new conversation) and `compaction-end` after `setError("")` (the manual repair the compaction
     // controller performs) are the explicit escapes.
     const repaired = event === "reset" || event === "teardown" || (event === "compaction-end" && !this.getError());
-    if (!repaired && coerceSettledOutcome(this.agentState, next.outcome) !== next.outcome) {
+    // A completed turn's VERDICT is final: a projection rebuild must not rewrite it as a fault or a
+    // cancel (the transition path's `interrupt` already refuses). Same shared predicate, so the two
+    // write paths cannot disagree. A write that moves to a NON-terminal axis (`running` for the next
+    // turn, `idle` for a reset) is a new run, not a rewrite, and stays allowed.
+    const rewritesCompletion =
+      isSettledCompletion(this.agentState) && (next.outcome === "error" || next.outcome === "aborted");
+    if (!repaired && (rewritesCompletion || coerceSettledOutcome(this.agentState, next.outcome) !== next.outcome)) {
       this.emitDiagnostic("session", "Ignored a status write that would rewrite a settled verdict", {
         level: "warn",
         data: { status, outcome: this.agentState.outcome },

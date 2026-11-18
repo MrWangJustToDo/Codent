@@ -43,9 +43,27 @@ export function withCallbackTimeout<T>(
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
+    // Deliberately NOT `unref()`d: a bounded wait whose timer does not hold the loop can be lost
+    // entirely when it is the only pending work (Node exits with an unsettled top-level await
+    // instead of rejecting), which silently turns "times out" into "never settles" — the exact
+    // failure this helper exists to prevent.
     timer = setTimeout(() => reject(new CallbackTimeoutError(label, timeoutMs)), timeoutMs);
   });
   return Promise.race([promise, timeout]).finally(() => {
     if (timer !== undefined) clearTimeout(timer);
   });
+}
+
+/**
+ * Normalize a configured callback timeout.
+ *
+ * `0` means "no wall-clock bound" (a producer bounded by the run signal instead). Anything that is
+ * not a positive finite number is a typo in arbitrary extension JS, not a request — it used to be
+ * passed through to `setTimeout`, where `NaN`/negative fire immediately: the section failed on
+ * EVERY turn and wrote an `agent:extension-error` each time.
+ */
+export function normalizeCallbackTimeout(timeoutMs: number | undefined): number | undefined {
+  if (timeoutMs === undefined) return undefined;
+  if (timeoutMs === 0) return 0;
+  return Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : undefined;
 }

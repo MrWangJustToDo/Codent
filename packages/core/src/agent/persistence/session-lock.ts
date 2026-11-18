@@ -109,6 +109,71 @@ function parseLock(text: string): SessionLockRecord | null {
   }
 }
 
+/**
+ * Whether a lock record was written by this very process.
+ *
+ * `instance` is the direct evidence. A file without one (hand-written, or produced by an older
+ * build) falls back to the pid, which is the same fact observed a weaker way.
+ */
+function isSameProcessRecord(held: SessionLockRecord): boolean {
+  if (held.instance !== undefined) return held.instance === PROCESS_INSTANCE_ID;
+  return typeof held.pid === "number" && typeof process !== "undefined" && held.pid === process.pid;
+}
+
+/** One reading of a lock file. The staleness rule (mtime vs TTL) lives here only. */
+type FreshLock = { state: "absent" } | { state: "unreadable" } | { state: "held"; record: SessionLockRecord };
+
+/**
+ * Read a session's lock when it is FRESH.
+ *
+ * Shared by every reader that needs "is someone holding this?" — `SessionLock.inspect` and the
+ * delete guard — so the TTL and parse rules cannot drift between them.
+ *
+ * `stat` is the freshness source: a host whose fs cannot report mtime cannot distinguish a live
+ * owner from a dead one, so it reports "not held" and the feature degrades to the old behaviour
+ * (in-process only) rather than blocking every resume.
+ */
+async function readFreshLock(env: ResolvedCoreEnv, sessionId: string): Promise<FreshLock> {
+  const path = sessionLockPath(sessionId);
+  let mtimeMs: number;
+  try {
+    mtimeMs = (await env.fs.stat(path)).mtime.getTime();
+  } catch {
+    return { state: "absent" };
+  }
+  if (!Number.isFinite(mtimeMs) || Date.now() - mtimeMs > SESSION_LOCK_TTL_MS) return { state: "absent" };
+  let text: string;
+  try {
+    text = await (env.fs.readFile(path, "utf-8") as Promise<string>);
+  } catch {
+    // A fresh file we cannot read is not "free": the caller must decide conservatively.
+    return { state: "unreadable" };
+  }
+  const record = parseLock(text);
+  // A truncated file is a crashed writer, not a holder (same rule as `inspect`).
+  return record ? { state: "held", record } : { state: "absent" };
+}
+
+/**
+ * Refuse to delete a log another PROCESS is appending to.
+ *
+ * Removing the file does not close that session: the writer's next append finds no file, recreates
+ * it from its own delta (and the `state` line), and the conversation the user just deleted comes
+ * back as a truncated transcript. A stale lock (the holder died) is ignored, exactly like
+ * `acquire()` — otherwise a crash would make its sessions undeletable for the full TTL.
+ */
+export async function throwIfLockedByAnotherProcess(env: ResolvedCoreEnv, sessionId: string): Promise<void> {
+  const fresh = await readFreshLock(env, sessionId);
+  if (fresh.state === "absent") return;
+  if (fresh.state === "unreadable") {
+    // Conservative: a lock we cannot read is still evidence that someone may be writing. Deleting
+    // a log we cannot prove is unowned is worse than refusing (the TTL expires it either way).
+    throw new SessionLockedError(sessionId, { owner: "unknown (unreadable lock file)", since: 0 });
+  }
+  if (isSameProcessRecord(fresh.record)) return;
+  throw new SessionLockedError(sessionId, fresh.record);
+}
+
 export class SessionLock {
   /** The one session this runtime is on. */
   private current: string | undefined;
@@ -298,24 +363,8 @@ export class SessionLock {
    * (in-process only) rather than blocking every resume.
    */
   private async inspect(sessionId: string): Promise<SessionLockRecord | null> {
-    const path = sessionLockPath(sessionId);
-    let text: string;
-    try {
-      text = await this.env.fs.readFile(path);
-    } catch {
-      return null;
-    }
-    let mtimeMs: number;
-    try {
-      mtimeMs = (await this.env.fs.stat(path)).mtime.getTime();
-    } catch {
-      return null;
-    }
-    if (!Number.isFinite(mtimeMs)) return null;
-    if (Date.now() - mtimeMs > SESSION_LOCK_TTL_MS) return null;
-    const record = parseLock(text);
-    if (!record) return null;
-    return record;
+    const fresh = await readFreshLock(this.env, sessionId);
+    return fresh.state === "held" ? fresh.record : null;
   }
 
   private record(since: number): SessionLockRecord {
@@ -352,8 +401,7 @@ export class SessionLock {
    * build) falls back to the pid, which is the same fact observed a weaker way.
    */
   private isSameProcess(held: SessionLockRecord): boolean {
-    if (held.instance !== undefined) return held.instance === PROCESS_INSTANCE_ID;
-    return typeof held.pid === "number" && typeof process !== "undefined" && held.pid === process.pid;
+    return isSameProcessRecord(held);
   }
 
   private startHeartbeat(): void {

@@ -5,8 +5,10 @@
  * on a human? how did the last run end?). These axes separate them so a paused run is not also
  * "terminal", and compaction is a run phase rather than a competing status.
  *
- * `AgentStatus` remains the host-facing value set; this module is the read model. The writers are
- * inverted onto `transition()` in the P4 wave.
+ * `AgentStatus` remains the host-facing value set; this module is the read model. The primary
+ * writers go through `transition()`; `ManagedAgent.setStatus` remains a guarded compatibility path
+ * that rebuilds the axes with `deriveAgentState` for hosts (and older call sites) that still write
+ * a status string.
  */
 
 import type { AgentStatus } from "./agent-status.js";
@@ -104,6 +106,19 @@ export function projectAgentStatus(state: AgentState): AgentStatus {
 /** Terminal = the last run failed or was aborted. `completed` is a settled result, not a fault. */
 export function isTerminalState(state: AgentState): boolean {
   return state.outcome === "error" || state.outcome === "aborted";
+}
+
+/**
+ * A turn that finished and has nothing parked on it — the one definition of "this run is over and
+ * its verdict is final".
+ *
+ * Deliberately narrower than `outcome === "completed"`: a turn parked on an unanswered question
+ * keeps `completed` as its outcome but is still the user's to abandon, so a late Esc may cancel it.
+ * Readers must not re-spell this rule (`interrupt`, `deriveCancelVerdict`, the `setStatus` guard
+ * and the subagent abort check all read it here) — the three copies that existed drifted apart.
+ */
+export function isSettledCompletion(state: Pick<AgentState, "outcome" | "wait">): boolean {
+  return state.outcome === "completed" && state.wait === "none";
 }
 
 /** Active = a run is in flight or the session is parked on a human. */
@@ -315,12 +330,13 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
       // a pending question (`awaiting_user` wins over `error`), so a caller checking only
       // `isActiveStatus` would otherwise rewrite a provider failure into "user cancelled" the
       // moment the user pressed Esc while the question was still open — and the failure became
-      // unrecoverable once `resume` cleared the wait. `completed` is intentionally NOT included: a
-      // turn parked on an unanswered question can still be cancelled by the user.
+      // unrecoverable once `resume` cleared the wait.
       if (state.outcome === "error" || state.outcome === "aborted") {
         // Keep the verdict, but the old "an approval gate dies with the run" rule still holds.
         return state.wait === "approval" ? { ...state, wait: "none" } : state;
       }
+      // A COMPLETED run with nothing parked on it is terminal too (see `isSettledCompletion`).
+      if (isSettledCompletion(state)) return state;
       // A compaction lease owns the run phase. Record the verdict and let `compaction-end` apply
       // it — the same rule as `fail` / `settle` / `stream-end`. Clearing the `resume*` fields here
       // (the previous behaviour) destroyed the lease's restore target while the summarizer kept
@@ -421,11 +437,11 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
 // ============================================================================
 
 /**
- * Read the axes for an agent whose writers still own `AgentStatus`.
+ * Read the axes for a raw `AgentStatus` string.
  *
- * This is the P4 adapter: the projection (`projectAgentStatus`) round-trips every existing status,
- * so the snapshot can expose the axes before the writer inversion. Delete it when `setStatus`
- * becomes `transition()`.
+ * This is the READ-ONLY adapter, not a legacy writer seam: `projectAgentStatus` round-trips every
+ * member, and the four derived sets (`TERMINAL` / `ACTIVE` / `BUSY` / `STICKY`) plus host
+ * snapshots keep reading it. Writers go through `transition()`.
  */
 export function deriveAgentState(status: AgentStatus, errorMessage = ""): AgentState {
   const base = { lifecycle: "ready" as LifecyclePhase, run: "idle" as RunPhase, wait: "none" as WaitKind };

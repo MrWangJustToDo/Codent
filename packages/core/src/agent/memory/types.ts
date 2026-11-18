@@ -69,6 +69,8 @@ export type MemoryCompletion = (request: MemoryCompletionRequest) => Promise<unk
 /** Minimal log port so the selection helpers stay independent of the extension logger. */
 export interface MemoryLog {
   info(message: string): void;
+  /** Optional: the per-turn selection decision is diagnostic noise, not a timeline row. */
+  debug?(message: string): void;
   warn(message: string): void;
 }
 

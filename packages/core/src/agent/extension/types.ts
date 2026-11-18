@@ -560,6 +560,11 @@ export interface ExtensionContext {
 
   logger: {
     info: (msg: string) => void;
+    /**
+     * Diagnostic-level row. Same sink as `info`, filtered by `AGENT_LOG_LEVEL` — the level a
+     * per-turn, per-candidate decision belongs at (kept for diagnosis, not part of the timeline).
+     */
+    debug: (msg: string) => void;
     warn: (msg: string) => void;
     error: (msg: string) => void;
     /**

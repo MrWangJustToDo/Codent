@@ -375,6 +375,7 @@ export function createExtensionContext(
 
     logger: {
       info: (msg: string) => host.log("info", api.id, msg),
+      debug: (msg: string) => host.log("debug", api.id, msg),
       warn: (msg: string) => host.log("warn", api.id, msg),
       error: (msg: string) => host.log("error", api.id, msg),
       log: (level, category, msg) => host.log(level, api.id, msg, category),

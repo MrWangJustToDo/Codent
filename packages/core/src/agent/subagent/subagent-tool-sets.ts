@@ -11,8 +11,6 @@
 
 import { BUILTIN_TOOL_NAMES } from "../tools/catalog/tool-names.js";
 
-import { SUBAGENT_READ_ONLY_TOOL_NAMES } from "./subagent-tools.js";
-
 /** Tools withheld from exploration subagents (the read-only set is `SUBAGENT_READ_ONLY_TOOL_NAMES`). */
 export const SUBAGENT_EXCLUDED_TOOL_NAMES: ReadonlySet<string> = new Set([
   BUILTIN_TOOL_NAMES.writeFile,
@@ -27,6 +25,3 @@ export const SUBAGENT_EXCLUDED_TOOL_NAMES: ReadonlySet<string> = new Set([
   BUILTIN_TOOL_NAMES.listSkills,
   BUILTIN_TOOL_NAMES.loadSkill,
 ]);
-
-// Re-exported for the dev surface, which published the read-only set under a second name.
-export { SUBAGENT_READ_ONLY_TOOL_NAMES };

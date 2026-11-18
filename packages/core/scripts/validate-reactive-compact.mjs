@@ -52,7 +52,9 @@ import {
     }
     throw new Error(`unbalanced block after ${marker}`);
   };
-  const runBlock = blockSource("if (!isToolContinuation) {");
+  // The run boundary is `!isToolContinuation`, plus the resumed-after-switch case (a continuation
+  // with no run to continue). Both are run starts, so the reset belongs inside this block.
+  const runBlock = blockSource("if (!isToolContinuation || host.run.getCurrentRunId() === null) {");
   assert.match(
     runBlock,
     /getCompaction\(\)\.resetReactiveCompactRetries\(\)/,

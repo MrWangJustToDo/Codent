@@ -462,7 +462,10 @@ export async function findRelevantMemories(
   }
 
   const names = results.map((r) => r.filename).join(", ");
-  logger?.info(
+  // Debug, not info: the per-turn selection decision is deliberate noise (`memory:prefetch`'s own
+  // policy handler keeps `selected` silent), and writing the same fact again through `ctx.logger`
+  // made the policy table a second, disagreeing decision-maker.
+  logger?.debug?.(
     `Loaded ${results.length} relevant memories (${totalBytes} bytes, method: ${selectionMethod})${names ? `: ${names}` : ""}`
   );
 

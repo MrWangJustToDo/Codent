@@ -6,6 +6,7 @@
 
 import { modelMessagesToUIMessages } from "@tanstack/ai";
 
+import { isSettledCompletion } from "../../runtime-types/agent-state.js";
 import { generateId } from "../../utils/generate-id.js";
 import { ensureUIChannel } from "../run/run-agent-skeleton.js";
 import { runManagedSpan } from "../run/run-span.js";
@@ -292,7 +293,12 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
     // fault: an Esc that lands as the provider errors must read as a STOP, not a failure. The
     // caller's signal is checked too: a pre-spawn abort can terminate the stream without the
     // child's own RunCoordinator status flipping.
-    aborted = aborted || result.aborted || abortSignal?.aborted === true;
+    // An abort that lands AFTER the child produced its final answer must not relabel the run: the
+    // signal is the PARENT's, and this stream can finish just before an Esc reaches it. Only an
+    // unfinished child (no `completed` verdict of its own) reads as cancelled.
+    const childState = subagentManaged.getAgentState?.();
+    const childCompleted = childState !== undefined && isSettledCompletion(childState);
+    aborted = aborted || (result.aborted && !childCompleted) || (abortSignal?.aborted === true && !childCompleted);
     if (aborted) {
       failed = false;
       errorMessage = undefined;

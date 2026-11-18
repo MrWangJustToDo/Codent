@@ -78,7 +78,13 @@ export async function prepareManagedAgentForRun(
   }
 
   // Run scope: one short id per user turn (tool continuations keep the same id).
-  if (!isToolContinuation) {
+  //
+  // A continuation usually has a run to continue; after a `/resume` it does not, because the
+  // switch cleared `currentRunId`. Minting then is what keeps the resumed tail (an answered
+  // approval, a half-run tool phase) attributable: without it every `llm:*` row, the persisted
+  // `runId`, the `turn:summary` and any task spawned in that phase carried NO run at all, so the
+  // log could not slice the turn it belonged to.
+  if (!isToolContinuation || host.run.getCurrentRunId() === null) {
     // The reactive-compaction retry budget is RUN-scoped, not phase-scoped. Resetting it in the
     // per-phase prep let a turn split by approvals/tools re-summarize once per phase; the counter's
     // own contract ("max 1 per run") was therefore unenforceable. `resetTurnLifecycle` runs per

@@ -7,6 +7,7 @@
  */
 
 import { errorMessage } from "../../utils/errors.js";
+import { isCallbackTimeoutError, withCallbackTimeout } from "../extension/callback-timeout.js";
 
 import { isRestoreReadFailure, markRestoreReadFailure } from "./session-restore.js";
 
@@ -16,6 +17,15 @@ import type { SessionRuntime } from "../../runtime-types/session-runtime.js";
 import type { SessionData } from "../persistence/types.js";
 
 export type SessionLifecycleReason = "session-switch" | "session-new" | "session-resume" | "agent-destroy";
+
+/**
+ * Budget for killing the leaving session's background work.
+ *
+ * The same order as every other teardown step (`TEARDOWN_STEP_TIMEOUT_MS`). The switch cannot wait
+ * forever for a kill that never returns: a shared deadline is what keeps `isTransitioning()`
+ * bounded, and a residue is reported instead of hanging the agent.
+ */
+const BACKGROUND_RESET_TIMEOUT_MS = 60_000;
 
 export class SessionLifecycleService {
   /** Serializes complete session transitions; each switch has multiple awaits and one owner. */
@@ -223,7 +233,31 @@ export class SessionLifecycleService {
         // source destroys processes, the task source aborts detached seats).
         if (options.sameSession) return Promise.resolve();
         try {
-          return Promise.resolve(this.rt.sidecars.resetBackgroundWork(reason));
+          // BOUNDED, like the destroy path's identical step (`LifecycleCoordinator` wraps
+          // `destroyBackgroundWork` in `settleStep`). An unbounded await here let one kill that
+          // never returned keep `settleCommittedTransition` from completing, so `pendingSwitches`
+          // stayed > 0: from then on `isTransitioning()` was true forever and the agent swallowed
+          // Esc, refused `/compact` and refused background wake — an unrecoverable inert object.
+          return withCallbackTimeout(
+            Promise.resolve(this.rt.sidecars.resetBackgroundWork(reason)),
+            "background work reset",
+            BACKGROUND_RESET_TIMEOUT_MS
+          ).catch((error: unknown) => {
+            // Reported, never rethrown: `reset()` stores this promise without awaiting it (it is a
+            // public building block), so a rejection here was an unhandled rejection that could
+            // take the host down. The switch still completes; the residue is named in the timeline.
+            // The reporter itself is contained too — a throwing sink must not become the rejection
+            // this catch exists to prevent (same rule as `settleCommittedTransition`).
+            try {
+              const timedOut = isCallbackTimeoutError(error);
+              this.rt.sidecars.warn?.(
+                timedOut ? "Background work reset timed out" : "Background work reset did not complete",
+                { error: errorMessage(error) }
+              );
+            } catch {
+              // Unreportable, but the switch still stands.
+            }
+          });
         } catch (error) {
           return Promise.reject(error);
         }

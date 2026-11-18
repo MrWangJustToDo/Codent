@@ -409,6 +409,17 @@ export interface CoreEnv {
   readonly remote?: boolean;
 
   /**
+   * Stable identity of the remote connection, when this env is remote (`createRemoteEnv`).
+   *
+   * `rootPath` cannot identify a remote workspace: two servers commonly report `/workspace`, so
+   * two clients of the SAME server look distinct by object identity while two different servers
+   * look identical by path. The process-local session claim table needs the server's identity, not
+   * the client object's — two runtimes over one server must share one table or both can claim the
+   * same session id and interleave its transcript.
+   */
+  readonly remoteKey?: string;
+
+  /**
    * The directory commands run in by default (absolute).
    *
    * Semantics are "the default cwd for command execution in this env", not "the process's

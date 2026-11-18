@@ -463,7 +463,10 @@ export function formatToolOutput(
         );
       default:
         // No generic fallback to output.message (removed in phase 2).
-        // Unknown tools get an empty string; they should add a dedicated case or register toUI.
+        // An unknown tool with no `present.text` renders nothing here. `toModelOutput` is NOT a
+        // substitute: it only shapes the model wire, so declaring it alone still leaves this UI
+        // body empty. Declare `present.text` at the definition site (the removed `toUI` channel
+        // is gone).
         return "";
     }
   }

@@ -1,3 +1,4 @@
+import { errorMessage } from "../../utils/errors.js";
 import { createSequentialIdGenerator } from "../../utils/generate-id.js";
 import { truncateText } from "../../utils/text-truncation.js";
 import { createJsonlFileSink } from "../log/jsonl-file-sink.js";
@@ -387,7 +388,18 @@ export class AgentLog {
     // A replacement must land the previous sink's pending batch first: the seam re-points, it
     // cannot release the old sink, and a host that used `attachFileSink` (the embedded fallback)
     // before the manager bound its own would otherwise lose every line written in between.
-    if (this.sinkEntry) this.sinkFlushSync?.();
+    // Contained: the seam must never let a host sink's flush failure escape into `bind()` /
+    // workspace construction (the same rule `handleEntry` follows via `safeHandle`).
+    if (this.sinkEntry) {
+      try {
+        this.sinkFlushSync?.();
+      } catch (error) {
+        // The previous sink is being replaced, so its own error channel may already be gone. Report
+        // on the console rather than swallowing it: a batch that failed to land is a real gap in
+        // the timeline, and "reported, never thrown" is the contract every other sink failure keeps.
+        console.error(`[agent-log] previous sink flush failed: ${errorMessage(error)}`);
+      }
+    }
     // Bind FIRST: a drain can synchronously trigger a writer (persist-error -> diagnostic ->
     // bridge -> log). With the sink assigned only at the end, such an entry landed in the just-
     // cleared buffer and was never drained by a second attach.

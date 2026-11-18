@@ -2,6 +2,8 @@
  * Typed end-of-run / mid-run status policies for {@link AgentStatusController}.
  */
 
+import { isSettledCompletion } from "../../runtime-types/agent-state.js";
+
 import type { AgentState } from "../../runtime-types/agent-state.js";
 import type { AgentRunOutcomeKind } from "../../runtime-types/agent-status.js";
 import type { WhenClearStatus } from "../../runtime-types/session-payloads.js";
@@ -70,6 +72,12 @@ export function whenClearForReconcilePolicy(policy: StatusReconcilePolicy): When
  * from the projection recorded that run as `aborted`, contradicting the `agent:stream-error` it had
  * just emitted. Shared by the canceller and its validator so the rule has one definition.
  */
-export function deriveCancelVerdict(state: Pick<AgentState, "outcome">): "error" | "aborted" {
-  return state.outcome === "error" ? "error" : "aborted";
+export function deriveCancelVerdict(state: Pick<AgentState, "outcome" | "wait">): "error" | "aborted" | "finished" {
+  if (state.outcome === "error") return "error";
+  // A turn that already completed is NOT cancelled by a late Esc — see `isSettledCompletion`, which
+  // is the single definition (a completed turn still parked on a question stays cancellable).
+  // Relabelling it `aborted` contradicted `agent:stop`/`turn:summary` and skipped post-run memory
+  // extraction for a turn whose work was done.
+  if (isSettledCompletion(state)) return "finished";
+  return "aborted";
 }

@@ -19,7 +19,7 @@
 import { errorMessage } from "../../utils/errors.js";
 import { sortByDispatchRank } from "../dispatch-order.js";
 
-import { EXTENSION_CALLBACK_TIMEOUT_MS, withCallbackTimeout } from "./callback-timeout.js";
+import { EXTENSION_CALLBACK_TIMEOUT_MS, normalizeCallbackTimeout, withCallbackTimeout } from "./callback-timeout.js";
 
 import type { DispatchRank } from "../dispatch-order.js";
 import type {
@@ -354,7 +354,8 @@ export class ExtensionTurnContext {
    * legitimately slow completion into a per-turn `agent:extension-error`.
    */
   private bound<T>(promise: Promise<T>, label: string, timeoutMs?: number): Promise<T> {
-    if (timeoutMs === 0) return promise;
-    return withCallbackTimeout(promise, label, timeoutMs ?? this.callbackTimeoutMs());
+    const budget = normalizeCallbackTimeout(timeoutMs);
+    if (budget === 0) return promise;
+    return withCallbackTimeout(promise, label, budget ?? this.callbackTimeoutMs());
   }
 }

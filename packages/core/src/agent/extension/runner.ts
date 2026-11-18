@@ -1,7 +1,5 @@
 /* eslint-disable max-lines -- lifecycle engine: load/activate/toggle/destroy, instance state and the host notifications that follow from them. The three self-contained surfaces are separate modules now — `context-factory.ts` (the `ctx` an extension registers through, including the registration lease), `registration-stacks.ts` (per-name tool/command ownership) and `turn-context.ts` (per-turn sections, providers and disabled notices) — so what remains here is the state machine that sequences them. */
 import { getEnv, hasCoreEnv } from "../../env";
-// The extension exit-flush registry lives with the other process-exit guards, so a hard exit runs
-// it on the same two hooks (fatal handler + `exit`) that already land the active logs.
 import { mergeAbortSignals } from "../../runtime-types/abort.js";
 import { errorMessage, toError } from "../../utils/errors.js";
 import { createAgentEventBus } from "../agent-event-bus";
@@ -1500,6 +1498,40 @@ export class ExtensionRunner {
         error: errorMessage(error),
       });
     }
+    // Publish the disable BEFORE harvesting the custom notices.
+    //
+    // `onExtensionDisabled` is the seam that withdraws this turn's section snapshot (and the
+    // management row) the moment the tools disappear. Awaiting a third-party `disabledContent`
+    // producer first (one bounded wait per named section) left the model reading a section that
+    // still advertised tools already unregistered, and the panel still showing the extension as
+    // enabled — for up to `(1 + N) × 60s`, which is precisely the window the callback exists to
+    // close. The generic wording is what THIS turn sees; the producer's specific text replaces the
+    // runner-side notice below, so the next prepared turn carries it (one supersede notice, not a
+    // second live section).
+    const genericNotice = `Extension "${instance.api.name ?? id}" is disabled — its tools and commands are unavailable.`;
+    // Drop any previous status/retraction rows first: an enabled-again notice from an earlier
+    // cycle must not sit beside this disable's notice under a different named section.
+    this.turnContextSections.clearNotices(instance.api.id);
+    this.turnContextSections.setDisabledNotice(instance.api.id, genericNotice);
+    // Only replace the list when this disable actually captured sections. A second disable whose
+    // provider is already gone (an `error` instance, or a residual artifact) would otherwise reset
+    // it to `[]`, and the next enable could no longer retract the per-section notices already
+    // written into the model's history. `normalizeSections` already ran, so this does not depend
+    // on the producer.
+    if (disabledSections) instance.disabledSections = [...disabledSections.keys()];
+    // A disabled instance is not a broken one: keeping the previous activation's error made the
+    // management panel read "inactive + failed to activate (…)" forever, as if the state were
+    // current. A teardown failure is reported through the returned message and the bus event.
+    // Cleared BEFORE the notification: a subscriber that reads `instance.error` on the disable
+    // frame would otherwise see the previous activation's fault and keep it until the next change.
+    if (teardownError === undefined) instance.error = undefined;
+    this.runHostCallback(
+      "onExtensionDisabled",
+      () => this.options.onExtensionDisabled?.(instance.api.id, genericNotice),
+      instance.api.id
+    );
+    this.notifyStateChanged(instance.api.id);
+
     // Now that the lease is revoked and the registrations are gone, harvest the notices. A producer
     // that hangs costs this extension's OWN notice (bounded), never the ability to disable it.
     const custom = await this.turnContextSections.captureDisabledNotice(
@@ -1526,32 +1558,13 @@ export class ExtensionRunner {
     // list). Writing a notice onto a destroyed runner would outlive the destroy's own invariant
     // that nothing survives it; the extension is already gone, so report success and stop.
     if (this.destroyed) return { ok: true, message: `Extension "${id}" disabled` };
-    const notice =
-      custom === undefined
-        ? `Extension "${instance.api.name ?? id}" is disabled — its tools and commands are unavailable.`
-        : custom.trim();
-    // Drop any previous status/retraction rows first: an enabled-again notice from an earlier
-    // cycle must not sit beside this disable's notice under a different named section.
-    this.turnContextSections.clearNotices(instance.api.id);
-    this.turnContextSections.setDisabledNotice(instance.api.id, notice);
+    const notice = custom === undefined ? genericNotice : custom.trim();
+    if (notice !== genericNotice) {
+      this.turnContextSections.setDisabledNotice(instance.api.id, notice);
+    }
     for (const [name, body] of sectionNotices) {
       this.turnContextSections.setSectionNotice(instance.api.id, name, body);
     }
-    // Only replace the list when this disable actually captured sections. A second disable whose
-    // provider is already gone (an `error` instance, or a residual artifact) would otherwise reset
-    // it to `[]`, and the next enable could no longer retract the per-section notices already
-    // written into the model's history.
-    if (disabledSections) instance.disabledSections = [...disabledSections.keys()];
-    // A disabled instance is not a broken one: keeping the previous activation's error made the
-    // management panel read "inactive + failed to activate (…)" forever, as if the state were
-    // current. A teardown failure is reported through the returned message and the bus event.
-    if (teardownError === undefined) instance.error = undefined;
-    this.runHostCallback(
-      "onExtensionDisabled",
-      () => this.options.onExtensionDisabled?.(instance.api.id, notice),
-      instance.api.id
-    );
-    this.notifyStateChanged(instance.api.id);
     return teardownError === undefined
       ? { ok: true, message: `Extension "${id}" disabled` }
       : { ok: false, message: `Extension "${id}" disabled with errors: ${errorMessage(teardownError)}` };

@@ -73,8 +73,22 @@ export function createObserverSurface(
   registrations?: ExtensionRegistrations
 ): ExtensionObserverSurface {
   const track = (unsub: () => void): (() => void) => {
-    registrations?.unsubObservers.push(unsub);
-    return unsub;
+    const list = registrations?.unsubObservers;
+    list?.push(unsub);
+    return () => {
+      // Revocation covers the registration surface: a disposer the extension retained must not
+      // reach a runner that already dropped this context (the rule every `register*` follows).
+      // This is cleanup, not a new registration, so it does not report a refusal.
+      if (deps.isLive && !deps.isLive()) return;
+      unsub();
+      // A self-retired observer is no longer an artifact. Leaving it in the ledger made
+      // `hasLiveArtifacts()` true forever, so the "already disabled" fast path never ran and every
+      // disable did a full teardown round.
+      if (list) {
+        const index = list.indexOf(unsub);
+        if (index >= 0) list.splice(index, 1);
+      }
+    };
   };
 
   /** Refuse a post-disable registration before it reaches the bus. */

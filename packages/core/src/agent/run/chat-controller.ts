@@ -219,7 +219,7 @@ export class AgentChatController {
       runToolBeforeHook: (toolCallId, toolName, args) => this.managed.runToolBeforeHook(toolCallId, toolName, args),
       reconcile: () => this.managed.statusController.reconcileWithPolicy(this.channel.getMessages(), "during-run"),
       persist: () => this.persistMessages("pump-complete"),
-      enqueueRun: () => this.enqueueRunOnce(),
+      enqueueRun: (options) => this.enqueueRunOnce(options),
       isSessionSwitching: () => this.managed.isSessionSwitching(),
       getCoreEnv: () => this.managed.getCoreEnv(),
       isIncumbentTool: (name) => this.managed.toolService.isIncumbent(name),
@@ -823,8 +823,10 @@ export class AgentChatController {
     // between the answer and the resumed pump's persist, leaving an unanswered `ask_user` on disk
     // while the host already reported the answer sent.
     this.persistMessages("user-message");
-    if (options.awaitTurn === false) this.startRun();
-    else await this.enqueueRunOnce();
+    // Answering a client tool RESUMES the parked turn: it is the next pump of the same prompt, so
+    // it must not reset the turn's tool-phase budget (the per-run ceiling is not per-interaction).
+    if (options.awaitTurn === false) this.startRun({ continuesTurn: true });
+    else await this.enqueueRunOnce({ continuesTurn: true });
     return "accepted";
   }
 
@@ -951,8 +953,8 @@ export class AgentChatController {
    * (`agent:stream-error` + terminal finalize), so its rejection is not the command's to report;
    * the catch only prevents an unhandled rejection.
    */
-  private startRun(): void {
-    void this.enqueueRunOnce().catch(() => undefined);
+  private startRun(options: { continuesTurn?: boolean } = {}): void {
+    void this.enqueueRunOnce(options).catch(() => undefined);
   }
 
   private drainSteerIntoChannel(): boolean {

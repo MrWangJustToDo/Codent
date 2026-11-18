@@ -8,7 +8,7 @@
  * capability-based subagent routing.
  *
  * Mirrors the SessionStore split: pure CoreEnv-backed IO, no agent state —
- * {@link UsageHistoryService} (managers/services) owns the write policy.
+ * {@link UsageHistoryService} (`agent/usage/usage-history-service.ts`) owns the write policy.
  */
 
 import { getEnv, type ResolvedCoreEnv } from "../../env";

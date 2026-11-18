@@ -19,8 +19,8 @@ import type { LogCategory, LogEntry } from "../agent-log/types.js";
  * While the schemas sat under `agent-log/`, `agent/log/` held two value edges into that domain
  * (`jsonl-file-sink → schemas`, `extension → lifecycle-guards`) against one value edge back
  * (`agent-log → jsonl-file-sink`) — a directory-level cycle, even though no module-level path ever
- * closed (the schema and type modules are leaves). The `agent-log/` barrel re-exports these so
- * existing consumers keep resolving; new code SHOULD import them from here.
+ * closed (the schema and type modules are leaves). New code imports them from here; the
+ * `agent-log/` barrel no longer re-exports them.
  */
 
 // ============================================================================

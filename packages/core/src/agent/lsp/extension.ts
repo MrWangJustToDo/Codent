@@ -175,7 +175,7 @@ export function createLspExtension(options?: LspExtensionConfig): ExtensionAPI {
     description:
       "Language Server Protocol tools: diagnostics, hover, definition, references, symbols, rename, completions, code actions + auto file-sync",
     async activate(ctx) {
-      await activateLsp(
+      const inactive = await activateLsp(
         ctx,
         options,
         (manager) => {
@@ -194,6 +194,7 @@ export function createLspExtension(options?: LspExtensionConfig): ExtensionAPI {
           disposeFileSync = () => fileSync.dispose();
         }
       );
+      if (inactive !== undefined) return { inactive };
     },
     async deactivate() {
       const shutdown = shutdownCurrent;
@@ -215,7 +216,7 @@ async function activateLsp(
   onManager?: (manager: LspManager) => void,
   onTreeSitter?: (treeSitter: TreeSitterManager) => void,
   onFileSync?: (fileSync: FileSync) => void
-): Promise<void> {
+): Promise<string | undefined> {
   const env = ctx.coreEnv;
   const corePath = env.path ?? defaultPath;
   const createConnection = env.createLspConnection;
@@ -229,6 +230,19 @@ async function activateLsp(
   // Feature-detect: if the host has no process/stdio runtime, LSP tools degrade.
   if (!createConnection) {
     ctx.logger.warn("LSP: host has no createLspConnection — LSP tools will be unavailable");
+  }
+
+  // No LSP runtime AND no tree-sitter fallback means none of the advertised query tools can ever
+  // answer, yet the schema still offers all six. Report `inactive` with the reason instead of
+  // activating: this is every remote-workspace / browser / playground host, and an `active`
+  // instance made the panel claim a working integration while `getUnavailableReason()` told the
+  // model to "call any LSP tool on a file to trigger server startup" — a server that can never
+  // start there, i.e. an instruction to retry forever. Code mode already settles this shape as
+  // `{ inactive }`; the LSP extension is the one that did not.
+  if (!createConnection && typeof env.locateTreeSitterGrammar !== "function") {
+    const reason = "host has no LSP runtime and no tree-sitter grammar locator";
+    ctx.logger.warn(`LSP: ${reason} — extension inactive`);
+    return reason;
   }
 
   // ---- Auto-diagnostics passthrough decorator (Phase 6 hardening) ----

@@ -182,8 +182,18 @@ async function disableText(runner, id) {
     assert.equal(await section(), "turn live", "prepared turn carries the live section");
 
     await runner.setEnabled("turn", false);
-    assert.equal(await section(), "turn off", "mid-turn disable replaces the section with the notice");
+    // The disable publishes BEFORE the `disabledContent` producer is awaited: that callback is the
+    // seam that withdraws the section, and a third-party producer must not delay it (up to one
+    // bound per named section). So THIS turn sees the generic notice...
+    assert.match(
+      (await section()) ?? "",
+      /is disabled — its tools and commands are unavailable/,
+      "mid-turn disable withdraws the section immediately with the generic notice"
+    );
     assert.deepEqual(events, [["disabled", "turn"]], "disable notifies the host once");
+    // ...and the producer's own wording is what the NEXT prepared turn carries.
+    await controller.collectExtensionPromptHooks("next");
+    assert.equal(await section(), "turn off", "the producer's wording lands on the next prepared turn");
 
     await runner.setEnabled("turn", true);
     assert.equal(await section(), undefined, "mid-turn re-enable removes the disabled notice from this turn");

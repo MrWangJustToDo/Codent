@@ -248,11 +248,11 @@ export class LifecycleCoordinator {
         // flushed. Releasing at the top let a new resume claim the id while this
         // teardown was still writing to it. The lease is the owner (and releases the
         // empty-session reservation it created); `releaseAllFor` stays as the stale-claim backstop.
-        try {
-          await managedAgent.releaseSessionLease();
-        } catch {
-          // Best-effort; the storage releases below still run.
-        }
+        //
+        // Bounded like every other external step: `releaseReservation` does a load+save through
+        // CoreEnv (an HTTP round trip on a remote workspace), and this was the one unbounded await
+        // left in the teardown — a hung fs could keep `dispose()` from ever resolving.
+        await settleStep("session lease release", () => managedAgent.releaseSessionLease());
         this.deps.ownership.releaseAllFor(id);
         this.deps.releaseLog?.(id);
         // Idempotent backstop: the synchronous kill at the top of `destroy` already covered a host

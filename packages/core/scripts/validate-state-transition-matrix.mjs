@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 import {
   createAgentStatusController,
   deriveAgentState,
+  deriveCancelVerdict,
   INITIAL_AGENT_STATE,
   isActiveState,
   isParkedStatus,
@@ -186,6 +187,28 @@ assert.equal(projectAgentStatus(transition(idle, { type: "reset" })), "idle");
   completed = transition(completed, { type: "stream-end", result: "completed" });
   completed = transition(completed, { type: "interrupt" });
   assert.equal(completed.outcome, "aborted", "a normally-finished parked turn can still be cancelled");
+
+  // ...but a completed turn with NOTHING parked on it is terminal: a late Esc must not rewrite it
+  // as cancelled (it flipped the status, the turn summary and the ACP stop reason).
+  {
+    let finished = transition(initState(), { type: "prepare" });
+    finished = transition(finished, { type: "settle", result: "completed" });
+    const interrupted = transition(finished, { type: "interrupt" });
+    assert.equal(interrupted.outcome, "completed", "a finished turn keeps its verdict");
+    assert.equal(projectAgentStatus(interrupted), "completed", "and its status");
+  }
+
+  // The cancel verdict is the same rule one level up, and must read the same predicate — a bare
+  // `outcome === "completed"` here would call a question-parked turn "finished" and skip the
+  // cancel path that the state machine still allows.
+  assert.equal(deriveCancelVerdict({ outcome: "error", wait: "none" }), "error");
+  assert.equal(deriveCancelVerdict({ outcome: "completed", wait: "none" }), "finished");
+  assert.equal(
+    deriveCancelVerdict({ outcome: "completed", wait: "question" }),
+    "aborted",
+    "a completed turn parked on a question is still cancellable"
+  );
+  assert.equal(deriveCancelVerdict({ outcome: "none", wait: "none" }), "aborted");
 
   let approval = transition(initState(), { type: "prepare" });
   approval = transition(approval, { type: "pause", wait: "approval" });
