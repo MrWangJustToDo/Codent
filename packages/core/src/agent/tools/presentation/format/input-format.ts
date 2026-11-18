@@ -9,11 +9,33 @@ import { BUILTIN_TOOL_NAMES } from "../../catalog/tool-names.js";
  */
 const ENTRY_VALUE_MAX_CHARS = 50;
 
-function formatFilePathInput(input: Record<string, unknown>, toolName?: string): string {
+/**
+ * Whether a finished `read_file` result proves the call was NOT a text read.
+ *
+ * The line range in the row describes a TEXT read, but the row is built from the INPUT — so a model
+ * that passes `offset`/`limit` out of habit made an image read say "lines 1-1 of a PNG". Only a
+ * result can tell the two apart; `undefined` (still streaming, or unavailable) keeps the range
+ * because then the input is all there is to report.
+ *
+ * A FAILED read (`Cannot analyze image: …`, a plain string) carries no `type`, so the range stays.
+ * Guessing from the path extension instead would put file-type knowledge in the presentation layer
+ * for a row whose content is the error text anyway.
+ */
+function readWasNotText(output: unknown): boolean {
+  if (typeof output !== "object" || output === null) return false;
+  const type = (output as { type?: unknown }).type;
+  return typeof type === "string" && type !== "text";
+}
+
+function formatFilePathInput(input: Record<string, unknown>, toolName?: string, output?: unknown): string {
   const path = input.path as string | undefined;
   if (!path) return "";
 
-  if (toolName === BUILTIN_TOOL_NAMES.readFile && (input.offset !== undefined || input.limit !== undefined)) {
+  if (
+    toolName === BUILTIN_TOOL_NAMES.readFile &&
+    (input.offset !== undefined || input.limit !== undefined) &&
+    !readWasNotText(output)
+  ) {
     const offset = typeof input.offset === "number" ? input.offset : undefined;
     const limit = typeof input.limit === "number" ? input.limit : undefined;
 
@@ -165,7 +187,7 @@ function formatCreatePlanInput(input: Record<string, unknown>): string {
 export function formatToolInput(
   input: unknown,
   toolName?: string,
-  options?: { compact?: boolean; maxLen?: number }
+  options?: { compact?: boolean; maxLen?: number; output?: unknown }
 ): string {
   if (input === undefined || input === null) return "";
 
@@ -178,7 +200,7 @@ export function formatToolInput(
 
     switch (toolName) {
       case BUILTIN_TOOL_NAMES.readFile:
-        formatted = formatFilePathInput(obj, toolName);
+        formatted = formatFilePathInput(obj, toolName, options?.output);
         break;
       case BUILTIN_TOOL_NAMES.listFile:
       case BUILTIN_TOOL_NAMES.writeFile:

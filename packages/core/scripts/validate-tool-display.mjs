@@ -562,3 +562,56 @@ assert.match(
 assert.equal(treeText({ tree: "a\nb", totalEntries: 2 }), treeText({ tree: "a\nb", totalEntries: 2 }));
 
 console.log("validate-tool-display: result bodies ok");
+
+// ============================================================================
+// Input label: the line range describes a TEXT read
+// ============================================================================
+//
+// The row header is built from the INPUT (`formatToolInput`), so a model that passes `offset`/`limit`
+// out of habit made an image read claim "lines 1-1 of shots/dock2.png" — a line number for a PNG.
+// Only the RESULT can say whether the call was a text read; the formatter now takes it when the host
+// has one, and keeps the range while the call is still pending (the input is all there is then).
+{
+  const imageInput = { path: "shots/dock2.png", offset: 1, limit: 1 };
+  assert.equal(
+    core.formatToolInput(imageInput, "read_file"),
+    "shots/dock2.png lines 1-1",
+    "pending: report what the model asked for"
+  );
+  assert.equal(
+    core.formatToolInput(imageInput, "read_file", {
+      output: { type: "image", path: "shots/dock2.png", mimeType: "image/png", size: 1024 },
+    }),
+    "shots/dock2.png",
+    "an image result carries no lines, whatever the input said"
+  );
+  assert.equal(
+    core.formatToolInput(imageInput, "read_file", { output: { type: "pdf", path: "shots/doc.pdf", size: 1024 } }),
+    "shots/dock2.png",
+    "…nor a PDF"
+  );
+  assert.equal(
+    core.formatToolInput({ path: "src", limit: 50 }, "read_file", {
+      output: { type: "directory", path: "src", entries: ["a.ts"], totalEntries: 1 },
+    }),
+    "src",
+    "…nor a directory listing"
+  );
+  assert.equal(
+    core.formatToolInput(imageInput, "read_file", {
+      output: { type: "text", path: "shots/dock2.png", content: "x", startLine: 1, endLine: 1, totalLines: 1 },
+    }),
+    "shots/dock2.png lines 1-1",
+    "a text read keeps the range"
+  );
+  // A plain path read is unchanged either way (no offset/limit to report).
+  assert.equal(core.formatToolInput({ path: "a.ts" }, "read_file", { output: { type: "image" } }), "a.ts");
+  // A FAILED read is a string, not a typed result: the range stays (the row's content is the error,
+  // and guessing from the extension would move file-type knowledge into the presentation layer).
+  assert.equal(
+    core.formatToolInput(imageInput, "read_file", { output: "Cannot analyze image: the model has no vision" }),
+    "shots/dock2.png lines 1-1"
+  );
+}
+
+console.log("validate-tool-display: input labels ok");

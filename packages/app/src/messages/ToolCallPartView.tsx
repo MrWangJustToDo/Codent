@@ -178,7 +178,13 @@ export const ToolCallPartView = memo(({ part, streamingThrottleMs }: ToolCallPar
   const displayInput =
     toolInput === undefined || toolInput === null
       ? null
-      : formatToolInput(toolInput, toolName, { compact: displayMode === "compact" }) || null;
+      : formatToolInput(toolInput, toolName, {
+          compact: displayMode === "compact",
+          // The line range belongs to a TEXT read; a finished image/PDF/directory result proves the
+          // call had none, so a model that passed offset/limit anyway cannot make the row claim it
+          // read "lines 1-1" of a PNG.
+          output: part.output,
+        }) || null;
 
   const hasOutput = uiState === "output-available" || uiState === "output-error" || uiState === "output-denied";
   const hasDenied = uiState === "output-denied";

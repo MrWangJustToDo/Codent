@@ -88,6 +88,13 @@ interface ToolState {
   interrupted?: boolean;
   /** The notice the marker carried, so the result row can render it instead of the marker JSON. */
   interruptedText?: string;
+  /**
+   * The tool's own return value, kept so a LATER `tool_call_update` can build the same title the
+   * result part does. Without it every update re-derived the title from the input alone — which is
+   * where `read_file` says "lines 1-1" for an image, because only the result can say it was not a
+   * text read.
+   */
+  output?: unknown;
 }
 
 /**
@@ -159,6 +166,9 @@ export class ToolProjection {
     if (!state) this.createCall(part, replay);
     else {
       state.input = parseToolInput(part) ?? state.input;
+      // The result arrives on the call part in ACP's stream (there is a separate result part too);
+      // keep whichever value we have so the terminal update's title matches the result.
+      if (part.output !== undefined) state.output = part.output;
       // The preview is a function of the INPUT, so it goes out as soon as the input is final — not when
       // the call reaches a terminal status. `content` on an update REPLACES what the client holds, and
       // the two writers (this transition, and the result part below) run in the engine's order, not
@@ -205,7 +215,7 @@ export class ToolProjection {
           toolCallId: id,
           // The label travels again on every update: a client that replaces its row from the update
           // would otherwise show a blank one (see `toolTitleOf`).
-          title: toolTitleOf(state.name, state.input),
+          title: toolTitleOf(state.name, state.input, state.output),
           kind: toolKindFor(state.name, this.deps.lookup()),
           status: next,
           // The terminal non-success status stays `failed` (v1 has no `cancelled`), but the reason
@@ -277,13 +287,14 @@ export class ToolProjection {
     // return"), and as the loose `rawOutput` when there is not. Not both: sending both rendered the same
     // result twice — a diff (or an image) next to the tool's raw JSON, which a reader reports as the edit
     // row showing its diff twice.
+    if (resultState && part.output !== undefined) resultState.output = part.output;
     const content = this.toolContentFor(resultState ?? blankToolState(), true, text, images, part.content);
     this.deps.publish({
       sessionUpdate: "tool_call_update",
       toolCallId: part.toolCallId,
       ...(resultState
         ? {
-            title: toolTitleOf(resultState.name, resultState.input),
+            title: toolTitleOf(resultState.name, resultState.input, resultState.output),
             kind: toolKindFor(resultState.name, this.deps.lookup()),
           }
         : {}),
@@ -307,7 +318,7 @@ export class ToolProjection {
     // from the moment the engine has it, `arguments` from the first tick.
     const input = parseToolInput(part);
     const display = (part as { display?: { summary?: string; text?: string } }).display;
-    const info = toolCallInfo(part.name, input, this.deps.rootPath, display?.text, this.deps.lookup());
+    const info = toolCallInfo(part.name, input, this.deps.rootPath, display?.text, this.deps.lookup(), part.output);
     const cancelled = isCancelledToolCall(part as { output?: unknown });
     const interrupted = isInterruptedToolOutput(part.output);
     this.tools.set(part.id, {
@@ -351,7 +362,7 @@ export class ToolProjection {
     this.deps.publish({
       sessionUpdate: "tool_call_update",
       toolCallId: chunk.toolCallId,
-      title: toolTitleOf(state.name, state.input),
+      title: toolTitleOf(state.name, state.input, state.output),
       kind: toolKindFor(state.name, this.deps.lookup()),
       status: state.status === "pending" ? "in_progress" : state.status,
       ...toolMeta({ cancelled: state.cancelled, interrupted: state.interrupted }),
@@ -386,7 +397,7 @@ export class ToolProjection {
       this.deps.publish({
         sessionUpdate: "tool_call_update",
         toolCallId: task.toolCallId,
-        title: toolTitleOf(toolState.name, toolState.input),
+        title: toolTitleOf(toolState.name, toolState.input, toolState.output),
         kind: toolKindFor(toolState.name, this.deps.lookup()),
         status: toolState.status === "pending" ? "in_progress" : toolState.status,
         ...toolMeta({ cancelled: toolState.cancelled, interrupted: toolState.interrupted }),
@@ -428,7 +439,7 @@ export class ToolProjection {
     const display = (part as { display?: { summary?: string; text?: string } }).display;
     // The SAME description an approval prompt gets (`toolCallInfo`): a `run_command` whose command the
     // transcript shows but an approval cannot is exactly the divergence that sharing it prevents.
-    const info = toolCallInfo(part.name, input, this.deps.rootPath, display?.text, this.deps.lookup());
+    const info = toolCallInfo(part.name, input, this.deps.rootPath, display?.text, this.deps.lookup(), part.output);
     // A replayed task row carries its result on the CALL part (`output`); the persisted result part
     // has no `output`, only the raw JSON `content`. Format it here or `session/load` shows raw JSON
     // for every historical delegation — the one surface a client without `subagents` has.
@@ -505,7 +516,7 @@ export class ToolProjection {
     this.deps.publish({
       sessionUpdate: "tool_call_update",
       toolCallId: id,
-      title: toolTitleOf(current.name, current.input),
+      title: toolTitleOf(current.name, current.input, current.output),
       kind: toolKindFor(current.name, this.deps.lookup()),
       status: current.status,
       ...toolMeta({ cancelled: current.cancelled, interrupted: current.interrupted }),
@@ -559,7 +570,7 @@ export class ToolProjection {
     this.deps.publish({
       sessionUpdate: "tool_call_update",
       toolCallId: id,
-      title: toolTitleOf(state.name, state.input),
+      title: toolTitleOf(state.name, state.input, state.output),
       kind: toolKindFor(state.name, this.deps.lookup()),
       status: state.status,
       ...toolMeta({ cancelled: state.cancelled, interrupted: state.interrupted }),

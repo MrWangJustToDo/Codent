@@ -94,6 +94,39 @@ const check = checker.check;
     JSON.stringify(finalB.map((c) => c.type))
   );
 
+  // The row's line range describes a TEXT read, and only the RESULT can say whether this was one. The
+  // title is rebuilt on every update from the projector's state, so the output has to live there —
+  // reading it once in `createCall` and discarding it left live rows saying "lines 1-1" of a PNG.
+  {
+    const imageRead = capture();
+    const input = { path: "shots/dock2.png", offset: 1, limit: 1 };
+    const callPart = (over) => ({ id: "call-img", type: "tool-call", name: "read_file", input, ...over });
+    // The call is first seen PENDING (no result): the title has nothing but the input, which is the
+    // only moment `lines 1-1` is honest. Then it settles with the image result.
+    imageRead.push("messages", [{ id: "a2", role: "assistant", parts: [callPart({ state: "input-complete" })] }]);
+    imageRead.push("messages", [
+      {
+        id: "a2",
+        role: "assistant",
+        parts: [
+          callPart({
+            state: "complete",
+            output: { type: "image", path: "shots/dock2.png", mimeType: "image/png" },
+          }),
+        ],
+      },
+    ]);
+    const titles = [...imageRead.updates("tool_call"), ...imageRead.updates("tool_call_update")]
+      .filter((u) => u.toolCallId === "call-img")
+      .map((u) => u.title);
+    // The SETTLED title is the one the client keeps; it must be the path, not the line range.
+    check(
+      "a read_file image settles on its path, not on its line range",
+      titles.length > 1 && titles.at(-1) === "shots/dock2.png",
+      JSON.stringify(titles)
+    );
+  }
+
   // The preview is a function of the input, so it goes out while the call is still running — waiting for
   // the terminal status is what made the row order-dependent in the first place.
   const previews = a

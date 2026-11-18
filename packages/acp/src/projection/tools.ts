@@ -194,8 +194,11 @@ function shellCommandOf(name: string, input: unknown): string | undefined {
  * client that replaces its row from the update instead of merging fields (reported as "after
  * approving, the tool has no title").
  */
-export function toolTitleOf(name: string, input: unknown): string {
-  return formatToolInput(input, name, { compact: true }) || toolTitleFor(name, input);
+export function toolTitleOf(name: string, input: unknown, output?: unknown): string {
+  return (
+    formatToolInput(input, name, { compact: true, ...(output !== undefined ? { output } : {}) }) ||
+    toolTitleFor(name, input)
+  );
 }
 
 /**
@@ -219,7 +222,8 @@ export function toolCallInfo(
   input: unknown,
   rootPath: string,
   displayText?: string,
-  lookup?: ToolLookup
+  lookup?: ToolLookup,
+  output?: unknown
 ): {
   title: string;
   kind: ToolKind;
@@ -238,7 +242,7 @@ export function toolCallInfo(
           ? [{ type: "content", content: textBlock(displayText) }]
           : undefined;
   return {
-    title: toolTitleOf(name, input),
+    title: toolTitleOf(name, input, output),
     kind: toolKindFor(name, lookup),
     locations: toolLocationsFor(input, rootPath),
     ...(input !== undefined ? { rawInput: input } : {}),
