@@ -143,9 +143,9 @@ export const computerActionSchema = z.object({
     .describe(
       "Perform several actions in one call, in order. Cheaper than one call per action: it is one " +
         "approval and ONE screenshot at the end, so use it for sequences you are already sure about. " +
-        "An entry may omit `text`, `keys` and `button`: the call's value is used for it. Coordinates " +
-        "and `modifiers` are NOT shared — each entry names its own target, and an entry that needs a " +
-        "modifier carries it."
+        "Set only the fields the action uses — the rest are ignored (a strict provider may require " +
+        "them to be present anyway). Coordinates and `modifiers` are NOT shared between entries: each " +
+        "entry names its own target, and an entry that needs a modifier carries it."
     ),
 });
 
@@ -186,6 +186,9 @@ function requirePoint(input: ComputerActionInput | ComputerActionEntry, action: 
 function requireDragTarget(input: ComputerActionInput | ComputerActionEntry) {
   if (typeof input.to_x !== "number" || typeof input.to_y !== "number") {
     throw new Error('"drag" needs to_x and to_y: the point the dragged thing is dropped at.');
+  }
+  if (!Number.isFinite(input.to_x) || !Number.isFinite(input.to_y)) {
+    throw new Error('"drag" needs finite to_x and to_y.');
   }
   return { x: input.to_x, y: input.to_y };
 }
@@ -326,13 +329,13 @@ async function dispatchAction(
 
     case "mouse_down": {
       // A press lands wherever the pointer is (Anthropic's `left_mouse_down` has no coordinate).
-      // Accepting a point means "move there first", which is what a hand-built drag wants — and the
-      // summary says which one happened, so a log can tell a press-in-place from a press-at-point.
-      const at = typeof input.x === "number" && typeof input.y === "number" ? { x: input.x, y: input.y } : null;
-      if (at) await computer.move(at.x, at.y, { signal });
+      // It used to accept an optional point ("move there first"), but OpenAI's strict tool mode puts
+      // EVERY property in `required` and widens optionals to `anyOf: [T, null]`, so the model can
+      // only fill `x: 0, y: 0` — and every press jumped to the screen origin before clicking. A
+      // hand-built drag now moves first, then presses; `drag` does the interpolated version.
       await computer.mouseDown(button, { signal });
       held.buttons.push(button);
-      return at ? `mouse down ${button} at ${at.x},${at.y}` : `mouse down ${button}`;
+      return `mouse down ${button}`;
     }
 
     case "mouse_up": {

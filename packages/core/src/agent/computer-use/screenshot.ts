@@ -82,6 +82,34 @@ export interface ScreenToolOutput {
   [key: string]: unknown;
 }
 
+/** Smallest zoom worth delivering: a 1x1 crop cannot be read and makes `scale` meaningless. */
+const MIN_ZOOM_SIZE = 4;
+
+/**
+ * Keep a zoom region inside the screen.
+ *
+ * The driver clamps too (robotjs can crash on an out-of-range capture), but clamping THERE leaves
+ * the result describing a region it never captured: `zoom(1200,700,500,500)` on a 1280-wide display
+ * captures 80x100, while the text claimed (1200,700)-(1700,1200) and `scale = 180/500 = 0.36` — a
+ * model converting a point landed past the screen edge. Clamping here means the region, the image
+ * and the factor describe the SAME crop.
+ *
+ * `null` when nothing usable is left (fully outside, or smaller than {@link MIN_ZOOM_SIZE}): a
+ * degenerate capture is reported as a bad request, not as a 1x1 screenshot.
+ */
+function clampZoomRegion(
+  region: CoreEnvImageRegion,
+  display: { width: number; height: number }
+): CoreEnvImageRegion | null {
+  if (![region.x, region.y, region.width, region.height].every(Number.isFinite)) return null;
+  const x = Math.min(Math.max(region.x, 0), display.width - 1);
+  const y = Math.min(Math.max(region.y, 0), display.height - 1);
+  const width = Math.min(Math.max(region.width, 1), display.width - x);
+  const height = Math.min(Math.max(region.height, 1), display.height - y);
+  if (width < MIN_ZOOM_SIZE || height < MIN_ZOOM_SIZE) return null;
+  return { x, y, width, height };
+}
+
 /**
  * Capture the screen (or one region of it).
  *
@@ -92,9 +120,20 @@ export interface ScreenToolOutput {
 export async function captureScreen(
   env: CoreEnv,
   computer: CoreEnvComputer,
-  region?: CoreEnvImageRegion,
+  requestedRegion?: CoreEnvImageRegion,
   signal?: AbortSignal
 ): Promise<CapturedScreen | null> {
+  // The region the host will actually capture. Everything downstream (image size, `scale`, the text
+  // and the summary) reads THIS, so they cannot disagree.
+  const region = requestedRegion ? clampZoomRegion(requestedRegion, computer.display) : undefined;
+  if (requestedRegion && !region) {
+    throw new Error(
+      `The zoom region (${Math.round(requestedRegion.x)},${Math.round(requestedRegion.y)}) ` +
+        `${Math.round(requestedRegion.width)}x${Math.round(requestedRegion.height)} is outside the ` +
+        `${computer.display.width}x${computer.display.height} screen, or too small to read.`
+    );
+  }
+
   let bytes: Uint8Array | null;
   try {
     bytes = region
@@ -201,40 +240,52 @@ function describeFrame(output: ScreenToolOutput): string {
   const { width, height } = output.display;
   const screen = `The screen you control is ${width}x${height} pixels`;
   const origin = `(0,0) is its top-left, x grows right, y grows down`;
+  // A provider may downscale the attachment (a measured session saw 1280x800 arrive as 1024x640), and
+  // nothing on this side can see that. Rather than let the model discover it by trial and error, the
+  // rule is stated on every result that KNOWS the size it delivered — never with a guessed one, or it
+  // would tell the model to multiply by the wrong ratio.
+  const downscaleRule = (declared: { width: number; height: number }) =>
+    `If the image you actually see is not ${declared.width}x${declared.height} (a provider may ` +
+    `downscale it), scale your reading by seen / declared before converting.`;
 
   if (!output.region) {
-    return `${SCREENSHOT_MARKER} ${output.summary}. ${screen}; coordinates you send are pixels in THIS image — ${origin}.`;
+    // A full screenshot is display-sized by construction (the box filter emits exactly this frame).
+    return `${SCREENSHOT_MARKER} ${output.summary}. ${screen}; coordinates you send are pixels in THIS image — ${origin}. ${downscaleRule({ width, height })}`;
   }
 
   const { x, y, width: w, height: h } = output.region;
   const image = output.image;
-  const scale = output.scale ?? (image && w > 0 ? image.width / w : undefined);
-  if (image && scale !== undefined && Number.isFinite(scale)) {
-    // 1:1 is not a magnification (a 1x panel): say so, because "MAGNIFIED" on an image that is
-    // exactly the region makes the model divide by 1 anyway and distrust the number. The mapping is
-    // still spelled out — the region usually has an OFFSET, and a model that sends the local pixel
-    // lands `x`,`y` away from the target.
-    if (Math.abs(scale - 1) < 0.01) {
+  const ratio = image && w > 0 ? image.width / w : undefined;
+  if (image && ratio !== undefined && Number.isFinite(ratio)) {
+    // EXACT arithmetic, per axis: a rounded divisor is off by up to `w * 0.005` display pixels
+    // (6 px on a 1280-wide region), and a 1% "is it 1:1" window mis-classifies 401/400 as 1:1.
+    // "1:1" is a wording, not a formula: it applies only when the dimensions are exactly equal.
+    if (image.width === w && image.height === h) {
       return (
         `${SCREENSHOT_MARKER} ${output.summary}. This is the screen region (${x},${y})-(${x + w},${y + h}) ` +
         `at 1:1 (${image.width}x${image.height}) in the ${width}x${height} screen space. ` +
         `To place a point you see in it: screen_x = ${x} + image_x, screen_y = ${y} + image_y. ` +
-        `Coordinates you SEND are screen pixels in (0,0)-(${width},${height}), where ${origin}.`
+        `Coordinates you SEND are screen pixels in (0,0)-(${width},${height}), where ${origin}. ${downscaleRule(image)}`
       );
     }
-    const factor = Math.round(scale * 100) / 100;
+    const factor = Math.round(ratio * 100) / 100;
     return (
       `${SCREENSHOT_MARKER} ${output.summary}. This is a MAGNIFIED view: the image is ` +
       `${image.width}x${image.height} = ${factor}x the screen region (${x},${y})-(${x + w},${y + h}) ` +
       `in the ${width}x${height} screen space. ` +
-      `To place a point you see in it: screen_x = ${x} + image_x / ${factor}, screen_y = ${y} + image_y / ${factor}. ` +
-      `Coordinates you SEND are always screen pixels in (0,0)-(${width},${height}), where ${origin}.`
+      // The formula is exact; `factor` above is only the approximate reading of it.
+      `To place a point you see in it: screen_x = ${x} + image_x * ${w} / ${image.width}, ` +
+      `screen_y = ${y} + image_y * ${h} / ${image.height}. ` +
+      `Coordinates you SEND are always screen pixels in (0,0)-(${width},${height}), where ${origin}. ${downscaleRule(image)}`
     );
   }
+  // The bytes could not be measured, so the delivered size — and therefore whether this is magnified
+  // or 1:1 — is unknown. Claim neither; say what the image covers, which is enough for the model to
+  // map a position proportionally using the size it actually sees.
   return (
-    `${SCREENSHOT_MARKER} ${output.summary}. This is a MAGNIFIED view of the screen region ` +
-    `(${x},${y})-(${x + w},${y + h}) in the ${width}x${height} screen space. ` +
-    `Do NOT use this image's own pixels as coordinates: keep sending screen coordinates in ` +
-    `(0,0)-(${width},${height}), where ${origin}.`
+    `${SCREENSHOT_MARKER} ${output.summary}. This is a view of exactly the screen region ` +
+    `(${x},${y})-(${x + w},${y + h}) in the ${width}x${height} screen space, at a scale this host ` +
+    `could not report. Do NOT use this image's own pixels as coordinates: keep sending screen ` +
+    `coordinates in (0,0)-(${width},${height}), where ${origin}.`
   );
 }

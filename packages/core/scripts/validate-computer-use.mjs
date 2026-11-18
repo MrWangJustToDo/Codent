@@ -189,8 +189,23 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
     zoomParts[0].content.includes("Do NOT use this image's own pixels"),
     "…and the text falls back to the conservative rule"
   );
+  // …and it must NOT name a declared size it does not know: falling back to `display` here would
+  // tell the model the crop is 1280x800 and have it multiply by the wrong ratio.
+  assert.equal(
+    zoomParts[0].content.includes("scale your reading by seen / declared"),
+    false,
+    "an unmeasured crop claims no delivered size"
+  );
   assert.ok(zoomParts[0].content.includes("(0,0)-(320,200)"), "…still naming the region in screen space");
   assert.ok(read.toModelOutput({ output: output })[0].content.includes("pixels in THIS image"));
+  // A provider may downscale the attachment (a measured session saw 1280x800 arrive as 1024x640);
+  // the rule is on every result, so the model does not have to discover it by trial and error.
+  const fullText = read.toModelOutput({ output: output })[0].content;
+  assert.ok(
+    fullText.includes("scale your reading by seen / declared"),
+    "the result states the seen-vs-declared conversion"
+  );
+  assert.ok(fullText.includes("is not 1280x800"), "…naming the size it actually delivered");
 }
 
 // ============================================================================
@@ -286,13 +301,16 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
   await write.execute({ action: "scroll", x: 100, y: 100, delta_y: 200 }, OPTS);
   assert.deepEqual(calls[0], ["scroll", 100, 100, 0, 200]);
 
-  // mouse_down takes an optional point: "move there, then press" (a hand-built drag).
+  // mouse_down presses WHERE THE POINTER IS. It used to accept a point ("move there first"), but a
+  // strict tool schema (OpenAI) forces every property into `required` — the model could only send
+  // x:0,y:0 and every press jumped to the screen origin. A hand-built drag moves first.
   calls.length = 0;
   await write.execute({ action: "mouse_down", x: 4, y: 5 }, OPTS);
-  assert.deepEqual(calls.slice(0, 2), [
-    ["move", 4, 5],
-    ["mouseDown", "left"],
-  ]);
+  assert.deepEqual(
+    calls.filter(([name]) => name !== "screenshot"),
+    [["mouseDown", "left"]],
+    "the coordinates are ignored: pressing never moves the pointer"
+  );
 
   // Validation is the model's error message, so it has to name the missing argument.
   await assert.rejects(() => write.execute({ action: "click" }, OPTS), /needs x and y/);
@@ -491,8 +509,10 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
     );
   }
 
-  // A press that moved the pointer says so; a press in place does not claim a position.
-  assert.match((await write.execute({ action: "mouse_down", x: 5, y: 6 }, OPTS)).summary, /mouse down left at 5,6/);
+  // A press never claims a position it did not use.
+  const pressed = (await write.execute({ action: "mouse_down", x: 5, y: 6 }, OPTS)).summary;
+  assert.ok(pressed.startsWith("mouse down left"), pressed);
+  assert.equal(pressed.includes("at 5,6"), false, "the ignored coordinates are not reported as used");
   assert.match((await write.execute({ action: "mouse_up" }, OPTS)).summary, /mouse up left/);
 }
 
@@ -539,7 +559,12 @@ function pngBytes(width, height) {
 
   const text = read.toModelOutput({ output: zoomed })[0].content;
   assert.match(text, /900x450 = 2\.25x the screen region \(100,50\)-\(500,250\)/, "the real factor is stated");
-  assert.match(text, /screen_x = 100 \+ image_x \/ 2\.25/, "…with the arithmetic to apply it");
+  // Exact per-axis arithmetic, not the rounded factor: `w * 0.005` display px of error at 2.25x.
+  assert.match(
+    text,
+    /screen_x = 100 \+ image_x \* 400 \/ 900, screen_y = 50 \+ image_y \* 200 \/ 450/,
+    "…with exact arithmetic to apply it"
+  );
   assert.match(text, /Coordinates you SEND are always screen pixels/, "and the invariant");
 
   // A full screenshot is not magnified: no region, no scale, and the image is the display frame.
@@ -573,6 +598,48 @@ function pngBytes(width, height) {
   assert.equal(zoomed.mimeType, "image/jpeg");
   assert.deepEqual(zoomed.image, { width: 900, height: 450 }, "measured from the JPEG the host produced");
   assert.equal(zoomed.scale, 2.25);
+}
+
+// An OFF-SCREEN region is clamped BEFORE the capture, so the region the text names is the region the
+// image shows and `scale` divides by the width actually captured. Before this, `zoom(1200,700,500,500)`
+// on a 1280-wide display captured 80x100 while claiming (1200,700)-(1700,1200) at 0.36x.
+{
+  const { computer, calls } = fakeComputer();
+  // Keep recording the region the driver is asked for — that is the assertion: it must be clamped.
+  computer.zoom = async (region) => {
+    calls.push(["zoom", region]);
+    return pngBytes(180, 225);
+  };
+  const { tools } = activate(computer, { settleMs: 0 });
+  const read = tools.get(COMPUTER_SCREENSHOT_TOOL);
+  const zoomed = await read.execute({ zoom: { x: 1200, y: 700, width: 500, height: 500 } }, OPTS);
+  assert.deepEqual(calls.at(-1), ["zoom", { x: 1200, y: 700, width: 80, height: 100 }], "clamped before capture");
+  assert.deepEqual(zoomed.region, { x: 1200, y: 700, width: 80, height: 100 }, "the text names the captured region");
+  assert.equal(zoomed.scale, 2.25, "…and the factor divides by the width actually captured");
+  assert.match(read.toModelOutput({ output: zoomed })[0].content, /\(1200,700\)-\(1280,800\)/);
+
+  // Nothing usable left (the region starts outside the screen) is an error, not a 1x1 screenshot.
+  await assert.rejects(
+    () => read.execute({ zoom: { x: 2000, y: 0, width: 400, height: 200 } }, OPTS),
+    /outside the 1280x800 screen/
+  );
+  await assert.rejects(
+    () => read.execute({ zoom: { x: 0, y: 0, width: 2, height: 200 } }, OPTS),
+    /outside the 1280x800 screen/
+  );
+}
+
+// A near-1:1 crop (401 px for a 400 px region) is NOT called 1:1, and the formula keeps the ratio:
+// the old 1% window rendered it as `x + image_x`, up to 4 display px off at the right edge.
+{
+  const { computer } = fakeComputer({ zoom: async () => pngBytes(401, 200) });
+  const { tools } = activate(computer, { settleMs: 0 });
+  const read = tools.get(COMPUTER_SCREENSHOT_TOOL);
+  const zoomed = await read.execute({ zoom: { x: 0, y: 0, width: 400, height: 200 } }, OPTS);
+  assert.equal(zoomed.scale, 1);
+  const text = read.toModelOutput({ output: zoomed })[0].content;
+  assert.equal(text.includes("at 1:1"), false, "exact dimensions are what make it 1:1");
+  assert.match(text, /screen_x = 0 \+ image_x \* 400 \/ 401/, "the ratio survives the near-1:1 case");
 }
 
 // ============================================================================

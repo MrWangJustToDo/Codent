@@ -143,6 +143,8 @@ export function createComputerUseExtension(
         description:
           `Control the user's real mouse and keyboard: ${computer.environment}. ${space} ` +
           `Every coordinate is a pixel in the screenshot you last saw; (0,0) is its top-left. ` +
+          `A provider may downscale the image before you see it: if it does not look ${width}x${height}, ` +
+          `scale your reading by seen/declared first. ` +
           `Each call returns a fresh screenshot of the result. ` +
           `Look before you act (${COMPUTER_SCREENSHOT_TOOL}), and prefer keyboard shortcuts over ` +
           `clicking coordinates when you can. ` +
