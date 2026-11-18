@@ -195,16 +195,18 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
+/** Smallest overridden display: below this the screenshot is unreadable and every click collapses. */
+const MIN_DISPLAY = 64;
+
 /**
  * The display size to report, from a caller-supplied override when it is sane.
  *
  * A zero/negative/fractional override used to divide by zero (`Infinity` coordinates, which robotjs
  * truncates to 0) or make the PNG encoder throw — an options-validation bug that only shows up as
- * "clicks land in the corner".
+ * "clicks land in the corner". The override is also bounded at both ends: it is the input to the PNG
+ * encoder, so a terabyte frame asked it to allocate terabytes and a 1x1 frame collapsed every click
+ * onto (0,0).
  */
-/** Smallest overridden display: below this the screenshot is unreadable and every click collapses. */
-const MIN_DISPLAY = 64;
-
 function normalizeDisplay(
   requested: { width: number; height: number } | undefined,
   screen: { width: number; height: number }
