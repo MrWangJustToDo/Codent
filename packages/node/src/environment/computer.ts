@@ -19,7 +19,7 @@
  *   probe that decides presence here too.
  */
 import { errorMessage, truncateText } from "@codent/core";
-import { execFile, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { promisify } from "node:util";
 
@@ -59,6 +59,16 @@ export interface CreateNodeComputerOptions {
   display?: { width: number; height: number };
   /** The robot that drives the machine. Defaults to a lazily required `@jitsi/robotjs`. */
   robot?: NodeComputerRobot;
+  /**
+   * The platform whose input semantics to use. Defaults to `process.platform`.
+   *
+   * Exposed because the capability is host-supplied (a host may drive another machine's screen) and
+   * because the non-ASCII typing channel differs per platform — the matrix is only assertable on a
+   * Linux CI if the branch is reachable.
+   */
+  platform?: NodeJS.Platform;
+  /** Writes text to the pasteboard for macOS `type`. Defaults to `pbcopy`. */
+  writePasteboard?: (text: string, signal?: AbortSignal) => Promise<void>;
 }
 
 /**
@@ -94,9 +104,9 @@ function toRobotButton(button: CoreEnvMouseButton) {
   return button;
 }
 
-function currentEnvironment(): CoreEnvComputerEnvironment {
-  if (process.platform === "win32") return "windows";
-  if (process.platform === "darwin") return "mac";
+function currentEnvironment(platform: string): CoreEnvComputerEnvironment {
+  if (platform === "win32") return "windows";
+  if (platform === "darwin") return "mac";
   return "linux";
 }
 
@@ -104,10 +114,10 @@ function currentEnvironment(): CoreEnvComputerEnvironment {
  * robotjs scrolls in pixels on macOS, in whole wheel notches on Linux, and in 120 units per notch on
  * Windows — passing pixels straight through made Linux scroll ~100x too far.
  */
-function scrollUnits(pixels: number) {
-  if (pixels === 0 || process.platform === "darwin") return pixels;
+function scrollUnits(pixels: number, platform: string) {
+  if (pixels === 0 || platform === "darwin") return pixels;
   const notches = pixels / 100;
-  if (process.platform === "win32") return Math.round(notches * 120);
+  if (platform === "win32") return Math.round(notches * 120);
   return Math.sign(pixels) * Math.max(1, Math.round(Math.abs(notches)));
 }
 
@@ -273,7 +283,120 @@ function hasAstral(text: string): boolean {
 /** `xdotool type` remaps keysyms per character, so it types what robotjs cannot. */
 const XDOTOOL_TYPE_TIMEOUT_MS = 15_000;
 
+/** A pasteboard write talks to the window server; a hung one must not hang the turn. */
+const PASTEBOARD_TIMEOUT_MS = 5_000;
+
 const execFileAsync = promisify(execFile);
+
+/**
+ * Which channel carries non-ASCII text on `platform`.
+ *
+ * Pure, so the matrix is assertable on any host: the key-event path is what the IME intercepts, and
+ * only macOS is in that situation — Windows' `typeString` injects Unicode directly and Linux has
+ * xdotool. `refuse` is the astral case on a keyboard-only platform (a 16-bit code unit would type a
+ * different character).
+ */
+export type NonAsciiTypeChannel = "xdotool" | "pasteboard" | "typeString" | "refuse";
+
+export function nonAsciiTypeChannel(platform: string, text: string): NonAsciiTypeChannel {
+  if (platform === "linux") return "xdotool";
+  if (platform === "darwin") return "pasteboard";
+  return hasAstral(text) ? "refuse" : "typeString";
+}
+
+/**
+ * macOS: write the text to the pasteboard, then paste it with Cmd+V.
+ *
+ * This is the ONLY reliable channel for CJK and emoji on macOS. `typeString` posts key events, and a
+ * focused field with an IME swallows them: a measured session typed "王恒" and the field received
+ * "王" — the second character went into the composition window and was dropped. The pasteboard is
+ * one text run, so the field receives the whole string and no composition is involved.
+ *
+ * `pbcopy` is driven from THIS process, not `run_command`: the command tool runs inside the OS
+ * sandbox, where the same write failed (`printf '王恒' | pbcopy` → rc=1) because the sandboxed
+ * process cannot reach the GUI session's pasteboard server.
+ *
+ * It REPLACES the user's clipboard content. Restoring it afterwards would be a race (the target app
+ * reads the pasteboard asynchronously, and a restore that lands first pastes the wrong text), so the
+ * clobber is accepted and documented rather than papered over.
+ */
+function copyToMacPasteboard(text: string, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let flushed = false;
+    let exitCode: number | null | undefined;
+    let stderr = "";
+    const settle = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve();
+    };
+    // Both conditions: the write reaching the OS *and* a clean exit. `close(0)` alone can arrive
+    // before a slow stdin flush, which would paste an empty/old clipboard and report success.
+    const maybeSettle = () => {
+      if (exitCode === undefined || !flushed) return;
+      settle(
+        exitCode === 0
+          ? undefined
+          : new Error(`pbcopy exited with code ${exitCode}${stderr.trim() ? `: ${stderr.trim()}` : ""}`)
+      );
+    };
+    const child = spawn("pbcopy", [], {
+      // stderr is kept: a refused pasteboard server only shows up there, and "code 1" alone is not
+      // something the model (or the user) can act on.
+      stdio: ["pipe", "ignore", "pipe"],
+      ...(signal ? { signal } : {}),
+    });
+    const timer = setTimeout(() => {
+      child.kill();
+      settle(new Error(`pbcopy did not finish within ${PASTEBOARD_TIMEOUT_MS}ms`));
+    }, PASTEBOARD_TIMEOUT_MS);
+    child.once("error", (error) => settle(error));
+    child.stderr?.on("data", (chunk) => {
+      if (stderr.length < 2_000) stderr += String(chunk);
+    });
+    // EPIPE when pbcopy exits early (denied, a broken pasteboard): report it instead of an
+    // unhandled stream error.
+    child.stdin?.on("error", (error) => settle(error));
+    child.stdin?.end(text, () => {
+      flushed = true;
+      maybeSettle();
+    });
+    child.once("close", (code) => {
+      exitCode = code;
+      maybeSettle();
+    });
+  });
+}
+
+async function typeViaPasteboard(
+  robot: Pick<NodeComputerRobot, "keyToggle">,
+  write: (text: string, signal?: AbortSignal) => Promise<void>,
+  text: string,
+  signal?: AbortSignal
+): Promise<void> {
+  try {
+    await write(text, signal);
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    throw new Error(
+      `Cannot type non-ASCII text on macOS: writing the pasteboard failed (${errorMessage(err)}). ` +
+        `The keyboard path cannot carry it — the field's IME swallows injected characters — so the ` +
+        `text has to go through the pasteboard, and nothing else can reach it.`
+    );
+  }
+  // A real paste: the focused field accepts one text run, with no IME composition involved.
+  robot.keyToggle(toRobotKey("Meta"), "down");
+  try {
+    robot.keyToggle("v", "down");
+    robot.keyToggle("v", "up");
+  } finally {
+    // A stuck Command key breaks every later keystroke.
+    robot.keyToggle(toRobotKey("Meta"), "up");
+  }
+}
 
 /**
  * Type non-ASCII text on Linux through `xdotool`, or fail with an explanation.
@@ -337,6 +460,8 @@ function warnIfBlank(bitmap: ScreenBitmap): void {
  * screen is worse than none: the model cannot tell a lost click from a slow page.
  */
 export function createNodeComputer(options: CreateNodeComputerOptions = {}): CoreEnvComputer | null {
+  const platform = options.platform ?? process.platform;
+  const writePasteboard = options.writePasteboard ?? copyToMacPasteboard;
   let robot: NodeComputerRobot;
   let screen: { width: number; height: number };
 
@@ -418,7 +543,7 @@ export function createNodeComputer(options: CreateNodeComputerOptions = {}): Cor
 
   return {
     display,
-    environment: currentEnvironment(),
+    environment: currentEnvironment(platform),
     // robotjs can target a region (`screen.capture(x, y, w, h)`), so zoom and cursor position are
     // real here rather than left for the model to approximate.
     capabilities: { zoom: true, cursorPosition: true },
@@ -496,9 +621,9 @@ export function createNodeComputer(options: CreateNodeComputerOptions = {}): Cor
       // Windows scroll in whole wheel notches — LOGICAL units that already describe the gesture:
       // scaling them by the display ratio made the same `delta_y: 100` scroll three times further on
       // a 4K screen than on a 1080p one (same logical desktop, same gesture).
-      const delta = process.platform === "darwin" ? toScreen(deltaX, deltaY, live) : { x: deltaX, y: deltaY };
+      const delta = platform === "darwin" ? toScreen(deltaX, deltaY, live) : { x: deltaX, y: deltaY };
       // robotjs scrolls right and down for NEGATIVE values.
-      robot.scrollMouse(scrollUnits(-delta.x), scrollUnits(-delta.y));
+      robot.scrollMouse(scrollUnits(-delta.x, platform), scrollUnits(-delta.y, platform));
     },
 
     async keyDown(key, keyOptions) {
@@ -531,17 +656,23 @@ export function createNodeComputer(options: CreateNodeComputerOptions = {}): Cor
       typeOptions?.signal?.throwIfAborted();
       // robotjs' X11 path casts each code point to a single `char` (keypress.c: `char ch = value`),
       // so CJK/accents/emoji arrive as the wrong ASCII character — silently. Linux therefore goes
-      // through xdotool. macOS/Windows spell BMP code points out properly, but both truncate an
-      // astral one (a 16-bit `UniChar` / `wScan`), so an emoji would arrive as a private-use glyph:
-      // refuse it there instead of typing the wrong character.
+      // through xdotool. macOS/Windows spell BMP code points out properly, but a focused field with
+      // an IME still swallows them on macOS (a measured "王恒" arrived as "王"), so macOS goes through
+      // the pasteboard instead; both keyboard paths truncate an astral code point (a 16-bit
+      // `UniChar` / `wScan`), so a keyboard-path emoji is refused rather than typed as a glyph.
       if (hasNonAscii(text)) {
-        if (process.platform === "linux") {
+        const channel = nonAsciiTypeChannel(platform, text);
+        if (channel === "xdotool") {
           await typeViaXdotool(text, typeOptions?.signal);
           return;
         }
-        if (hasAstral(text)) {
+        if (channel === "pasteboard") {
+          await typeViaPasteboard(robot, writePasteboard, text, typeOptions?.signal);
+          return;
+        }
+        if (channel === "refuse") {
           throw new Error(
-            `Cannot type "${truncateText(text, 12)}" with the native input backend on ${process.platform}: ` +
+            `Cannot type "${truncateText(text, 12)}" with the native input backend on ${platform}: ` +
               `it truncates characters outside the Basic Multilingual Plane (emoji), which would type ` +
               `the wrong character. Type ASCII/BMP text instead, or paste it.`
           );

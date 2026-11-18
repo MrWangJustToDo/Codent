@@ -22,7 +22,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { inflateSync } from "node:zlib";
 
-import { createNodeComputer, createNodeEnv, encodeScreenPng } from "../dist/index.mjs";
+import { createNodeComputer, createNodeEnv, encodeScreenPng, nonAsciiTypeChannel } from "../dist/index.mjs";
 
 // ============================================================================
 // PNG encoding
@@ -417,23 +417,78 @@ function fakeRobot(overrides = {}) {
       false,
       "robotics must not be handed text it would mangle"
     );
-  } else {
+  } else if (process.platform === "linux") {
     await computer.type("你好");
-    if (process.platform === "linux") {
-      assert.equal(
-        calls.some(([name]) => name === "typeString"),
-        false,
-        "xdotool does the typing"
-      );
-    } else {
-      assert.deepEqual(calls.at(-1), ["typeString", "你好"], "macOS/Windows spell the code point out");
-    }
+    assert.equal(
+      calls.some(([name]) => name === "typeString"),
+      false,
+      "xdotool does the typing"
+    );
+  } else if (process.platform === "win32") {
+    await computer.type("你好");
+    assert.deepEqual(calls.at(-1), ["typeString", "你好"], "Windows injects the code point directly");
   }
+  // macOS is asserted below through the injectable pasteboard writer: the real one would overwrite
+  // this machine's clipboard (and is unreachable on a Linux CI).
 
   // ASCII always takes the addon path, on every platform.
   calls.length = 0;
   await computer.type("hello world");
   assert.deepEqual(calls.at(-1), ["typeString", "hello world"]);
+}
+
+// ---------------------------------------------------------------------------
+// The non-ASCII channel is a per-platform decision (assertable everywhere)
+// ---------------------------------------------------------------------------
+//
+// Only macOS `typeString` goes through an IME, and that is the one that swallowed a measured "王恒".
+// Linux has xdotool, Windows injects Unicode directly, and an astral code point is refused where it
+// would be truncated by a 16-bit code unit.
+{
+  assert.equal(nonAsciiTypeChannel("linux", "你好"), "xdotool");
+  assert.equal(nonAsciiTypeChannel("darwin", "你好"), "pasteboard");
+  assert.equal(nonAsciiTypeChannel("darwin", "🙂"), "pasteboard", "macOS can paste an emoji");
+  assert.equal(nonAsciiTypeChannel("win32", "你好"), "typeString");
+  assert.equal(nonAsciiTypeChannel("win32", "🙂"), "refuse", "a 16-bit code unit would type a glyph");
+}
+
+// ---------------------------------------------------------------------------
+// macOS paste: the write, then Cmd+V (emulated, so it runs on any host)
+// ---------------------------------------------------------------------------
+{
+  const { robot, calls } = fakeRobot();
+  const written = [];
+  const computer = createNodeComputer({
+    robot,
+    platform: "darwin",
+    writePasteboard: async (text) => {
+      written.push(text);
+    },
+  });
+  assert.ok(computer);
+  assert.equal(computer.environment, "mac");
+  await computer.type("王恒🙂");
+  assert.deepEqual(written, ["王恒🙂"], "the WHOLE string goes to the pasteboard, one text run");
+  assert.deepEqual(
+    calls,
+    [
+      ["keyToggle", "command", "down"],
+      ["keyToggle", "v", "down"],
+      ["keyToggle", "v", "up"],
+      ["keyToggle", "command", "up"],
+    ],
+    "and it is pasted with Cmd+V, releasing the modifier last"
+  );
+
+  // A failed write is explained, not silently typed character by character.
+  const failing = createNodeComputer({
+    robot: fakeRobot().robot,
+    platform: "darwin",
+    writePasteboard: async () => {
+      throw new Error("no pasteboard server");
+    },
+  });
+  await assert.rejects(() => failing.type("王恒"), /writing the pasteboard failed.*no pasteboard server/);
 }
 
 // ============================================================================
