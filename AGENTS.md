@@ -649,7 +649,7 @@ clicks cannot drift by a layer of double scaling.
 | Piece | File | Responsibility |
 |---|---|---|
 | capability type | `packages/core/src/env/index.ts` | `CoreEnvComputer` + the optional `computer` member (absent = the feature does not exist) |
-| node driver | `packages/node/src/environment/computer.ts` | lazily `require`s the optional `@jitsi/robotjs` (N-API prebuilds for linux/darwin/win32), computes `display` (screen fitted into 1280×800), scales points, maps `KeyboardEvent.key` names and per-platform scroll units |
+| node driver | `packages/node/src/environment/computer.ts` | lazily `require`s the optional `@jitsi/robotjs` (N-API prebuilds for linux/darwin/win32), computes `display` (screen fitted into 1024×800, the width a vision pipeline usually caps at), scales points, maps `KeyboardEvent.key` names and per-platform scroll units |
 | capture encoder | `packages/node/src/environment/png.ts` | raw BGRA bitmap → RGB PNG with `node:zlib` only, box-filtered to `display` — deliberately no `sharp` dependency, so a missing image codec cannot disable computer use |
 | extension | `packages/core/src/agent/computer-use/` | two tools over the driver, the approval split, and the screenshot budget |
 

@@ -91,13 +91,14 @@ export function createComputerUseExtension(
   const { width, height } = computer.display;
   // What is TRUE at this boundary, and what is not: the host delivers a `display`-sized image, but a
   // provider may downscale it before the model sees it (a measured session saw 1280x800 arrive as
-  // 1024x640). Saying "exactly the size of the screenshots you see" made the tool description
-  // contradict its own result text, and the model alternated between two coordinate spaces.
+  // 1024x640 — the reason the node driver now fits its frame into 1024 wide, so the usual case has
+  // nothing to convert). Saying "exactly the size of the screenshots you see" made the tool
+  // description contradict its own result text, and the model alternated between two spaces.
   //
-  // The factor's DIRECTION is the whole point: a reading in a 1024-wide image of a 1280-wide screen
-  // must be MULTIPLIED by 1280/1024 (declared / seen, 1.25). "seen / declared" is its inverse (0.8)
-  // and lands the click 20% short — `validate:computer-use` therefore asserts the phrase AND the
-  // absence of the inverse.
+  // When a cap does bite, the factor's DIRECTION is the whole point: a reading in a 1024-wide image
+  // of a 1280-wide screen must be MULTIPLIED by 1280/1024 (declared / seen, 1.25). "seen / declared"
+  // is its inverse (0.8) and lands the click 20% short — `validate:computer-use` asserts the phrase
+  // AND the absence of the inverse.
   const space =
     `The screen is ${width}x${height} pixels, and every coordinate you send is a pixel in that ` +
     `space, with (0,0) at its top-left. A full screenshot may be downscaled before you see it: if ` +

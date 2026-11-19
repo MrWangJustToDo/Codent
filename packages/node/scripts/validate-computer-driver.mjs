@@ -8,7 +8,7 @@
  * - **The PNG encoder.** `robotjs` hands back raw BGRA, so a channel swap or a wrong row length
  *   produces a valid-looking file whose colors are wrong or whose image is sheared. The check
  *   inflates the IDAT stream and reads exact bytes instead of trusting the header.
- * - **The coordinate mapping.** The model sees `display` (≤1280×800) and the OS sees the physical
+ * - **The coordinate mapping.** The model sees `display` (≤1024×800) and the OS sees the physical
  *   screen; if the driver stops scaling, every click lands at the wrong place, which looks like a
  *   slow app rather than a bug.
  *
@@ -167,7 +167,7 @@ function pixelAt({ width, rows }, x, y) {
 // Coordinate mapping + input dispatch (fake robot)
 // ============================================================================
 
-/** A 2560×1440 screen: exactly 2× the model's 1280×720 display. */
+/** A 2560×1440 screen: 2.5× the model's 1024×576 display. */
 const SCREEN = { width: 2560, height: 1440 };
 
 function fakeRobot(overrides = {}) {
@@ -208,8 +208,8 @@ function fakeRobot(overrides = {}) {
   const computer = createNodeComputer({ robot });
   assert.ok(computer, "an injected robot means the capability exists, display or not");
 
-  // The model's space is the screen scaled into 1280×800 — here exactly halved.
-  assert.deepEqual(computer.display, { width: 1280, height: 720 });
+  // The model's space is the screen fitted into 1024×800 — here 1024×576, 2.5× the real screen.
+  assert.deepEqual(computer.display, { width: 1024, height: 576 });
   assert.equal(
     computer.environment,
     process.platform === "darwin" ? "mac" : process.platform === "win32" ? "windows" : "linux"
@@ -222,29 +222,29 @@ function fakeRobot(overrides = {}) {
     const { robot } = fakeRobot();
     const bound = (display) => createNodeComputer({ robot, display }).display;
     assert.deepEqual(bound({ width: 640, height: 400 }), { width: 640, height: 400 }, "a usable override");
-    assert.deepEqual(bound({ width: 1, height: 1 }), { width: 1280, height: 720 }, "a 1x1 frame is refused");
+    assert.deepEqual(bound({ width: 1, height: 1 }), { width: 1024, height: 576 }, "a 1x1 frame is refused");
     assert.deepEqual(
       bound({ width: 1_000_000, height: 1_000_000 }),
-      { width: 1280, height: 720 },
+      { width: 1024, height: 576 },
       "a terabyte frame is refused"
     );
-    assert.deepEqual(bound({ width: 640.5, height: 400 }), { width: 1280, height: 720 }, "non-integers too");
+    assert.deepEqual(bound({ width: 640.5, height: 400 }), { width: 1024, height: 576 }, "non-integers too");
   }
 
   // Screenshot: full screen in, display-sized PNG out.
   const shot = readPng(await computer.screenshot());
-  assert.equal(shot.width, 1280);
-  assert.equal(shot.height, 720);
+  assert.equal(shot.width, 1024);
+  assert.equal(shot.height, 576);
 
   // Click: display point → physical pixel, then the platform's click call.
   await computer.click(100, 50);
   assert.deepEqual(calls.at(-1), ["mouseClick", "left", undefined]);
-  assert.deepEqual(calls.at(-2), ["moveMouse", 200, 100], "coordinates are scaled to the real screen");
+  assert.deepEqual(calls.at(-2), ["moveMouse", 250, 125], "coordinates are scaled to the real screen");
 
   calls.length = 0;
   await computer.click(10, 10, { button: "right", count: 2 });
   assert.deepEqual(calls, [
-    ["moveMouse", 20, 20],
+    ["moveMouse", 25, 25],
     ["mouseClick", "right", true],
   ]);
 
@@ -257,7 +257,7 @@ function fakeRobot(overrides = {}) {
   await assert.rejects(() => computer.click(1, 1, { button: "back" }), /no "back" mouse button/);
 
   // Cursor position comes back in display space (the inverse mapping).
-  assert.deepEqual(await computer.cursorPosition(), { x: 320, y: 200 });
+  assert.deepEqual(await computer.cursorPosition(), { x: 256, y: 160 });
 
   // Scroll: pixels on macOS (a display-space delta scaled to the real screen), whole notches
   // elsewhere. Notches are LOGICAL units, so the same gesture must not scroll further just because
@@ -269,7 +269,7 @@ function fakeRobot(overrides = {}) {
   assert.equal(scroll[0], "scrollMouse");
   const expected =
     {
-      darwin: -400, // pixels: the display-space delta scaled to the 2x screen
+      darwin: -500, // pixels: the display-space delta scaled to the 2.5x screen
       win32: -240, // 120 units per notch
       linux: -2, // whole notches
     }[process.platform] ?? -2;
@@ -414,7 +414,7 @@ function fakeRobot(overrides = {}) {
     // whole notches on X11.
     calls.length = 0;
     await c.scroll(100, 100, 0, 200);
-    const expected = { darwin: -400, win32: -240, linux: -2 }[platform];
+    const expected = { darwin: -500, win32: -240, linux: -2 }[platform];
     assert.equal(calls.at(-1)[2], expected, `${platform}: scroll units`);
   }
 
@@ -438,15 +438,15 @@ function fakeRobot(overrides = {}) {
   assert.deepEqual(calls, [["typeString", "hello"]]);
 
   // Zoom keeps native detail where it matters, capped so a 4K region does not become a 25 MB encode.
-  const zoomed = readPng(await computer.zoom({ x: 0, y: 0, width: 1280, height: 720 }));
+  const zoomed = readPng(await computer.zoom({ x: 0, y: 0, width: 1024, height: 576 }));
   assert.equal(zoomed.width, 1568, "a large region is capped, not encoded at full source resolution");
   assert.equal(zoomed.height, 882, "the cap keeps the aspect ratio");
 
   const native = readPng(await computer.zoom({ x: 0, y: 0, width: 400, height: 300 }));
-  assert.equal(native.width, 800, "a small region keeps native resolution — that is what zoom is for");
-  assert.equal(native.height, 600);
+  assert.equal(native.width, 1000, "a small region keeps native resolution — that is what zoom is for");
+  assert.equal(native.height, 750);
 
-  const clamped = readPng(await computer.zoom({ x: 1200, y: 700, width: 500, height: 500 }));
+  const clamped = readPng(await computer.zoom({ x: 960, y: 560, width: 500, height: 500 }));
   assert.equal(clamped.width, 160, "clamped to the screen's right edge");
   assert.equal(clamped.height, 40, "clamped to the screen's bottom edge");
 }
@@ -470,31 +470,31 @@ function fakeRobot(overrides = {}) {
   });
   const computer = createNodeComputer({ robot });
   assert.ok(computer);
-  assert.deepEqual(computer.display, { width: 1280, height: 720 }, "the model's space is fixed at creation");
+  assert.deepEqual(computer.display, { width: 1024, height: 576 }, "the model's space is fixed at creation");
 
   calls.length = 0;
-  await computer.click(640, 360);
-  assert.deepEqual(calls.at(-2), ["moveMouse", 1280, 720], "2x screen: the display point scales by 2");
+  await computer.click(512, 288);
+  assert.deepEqual(calls.at(-2), ["moveMouse", 1280, 720], "2.5x screen: the display point scales by 2.5");
 
   // Undocked, or the display scaling changed: the real screen is now 1:1 with the model's space.
-  live = { width: 1280, height: 720 };
+  live = { width: 1024, height: 576 };
 
   const shot = readPng(await computer.screenshot());
-  assert.equal(shot.width, 1280, "the screenshot still matches the model's display");
+  assert.equal(shot.width, 1024, "the screenshot still matches the model's display");
 
   calls.length = 0;
-  await computer.click(640, 360);
+  await computer.click(512, 288);
   assert.deepEqual(
     calls.at(-2),
-    ["moveMouse", 640, 360],
+    ["moveMouse", 512, 288],
     "the click follows the live screen, not the size cached at creation"
   );
   assert.deepEqual(await computer.cursorPosition(), { x: 640, y: 360 }, "the reported pointer moves with it too");
 
   // A zoom converts the region with the same live size it clamps against — mixing the two
   // magnified a region the model never asked for.
-  const zoomed = readPng(await computer.zoom({ x: 0, y: 0, width: 640, height: 360 }));
-  assert.equal(zoomed.width, 640, "the region is 1:1 now, not doubled by the old scale");
+  const zoomed = readPng(await computer.zoom({ x: 0, y: 0, width: 512, height: 288 }));
+  assert.equal(zoomed.width, 512, "the region is 1:1 now, not doubled by the old scale");
 
   // One gesture, one scroll distance, whatever the panel's density (pixels are macOS-only).
   calls.length = 0;
@@ -646,7 +646,7 @@ function fakeRobot(overrides = {}) {
   console.warn = (...args) => warnings.push(args.join(" "));
   try {
     const shot = readPng(await computer.screenshot());
-    assert.equal(shot.width, 1280, "a black capture is still a valid image");
+    assert.equal(shot.width, 1024, "a black capture is still a valid image");
     await computer.screenshot();
   } finally {
     console.warn = originalWarn;

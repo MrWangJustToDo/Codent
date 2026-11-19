@@ -89,7 +89,7 @@ const MIN_ZOOM_SIZE = 4;
  * Keep a zoom region inside the screen.
  *
  * The driver clamps too (robotjs can crash on an out-of-range capture), but clamping THERE leaves
- * the result describing a region it never captured: `zoom(1200,700,500,500)` on a 1280-wide display
+ * the result describing a region it never captured: `zoom(1000,600,500,500)` on a 1024-wide display
  * captures 80x100, while the text claimed (1200,700)-(1700,1200) and `scale = 180/500 = 0.36` — a
  * model converting a point landed past the screen edge. Clamping here means the region, the image
  * and the factor describe the SAME crop.

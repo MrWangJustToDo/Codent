@@ -90,10 +90,18 @@ export interface CreateNodeComputerOptions {
 }
 
 /**
- * Biggest screenshot the model ever sees. Bigger captures cost vision tokens for detail the provider
- * downscales anyway; the model's coordinates come back in this space and are scaled up here.
+ * The model-facing frame.
+ *
+ * The WIDTH is the cap vision pipelines actually apply: a 1280-wide frame was being downscaled to
+ * 1024 before the model saw it (a measured session), so the extra 256 columns bought nothing while
+ * forcing a seen/declared conversion on every coordinate. Declaring what is delivered removes that
+ * conversion; the rule stays in the result text as the fallback for a provider with a different cap.
+ *
+ * Height stays 800 so the aspect follows the real screen: 1440x900 → 1024x640, 1920x1080 → 1024x576.
+ * The cost is the other direction: a provider that WOULD have delivered 1280 now gets 20% less
+ * detail. A host that knows its model's cap can pass `display` and override this.
  */
-const MAX_DISPLAY = { width: 1280, height: 800 };
+const MAX_DISPLAY = { width: 1024, height: 800 };
 
 /**
  * `KeyboardEvent.key` names whose robotjs spelling is not simply lowercase.
@@ -657,7 +665,7 @@ export function createNodeComputer(options: CreateNodeComputerOptions = {}): Cor
    * Real screen point → model display point.
    *
    * Clamped: a screen whose size is not a multiple of `display` (a 2880-wide Retina panel and a
-   * 1280-wide display) maps the last pixel to `display.width` after rounding, and the model would be
+   * 1024-wide display) maps the last pixel to `display.width` after rounding, and the model would be
    * told the pointer sits outside the frame it is looking at.
    */
   const toDisplay = (x: number, y: number, live: { width: number; height: number } = liveScreen()) => ({
