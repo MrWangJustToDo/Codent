@@ -360,6 +360,64 @@ function fakeRobot(overrides = {}) {
     }
   }
 
+  // The whole input surface is parameterised by `platform` (the option exists precisely so this
+  // matrix is assertable on Linux CI). The new validation must behave identically on all three, and
+  // the untouched per-platform routing must still be what each platform expects.
+  for (const platform of ["darwin", "win32", "linux"]) {
+    const { robot, calls } = fakeRobot();
+    const c = createNodeComputer({ robot, platform });
+    const environment = { darwin: "mac", win32: "windows", linux: "linux" }[platform];
+
+    assert.equal(c.environment, environment, `${platform}: the advertised environment`);
+
+    // Aliases resolve to the same backend name everywhere; only their keycode mapping differs.
+    for (const [name, mapped] of [
+      ["Return", "enter"],
+      ["Esc", "escape"],
+      ["Spacebar", "space"],
+      ["Cmd", "command"],
+      ["Super", "command"],
+      ["Win", "command"],
+    ]) {
+      calls.length = 0;
+      await c.press([name]);
+      assert.deepEqual(calls, [["keyTap", mapped]], `${platform}: ${name} → ${mapped}`);
+    }
+
+    // A chord is the same event on every platform; the addon expands the flags into real modifier
+    // events on Windows/X11 and into `CGEventSetFlags` on macOS.
+    calls.length = 0;
+    await c.press(["Control", "a"]);
+    assert.deepEqual(calls, [["keyTap", "a", ["control"]]], `${platform}: one chord event`);
+
+    // A hold validates too, and maps the same way.
+    calls.length = 0;
+    await c.keyDown("Meta");
+    await c.keyUp("Meta");
+    assert.deepEqual(
+      calls,
+      [
+        ["keyToggle", "command", "down"],
+        ["keyToggle", "command", "up"],
+      ],
+      `${platform}: hold and release`
+    );
+
+    // The preflight is platform-independent: an unknown name and a multi-byte character are refused
+    // before any event, and every name in the backend table is accepted.
+    assert.throws(() => c.validatePress(["Hyper"]), /not a key name/, `${platform}: unknown name`);
+    assert.throws(() => c.validatePress(["é"]), /not a key name/, `${platform}: multi-byte char`);
+    c.validatePress(["F13"]);
+    c.validatePress(["numpad_5"]);
+
+    // Per-platform scroll units are unchanged by this change: pixels on macOS, 120/notch on Windows,
+    // whole notches on X11.
+    calls.length = 0;
+    await c.scroll(100, 100, 0, 200);
+    const expected = { darwin: -400, win32: -240, linux: -2 }[platform];
+    assert.equal(calls.at(-1)[2], expected, `${platform}: scroll units`);
+  }
+
   // Two "keys" that are not a chord are refused with an explanation: passing "a" as a backend flag
   // fails with "Invalid key flag", which tells the model nothing about what it did wrong.
   await assert.rejects(() => computer.press(["a", "b"]), /is not a modifier/);
