@@ -26,6 +26,9 @@ import { inflateSync } from "node:zlib";
 
 import { createNodeComputer, createNodeEnv, encodeScreenPng, nonAsciiTypeChannel } from "../dist/index.mjs";
 
+/** Reported distinctly from a pass — a shrunken run must not read as a green one. */
+const SKIP_MARKER = "[validator-skip]";
+
 // ============================================================================
 // PNG encoding
 // ============================================================================
@@ -312,6 +315,9 @@ function fakeRobot(overrides = {}) {
   // same backend key as macOS Command (`keycode.h` maps all three to `K_META`).
   assert.deepEqual(await keyNames(["Super"]), ["command"]);
   assert.deepEqual(await keyNames(["Win"]), ["command"]);
+  // The DOM spelling of a key the backend only knows as `numpad_lock` — a name that is neither a
+  // single character nor a table entry, so it needs its own alias rather than the lowercase fallback.
+  assert.deepEqual(await keyNames(["NumLock"]), ["numpad_lock"]);
   // Names the backend already knew keep working (the mirror of its table must not reject them).
   assert.deepEqual(await keyNames(["F13"]), ["f13"]);
   assert.deepEqual(await keyNames(["numpad_5"]), ["numpad_5"]);
@@ -346,6 +352,11 @@ function fakeRobot(overrides = {}) {
       const names = [...new Set([...table.matchAll(/\{\s*"([^"]+)",/g)].map((match) => match[1]))];
       assert.ok(names.length > 70, `parsed the addon's key table (${names.length} names)`);
       for (const name of names) computer.validatePress([name]);
+    } else {
+      // A published install ships the prebuilt binding without `src/`, so this — the only assertion
+      // that checks the mirror against the addon instead of against itself — would vanish silently
+      // and the run would look the same as a complete one.
+      console.log(`${SKIP_MARKER} addon sources are not installed (${source}) — key mirror not cross-checked`);
     }
   }
 
