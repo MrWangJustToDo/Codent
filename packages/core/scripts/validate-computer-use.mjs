@@ -128,6 +128,17 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
   assert.ok(read.description.includes(`${DISPLAY.width}x${DISPLAY.height}`), "the model is told the space");
   assert.ok(write.description.includes(`${DISPLAY.width}x${DISPLAY.height}`));
 
+  // The description must not claim the attachment is unscaled: a provider may downscale it (a
+  // measured session saw 1280x800 arrive as 1024x640), and every result states the seen/declared
+  // rule. "Exactly the size of the screenshots you see" made the tool contradict its own result,
+  // and the model alternated between the two coordinate spaces.
+  for (const tool of [read, write]) {
+    assert.equal(/exactly the size of the screenshots/.test(tool.description), false, "no unscaled-image claim");
+    assert.ok(tool.description.includes("scale your reading by seen / declared"), "the scaling rule is stated");
+  }
+  // There is no open_app action, so the description must not point at one.
+  assert.equal(write.description.includes("do that here"), false, "no pointer at a capability the tool lacks");
+
   // The action schema is the model-facing contract; a dropped action is a capability loss.
   for (const action of COMPUTER_ACTIONS) {
     assert.equal(write.inputSchema.safeParse({ action }).success, true, `the schema accepts "${action}"`);
@@ -197,7 +208,7 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
     "an unmeasured crop claims no delivered size"
   );
   assert.ok(zoomParts[0].content.includes("(0,0)-(320,200)"), "…still naming the region in screen space");
-  assert.ok(read.toModelOutput({ output: output })[0].content.includes("pixels in THIS image"));
+  assert.ok(read.toModelOutput({ output: output })[0].content.includes("screen pixels in (0,0)-(1280,800)"));
   // A provider may downscale the attachment (a measured session saw 1280x800 arrive as 1024x640);
   // the rule is on every result, so the model does not have to discover it by trial and error.
   const fullText = read.toModelOutput({ output: output })[0].content;
@@ -408,6 +419,54 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
   assert.equal(write.inputSchema.safeParse({ actions: [{ action: "click", x: 1, y: 1 }] }).success, true);
 }
 
+// A batch is validated BEFORE its first step. A backend validates a key name at the point of the
+// call, so a measured batch typed, waited, and only then failed on `Return` — and the model retried
+// the whole sequence. Only the host knows its key table, so the check is its optional
+// `validatePress`; `keys` also carries the entry's modifiers, which are part of the same chord.
+{
+  const { computer, calls } = fakeComputer({
+    validatePress: (keys) => {
+      if (keys.includes("Bogus")) throw new Error('"Bogus" is not a key name this host can press.');
+    },
+  });
+  const { tools } = activate(computer, { settleMs: 0 });
+  const write = tools.get(COMPUTER_ACTION_TOOL);
+
+  await assert.rejects(
+    () =>
+      write.execute(
+        {
+          actions: [
+            { action: "type", text: "search" },
+            { action: "wait", ms: 1 },
+            { action: "key", keys: ["Bogus"] },
+          ],
+        },
+        OPTS
+      ),
+    /Action #3 of 3 \(key\) would fail: "Bogus" is not a key name/
+  );
+  assert.deepEqual(
+    calls.filter(([name]) => name !== "screenshot"),
+    [],
+    "nothing runs before the whole batch is validated"
+  );
+
+  // An entry with no `keys` is caught by the same pass (dispatch would only see it at its step).
+  await assert.rejects(
+    () => write.execute({ actions: [{ action: "type", text: "x" }, { action: "key" }] }, OPTS),
+    /Action #2 of 2 \(key\) needs `keys`/
+  );
+
+  // The host sees the chord `press` would receive, modifiers included.
+  const seen = [];
+  const { computer: spy } = fakeComputer({ validatePress: (keys) => seen.push(keys) });
+  await activate(spy, { settleMs: 0 })
+    .tools.get(COMPUTER_ACTION_TOOL)
+    .execute({ actions: [{ action: "key", keys: ["a"], modifiers: ["Control"] }] }, OPTS);
+  assert.deepEqual(seen, [["Control", "a"]]);
+}
+
 // ============================================================================
 // Action schema: held keys, batch inheritance, step-indexed failures
 // ============================================================================
@@ -571,7 +630,7 @@ function pngBytes(width, height) {
   const shot = await read.execute({}, OPTS);
   assert.equal(shot.region, undefined);
   assert.equal(shot.scale, undefined);
-  assert.match(read.toModelOutput({ output: shot })[0].content, /pixels in THIS image/);
+  assert.match(read.toModelOutput({ output: shot })[0].content, /screen pixels in \(0,0\)-\(1280,800\)/);
 }
 
 // A crop that is exactly the region (a 1x panel) says "1:1", and gives the OFFSET mapping — a model

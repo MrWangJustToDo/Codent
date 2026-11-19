@@ -459,6 +459,27 @@ async function runActions(
       );
     }
 
+    // Keys are checked BEFORE the first step runs. A backend validates a key name at the point of
+    // the call, which inside a batch is after earlier steps have already moved the pointer and typed
+    // — a measured batch typed, waited, and only then failed on `Return`, so the model retried the
+    // whole sequence. Only the host knows its backend's key table, hence the optional `validatePress`
+    // (a host without it keeps the step-local failure). `keys` also carries the entry's modifiers,
+    // which are part of the same chord.
+    for (let index = 0; index < batch.length; index += 1) {
+      const entry = withInheritedDefaults(batch[index]!, input);
+      if (entry.action !== "key") continue;
+      const keys = [...(entry.modifiers ?? []), ...(entry.keys ?? [])];
+      if (keys.length === 0) {
+        throw new Error(`Action #${index + 1} of ${batch.length} (key) needs \`keys\`, e.g. ["Control", "c"].`);
+      }
+      if (!computer.validatePress) continue;
+      try {
+        computer.validatePress(keys);
+      } catch (error) {
+        throw new Error(`Action #${index + 1} of ${batch.length} (key) would fail: ${errorMessage(error)}`);
+      }
+    }
+
     const summaries: string[] = [];
     for (let index = 0; index < batch.length; index += 1) {
       const entry = withInheritedDefaults(batch[index]!, input);

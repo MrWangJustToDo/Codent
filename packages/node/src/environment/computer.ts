@@ -100,19 +100,71 @@ const MAX_DISPLAY = { width: 1280, height: 800 };
  *
  * Everything else round-trips: single characters stay as they are (`"a"`, `"1"`, `"/"`), and named
  * keys lowercase to the name robotjs knows (`"Enter"` → `"enter"`, `"PageUp"` → `"pageup"`).
+ *
+ * The aliases are the DOM / Electron spellings models actually send. robotjs matches its table with
+ * `strcmp`, so `Return`, `Esc` and `Spacebar` were hard failures ("Invalid key code specified.")
+ * with no hint that `enter` / `escape` / `space` were meant — and inside a batch the failure landed
+ * after earlier steps had already run. `Cmd` / `Ctrl` / `Option` matter when a modifier is pressed
+ * as a KEY rather than carried as a chord flag.
  */
 const ROBOT_KEYS: Record<string, string> = {
-  ArrowUp: "up",
-  ArrowDown: "down",
-  ArrowLeft: "left",
-  ArrowRight: "right",
-  Meta: "command",
-  ContextMenu: "menu",
+  arrowup: "up",
+  arrowdown: "down",
+  arrowleft: "left",
+  arrowright: "right",
+  meta: "command",
+  contextmenu: "menu",
   " ": "space",
+  return: "enter",
+  esc: "escape",
+  spacebar: "space",
+  del: "delete",
+  ins: "insert",
+  pgup: "pageup",
+  pgdn: "pagedown",
+  cmd: "command",
+  ctrl: "control",
+  option: "alt",
 };
 
 function toRobotKey(key: string) {
-  return ROBOT_KEYS[key] ?? (key.length === 1 ? key : key.toLowerCase());
+  // Keyed lowercase: robotjs is case-sensitive, and `Return` / `return` must reach the same alias.
+  return ROBOT_KEYS[key.toLowerCase()] ?? (key.length === 1 ? key : key.toLowerCase());
+}
+
+/**
+ * The key names the backend accepts, mirrored from robotjs' `key_names` table.
+ *
+ * robotjs validates a name at the call and exposes no query API, so knowing the table is the only
+ * way to fail before an event is posted — and to answer core's batch preflight. It is pinned with
+ * the addon (`@jitsi/robotjs` 0.6.24); a name added upstream is a one-word addition here.
+ */
+const ROBOT_KEY_NAMES = new Set(
+  (
+    "backspace delete enter tab escape up down right left home end pageup pagedown " +
+    "capslock command alt right_alt control left_control right_control shift right_shift space " +
+    "printscreen insert menu audio_mute audio_vol_down audio_vol_up audio_play audio_stop " +
+    "audio_pause audio_prev audio_next audio_rewind audio_forward audio_repeat audio_random " +
+    "numpad_lock numpad_0 numpad_1 numpad_2 numpad_3 numpad_4 numpad_5 numpad_6 numpad_7 " +
+    "numpad_8 numpad_9 numpad_+ numpad_- numpad_* numpad_/ numpad_. " +
+    "lights_mon_up lights_mon_down lights_kbd_toggle lights_kbd_up lights_kbd_down " +
+    Array.from({ length: 24 }, (_, index) => `f${index + 1}`).join(" ")
+  ).split(" ")
+);
+
+/**
+ * Map one key name, or throw before anything is pressed.
+ *
+ * A single character is always accepted: robotjs resolves it through the layout's char→keycode
+ * table, which is also why the case is the model's business (`["Shift", "a"]`).
+ */
+function assertPressable(key: string): string {
+  const mapped = toRobotKey(key);
+  if (mapped.length === 1 || ROBOT_KEY_NAMES.has(mapped)) return mapped;
+  throw new Error(
+    `"${key}" is not a key name this host can press. Use a KeyboardEvent.key name — "Enter", ` +
+      `"Escape", "Tab", "PageUp", "ArrowUp" — or a single character.`
+  );
 }
 
 function toRobotButton(button: CoreEnvMouseButton) {
@@ -699,12 +751,12 @@ export function createNodeComputer(options: CreateNodeComputerOptions = {}): Cor
 
     async keyDown(key, keyOptions) {
       keyOptions?.signal?.throwIfAborted();
-      robot.keyToggle(toRobotKey(key), "down");
+      robot.keyToggle(assertPressable(key), "down");
     },
 
     // No signal, for the same reason as `mouseUp`.
     async keyUp(key) {
-      robot.keyToggle(toRobotKey(key), "up");
+      robot.keyToggle(assertPressable(key), "up");
     },
 
     async press(keys, pressOptions) {
@@ -715,12 +767,20 @@ export function createNodeComputer(options: CreateNodeComputerOptions = {}): Cor
       // the key: Cmd+a typed a literal "a", and a Cmd+V paste typed "v". `keyTap` is the backend's
       // only way to express the flag.
       const { key, modifiers } = splitChord(keys);
+      const mapped = assertPressable(key);
       // The second argument must be OMITTED, not passed as `undefined`: robotjs branches on
       // `info.Length()`, so `keyTap(key, undefined)` takes the two-argument path and fails flag
       // validation with "Invalid key flag specified." — every modifier-less key (Escape, Enter, Tab,
       // PageDown, the arrows) threw instead of being pressed.
-      if (modifiers.length > 0) robot.keyTap(toRobotKey(key), modifiers);
-      else robot.keyTap(toRobotKey(key));
+      if (modifiers.length > 0) robot.keyTap(mapped, modifiers);
+      else robot.keyTap(mapped);
+    },
+
+    // Core asks this for every `key` entry of a batch before the first step runs. It shares
+    // `splitChord` + `assertPressable` with `press`, so "would fail" and "fails" cannot disagree.
+    validatePress(keys) {
+      const { key } = splitChord(keys);
+      assertPressable(key);
     },
 
     async type(text, typeOptions) {

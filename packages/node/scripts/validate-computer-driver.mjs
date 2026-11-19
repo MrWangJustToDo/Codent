@@ -299,6 +299,29 @@ function fakeRobot(overrides = {}) {
   assert.deepEqual(await keyNames(["A"]), ["A"]);
   assert.deepEqual(await keyNames(["/"]), ["/"]);
 
+  // Aliases models actually send. robotjs matches its table with `strcmp`, so `Return`, `Esc` and
+  // `Spacebar` used to fail with "Invalid key code specified." while `enter` / `escape` / `space`
+  // worked — and inside a batch the failure landed after earlier steps had already run.
+  assert.deepEqual(await keyNames(["Return"]), ["enter"]);
+  assert.deepEqual(await keyNames(["Esc"]), ["escape"]);
+  assert.deepEqual(await keyNames(["Spacebar"]), ["space"]);
+  assert.deepEqual(await keyNames(["Cmd"]), ["command"]);
+  // Names the backend already knew keep working (the mirror of its table must not reject them).
+  assert.deepEqual(await keyNames(["F13"]), ["f13"]);
+  assert.deepEqual(await keyNames(["numpad_5"]), ["numpad_5"]);
+
+  // An unknown name is refused BEFORE anything is posted, with a message that names a usable
+  // spelling — robotjs' own "Invalid key code specified." says nothing about what to send instead.
+  calls.length = 0;
+  await assert.rejects(() => computer.press(["Hyper"]), /not a key name this host can press/);
+  assert.deepEqual(calls, [], "no event is posted for a name the backend cannot press");
+
+  // The batch preflight shares that check (and the chord split), so "would fail" and "fails" agree.
+  computer.validatePress(["Control", "c"]);
+  computer.validatePress(["Escape"]);
+  assert.throws(() => computer.validatePress(["Hyper"]), /not a key name/);
+  assert.throws(() => computer.validatePress(["a", "b"]), /is not a modifier/);
+
   // Two "keys" that are not a chord are refused with an explanation: passing "a" as a backend flag
   // fails with "Invalid key flag", which tells the model nothing about what it did wrong.
   await assert.rejects(() => computer.press(["a", "b"]), /is not a modifier/);

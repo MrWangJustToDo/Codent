@@ -249,8 +249,10 @@ function describeFrame(output: ScreenToolOutput): string {
     `downscale it), scale your reading by seen / declared before converting.`;
 
   if (!output.region) {
-    // A full screenshot is display-sized by construction (the box filter emits exactly this frame).
-    return `${SCREENSHOT_MARKER} ${output.summary}. ${screen}; coordinates you send are pixels in THIS image — ${origin}. ${downscaleRule({ width, height })}`;
+    // A full screenshot is display-sized by construction (the box filter emits exactly this frame),
+    // but the ATTACHMENT may still be downscaled by the provider — so the sentence names the screen
+    // space the coordinates belong to, never "THIS image".
+    return `${SCREENSHOT_MARKER} ${output.summary}. ${screen}; coordinates you send are screen pixels in (0,0)-(${width},${height}), where ${origin}. ${downscaleRule({ width, height })}`;
   }
 
   const { x, y, width: w, height: h } = output.region;

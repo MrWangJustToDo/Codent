@@ -349,6 +349,17 @@ export interface CoreEnvComputer {
    * separate events — see {@link keyDown}.
    */
   press(keys: string[], options?: CoreEnvComputerActionOptions): Promise<void>;
+  /**
+   * Reject keys this host cannot press, without pressing anything.
+   *
+   * Optional, and pure validation. Core calls it for every `key` entry of a batch BEFORE the first
+   * step runs, because a backend validates at the point of the call — inside a batch that point is
+   * after earlier steps have moved the pointer and typed (a measured batch typed, waited, and only
+   * then failed on `Return`; the model retried the whole sequence). Only the host knows its
+   * backend's key table, so this is asked rather than guessed. A host that omits it keeps the
+   * step-local failure, at the step that carries the bad key.
+   */
+  validatePress?(keys: string[]): void;
   /** Type text as a user does. */
   type(text: string, options?: CoreEnvComputerActionOptions): Promise<void>;
   /** Release anything the host holds for this capability (called on session teardown). */

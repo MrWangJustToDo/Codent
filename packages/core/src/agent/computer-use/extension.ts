@@ -89,7 +89,14 @@ export function createComputerUseExtension(
         : DEFAULT_SCREENSHOT_HISTORY;
   const settleMs = Number.isFinite(config.settleMs) ? Math.max(0, config.settleMs as number) : DEFAULT_SETTLE_MS;
   const { width, height } = computer.display;
-  const space = `The screen is ${width}x${height} pixels, which is exactly the size of the screenshots you see.`;
+  // What is TRUE at this boundary, and what is not: the host delivers a `display`-sized image, but a
+  // provider may downscale it before the model sees it (a measured session saw 1280x800 arrive as
+  // 1024x640). Saying "exactly the size of the screenshots you see" made the tool description
+  // contradict its own result text, and the model alternated between two coordinate spaces.
+  const space =
+    `The screen is ${width}x${height} pixels, and every coordinate you send is a pixel in that ` +
+    `space, with (0,0) at its top-left. A full screenshot may be downscaled before you see it: if ` +
+    `the image does not look ${width}x${height}, scale your reading by seen / declared.`;
 
   return {
     id: "codent-computer-use",
@@ -142,9 +149,7 @@ export function createComputerUseExtension(
         name: COMPUTER_ACTION_TOOL,
         description:
           `Control the user's real mouse and keyboard: ${computer.environment}. ${space} ` +
-          `Every coordinate is a pixel in the screenshot you last saw; (0,0) is its top-left. ` +
-          `A provider may downscale the image before you see it: if it does not look ${width}x${height}, ` +
-          `scale your reading by seen/declared first. ` +
+          `Coordinates are always in that screen space — never in a downscaled image. ` +
           `Each call returns a fresh screenshot of the result. ` +
           `Look before you act (${COMPUTER_SCREENSHOT_TOOL}), and prefer keyboard shortcuts over ` +
           `clicking coordinates when you can. ` +
@@ -156,7 +161,9 @@ export function createComputerUseExtension(
           `If a name matches more than one target (a group chat and a contact called the same thing), ` +
           `ask the user which one before acting — guessing costs many actions to undo. ` +
           `Shell tools MAY not be able to launch or activate GUI apps on this host (a sandboxed ` +
-          `shell has no GUI session): do that here, not with run_command. ` +
+          `shell has no GUI session), and this tool has no "open app" action either: use the ` +
+          `desktop's own launcher (the Meta / Super / Win key, then type the app name) instead of ` +
+          `retrying it through run_command. ` +
           `If two attempts at the same coordinates — or two rounds of the same strategy — fail, change ` +
           `approach (keyboard, menu bar, scroll, search) instead of nudging the pointer. ` +
           `The user approves each call.`,
