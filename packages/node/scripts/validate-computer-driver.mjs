@@ -20,6 +20,8 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { inflateSync } from "node:zlib";
 
 import { createNodeComputer, createNodeEnv, encodeScreenPng, nonAsciiTypeChannel } from "../dist/index.mjs";
@@ -306,6 +308,10 @@ function fakeRobot(overrides = {}) {
   assert.deepEqual(await keyNames(["Esc"]), ["escape"]);
   assert.deepEqual(await keyNames(["Spacebar"]), ["space"]);
   assert.deepEqual(await keyNames(["Cmd"]), ["command"]);
+  // The launcher guidance names the platform key: Super on X11 and the Win key on Windows are the
+  // same backend key as macOS Command (`keycode.h` maps all three to `K_META`).
+  assert.deepEqual(await keyNames(["Super"]), ["command"]);
+  assert.deepEqual(await keyNames(["Win"]), ["command"]);
   // Names the backend already knew keep working (the mirror of its table must not reject them).
   assert.deepEqual(await keyNames(["F13"]), ["f13"]);
   assert.deepEqual(await keyNames(["numpad_5"]), ["numpad_5"]);
@@ -316,11 +322,32 @@ function fakeRobot(overrides = {}) {
   await assert.rejects(() => computer.press(["Hyper"]), /not a key name this host can press/);
   assert.deepEqual(calls, [], "no event is posted for a name the backend cannot press");
 
+  // Non-ASCII is NOT a single-character key name: the addon's `strlen(k) == 1` counts bytes, so "é"
+  // takes the table path and fails there. It must be refused before an event, like any unknown name.
+  calls.length = 0;
+  await assert.rejects(() => computer.press(["é"]), /not a key name/);
+  assert.deepEqual(calls, [], "a multi-byte character is not pressed as a key");
+
   // The batch preflight shares that check (and the chord split), so "would fail" and "fails" agree.
   computer.validatePress(["Control", "c"]);
   computer.validatePress(["Escape"]);
   assert.throws(() => computer.validatePress(["Hyper"]), /not a key name/);
   assert.throws(() => computer.validatePress(["a", "b"]), /is not a modifier/);
+  await assert.rejects(() => computer.keyDown("Hyper"), /not a key name/, "a hold is validated too");
+
+  // The mirror must be complete, not merely right for the names a test happens to spot-check: a
+  // missing name is a false rejection (a key that works through the addon is refused here), and the
+  // string-concatenated table could silently merge two names if a line join loses its space.
+  {
+    const source = fileURLToPath(new URL("../node_modules/@jitsi/robotjs/src/robotjs.cc", import.meta.url));
+    if (existsSync(source)) {
+      const text = readFileSync(source, "utf8");
+      const table = text.slice(text.indexOf("static KeyNames key_names[]"), text.indexOf("int CheckKeyCodes"));
+      const names = [...new Set([...table.matchAll(/\{\s*"([^"]+)",/g)].map((match) => match[1]))];
+      assert.ok(names.length > 70, `parsed the addon's key table (${names.length} names)`);
+      for (const name of names) computer.validatePress([name]);
+    }
+  }
 
   // Two "keys" that are not a chord are refused with an explanation: passing "a" as a backend flag
   // fails with "Invalid key flag", which tells the model nothing about what it did wrong.

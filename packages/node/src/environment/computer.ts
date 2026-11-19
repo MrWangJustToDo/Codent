@@ -125,6 +125,8 @@ const ROBOT_KEYS: Record<string, string> = {
   cmd: "command",
   ctrl: "control",
   option: "alt",
+  super: "command",
+  win: "command",
 };
 
 function toRobotKey(key: string) {
@@ -155,15 +157,22 @@ const ROBOT_KEY_NAMES = new Set(
 /**
  * Map one key name, or throw before anything is pressed.
  *
- * A single character is always accepted: robotjs resolves it through the layout's char→keycode
- * table, which is also why the case is the model's business (`["Shift", "a"]`).
+ * A single ASCII character is accepted: robotjs resolves it through the layout's char→keycode table,
+ * which is also why the case is the model's business (`["Shift", "a"]`). The check is `strlen(k) == 1`
+ * in the addon — BYTES, not code units — so a non-ASCII character ("é") is not a single-byte key
+ * name and must be refused here instead of at the step that carries it.
  */
 function assertPressable(key: string): string {
   const mapped = toRobotKey(key);
-  if (mapped.length === 1 || ROBOT_KEY_NAMES.has(mapped)) return mapped;
+  if (mapped.length === 1) {
+    if (mapped.charCodeAt(0) < 0x80) return mapped;
+  } else if (ROBOT_KEY_NAMES.has(mapped)) {
+    return mapped;
+  }
   throw new Error(
     `"${key}" is not a key name this host can press. Use a KeyboardEvent.key name — "Enter", ` +
-      `"Escape", "Tab", "PageUp", "ArrowUp" — or a single character.`
+      `"Escape", "Tab", "PageUp", "Meta" — or a single ASCII character; non-ASCII text goes ` +
+      `through "type", not "key".`
   );
 }
 

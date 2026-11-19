@@ -246,7 +246,8 @@ function describeFrame(output: ScreenToolOutput): string {
   // would tell the model to multiply by the wrong ratio.
   const downscaleRule = (declared: { width: number; height: number }) =>
     `If the image you actually see is not ${declared.width}x${declared.height} (a provider may ` +
-    `downscale it), scale your reading by seen / declared before converting.`;
+    `downscale it), multiply what you measure by declared / seen (screen_x = reading_x * ` +
+    `${declared.width} / image width) before converting.`;
 
   if (!output.region) {
     // A full screenshot is display-sized by construction (the box filter emits exactly this frame),

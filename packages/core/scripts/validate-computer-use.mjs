@@ -129,15 +129,22 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
   assert.ok(write.description.includes(`${DISPLAY.width}x${DISPLAY.height}`));
 
   // The description must not claim the attachment is unscaled: a provider may downscale it (a
-  // measured session saw 1280x800 arrive as 1024x640), and every result states the seen/declared
-  // rule. "Exactly the size of the screenshots you see" made the tool contradict its own result,
-  // and the model alternated between the two coordinate spaces.
+  // measured session saw 1280x800 arrive as 1024x640), and every result states the conversion rule.
+  // "Exactly the size of the screenshots you see" made the tool contradict its own result, and the
+  // model alternated between the two coordinate spaces.
   for (const tool of [read, write]) {
     assert.equal(/exactly the size of the screenshots/.test(tool.description), false, "no unscaled-image claim");
-    assert.ok(tool.description.includes("scale your reading by seen / declared"), "the scaling rule is stated");
+    assert.ok(tool.description.includes("multiply what you measure by declared / seen"), "the scaling rule is stated");
+    // The DIRECTION is the rule: a 1024-wide image of a 1280-wide screen needs ×1.25 (declared /
+    // seen). The inverse (seen / declared, 0.8) landed the model 20% short — that is the bug this
+    // wording replaced, so a future "clarification" must not restore it.
+    assert.equal(tool.description.includes("seen / declared"), false, "the ratio is not inverted");
   }
-  // There is no open_app action, so the description must not point at one.
+  // There is no open_app action, so the description must not point at one — and it must name a
+  // launcher the platform actually has (Meta alone opens nothing on macOS).
   assert.equal(write.description.includes("do that here"), false, "no pointer at a capability the tool lacks");
+  assert.ok(write.description.includes("launcher"), "the model is given a way to open an app");
+  assert.ok(write.description.includes("Cmd+Space on macOS"), "…that exists on macOS");
 
   // The action schema is the model-facing contract; a dropped action is a capability loss.
   for (const action of COMPUTER_ACTIONS) {
@@ -203,7 +210,7 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
   // …and it must NOT name a declared size it does not know: falling back to `display` here would
   // tell the model the crop is 1280x800 and have it multiply by the wrong ratio.
   assert.equal(
-    zoomParts[0].content.includes("scale your reading by seen / declared"),
+    zoomParts[0].content.includes("multiply what you measure by declared / seen"),
     false,
     "an unmeasured crop claims no delivered size"
   );
@@ -213,8 +220,8 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
   // the rule is on every result, so the model does not have to discover it by trial and error.
   const fullText = read.toModelOutput({ output: output })[0].content;
   assert.ok(
-    fullText.includes("scale your reading by seen / declared"),
-    "the result states the seen-vs-declared conversion"
+    fullText.includes("multiply what you measure by declared / seen"),
+    "the result states the conversion (declared / seen, not its inverse)"
   );
   assert.ok(fullText.includes("is not 1280x800"), "…naming the size it actually delivered");
 }
@@ -465,6 +472,50 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
     .tools.get(COMPUTER_ACTION_TOOL)
     .execute({ actions: [{ action: "key", keys: ["a"], modifiers: ["Control"] }] }, OPTS);
   assert.deepEqual(seen, [["Control", "a"]]);
+
+  // An already-cancelled call keeps its abort verdict: `runActions` checks the signal before the
+  // guards, so a bad key cannot turn a cancel into a validation failure (the classifier reads
+  // `signal.aborted` for the neutral row).
+  const cancelled = AbortSignal.abort(new Error("cancelled by the user"));
+  await assert.rejects(
+    () =>
+      write.execute(
+        {
+          actions: [
+            { action: "type", text: "search" },
+            { action: "key", keys: ["Bogus"] },
+          ],
+        },
+        { ...OPTS, abortSignal: cancelled }
+      ),
+    /cancelled by the user/
+  );
+
+  // A host without the capability keeps the old, step-local failure — documented, not incidental.
+  const { computer: unvalidated, calls: unvalidatedCalls } = fakeComputer({
+    press: async (keys) => {
+      if (keys.includes("Bogus")) throw new Error("bad key");
+      unvalidatedCalls.push(["press", keys]);
+    },
+  });
+  const unvalidatedWrite = activate(unvalidated, { settleMs: 0 }).tools.get(COMPUTER_ACTION_TOOL);
+  await assert.rejects(
+    () =>
+      unvalidatedWrite.execute(
+        {
+          actions: [
+            { action: "type", text: "x" },
+            { action: "key", keys: ["Bogus"] },
+          ],
+        },
+        OPTS
+      ),
+    /Action #2 of 2 \(key\) failed after: type "x": bad key/
+  );
+  assert.ok(
+    unvalidatedCalls.some(([name]) => name === "type"),
+    "without `validatePress` the earlier step still ran, and the failure names the step that carries it"
+  );
 }
 
 // ============================================================================

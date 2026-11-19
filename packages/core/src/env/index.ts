@@ -357,9 +357,10 @@ export interface CoreEnvComputer {
    * after earlier steps have moved the pointer and typed (a measured batch typed, waited, and only
    * then failed on `Return`; the model retried the whole sequence). Only the host knows its
    * backend's key table, so this is asked rather than guessed. A host that omits it keeps the
-   * step-local failure, at the step that carries the bad key.
+   * step-local failure, at the step that carries the bad key. May be async — core awaits it, so a
+   * rejection cannot become an unhandled promise while the preflight appears to pass.
    */
-  validatePress?(keys: string[]): void;
+  validatePress?(keys: string[]): void | Promise<void>;
   /** Type text as a user does. */
   type(text: string, options?: CoreEnvComputerActionOptions): Promise<void>;
   /** Release anything the host holds for this capability (called on session teardown). */

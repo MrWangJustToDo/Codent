@@ -93,10 +93,16 @@ export function createComputerUseExtension(
   // provider may downscale it before the model sees it (a measured session saw 1280x800 arrive as
   // 1024x640). Saying "exactly the size of the screenshots you see" made the tool description
   // contradict its own result text, and the model alternated between two coordinate spaces.
+  //
+  // The factor's DIRECTION is the whole point: a reading in a 1024-wide image of a 1280-wide screen
+  // must be MULTIPLIED by 1280/1024 (declared / seen, 1.25). "seen / declared" is its inverse (0.8)
+  // and lands the click 20% short — `validate:computer-use` therefore asserts the phrase AND the
+  // absence of the inverse.
   const space =
     `The screen is ${width}x${height} pixels, and every coordinate you send is a pixel in that ` +
     `space, with (0,0) at its top-left. A full screenshot may be downscaled before you see it: if ` +
-    `the image does not look ${width}x${height}, scale your reading by seen / declared.`;
+    `the image is not ${width}x${height}, multiply what you measure by declared / seen (screen_x = ` +
+    `reading_x * ${width} / image width).`;
 
   return {
     id: "codent-computer-use",
@@ -117,10 +123,10 @@ export function createComputerUseExtension(
         inputSchema: z.object({
           zoom: z
             .object({
-              x: z.number().describe("Left edge, in screenshot pixels."),
-              y: z.number().describe("Top edge, in screenshot pixels."),
-              width: z.number().positive().describe("Region width, in screenshot pixels."),
-              height: z.number().positive().describe("Region height, in screenshot pixels."),
+              x: z.number().describe("Left edge, in screen pixels."),
+              y: z.number().describe("Top edge, in screen pixels."),
+              width: z.number().positive().describe("Region width, in screen pixels."),
+              height: z.number().positive().describe("Region height, in screen pixels."),
             })
             .optional()
             .describe("Capture only this region, at full resolution."),
@@ -162,8 +168,8 @@ export function createComputerUseExtension(
           `ask the user which one before acting — guessing costs many actions to undo. ` +
           `Shell tools MAY not be able to launch or activate GUI apps on this host (a sandboxed ` +
           `shell has no GUI session), and this tool has no "open app" action either: use the ` +
-          `desktop's own launcher (the Meta / Super / Win key, then type the app name) instead of ` +
-          `retrying it through run_command. ` +
+          `desktop's own launcher (Cmd+Space on macOS; the Super / Win key on Linux / Windows), ` +
+          `then type the app name — not run_command. ` +
           `If two attempts at the same coordinates — or two rounds of the same strategy — fail, change ` +
           `approach (keyboard, menu bar, scroll, search) instead of nudging the pointer. ` +
           `The user approves each call.`,

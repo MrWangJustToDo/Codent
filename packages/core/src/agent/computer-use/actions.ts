@@ -81,10 +81,16 @@ const DRAG_STEP_MS = 12;
  */
 const actionShape = {
   action: z.enum(COMPUTER_ACTIONS).describe("The action to perform."),
-  x: z.number().optional().describe("Pointer X, in the screenshot's pixels. Required to point at something."),
-  y: z.number().optional().describe("Pointer Y, in the screenshot's pixels. Required to point at something."),
-  to_x: z.number().optional().describe("Drag target X, in the screenshot's pixels."),
-  to_y: z.number().optional().describe("Drag target Y, in the screenshot's pixels."),
+  x: z
+    .number()
+    .optional()
+    .describe("Pointer X, in screen pixels (the image may be downscaled — see the tool description)."),
+  y: z
+    .number()
+    .optional()
+    .describe("Pointer Y, in screen pixels (the image may be downscaled — see the tool description)."),
+  to_x: z.number().optional().describe("Drag target X, in screen pixels."),
+  to_y: z.number().optional().describe("Drag target Y, in screen pixels."),
   button: z.enum(["left", "right", "middle"]).optional().describe("Mouse button (default left)."),
   text: z.string().optional().describe("Text to type."),
   keys: z
@@ -96,14 +102,14 @@ const actionShape = {
     .number()
     .optional()
     .describe(
-      "Horizontal scroll in screenshot pixels; positive scrolls right. Linux/Windows convert it to " +
+      "Horizontal scroll in screen pixels; positive scrolls right. Linux/Windows convert it to " +
         "wheel notches (100 px ≈ one notch), so it is a gesture size, not a physical distance."
     ),
   delta_y: z
     .number()
     .optional()
     .describe(
-      "Vertical scroll in screenshot pixels; positive scrolls down. Linux/Windows convert it to " +
+      "Vertical scroll in screen pixels; positive scrolls down. Linux/Windows convert it to " +
         "wheel notches (100 px ≈ one notch). A scroll needs a non-zero delta."
     ),
   ms: z.number().int().min(0).max(MAX_WAIT_MS).optional().describe("Milliseconds to wait (wait only)."),
@@ -176,7 +182,10 @@ export function delay(ms: number, signal?: AbortSignal): Promise<void> {
 
 function requirePoint(input: ComputerActionInput | ComputerActionEntry, action: ComputerAction) {
   if (typeof input.x !== "number" || typeof input.y !== "number") {
-    throw new Error(`"${action}" needs x and y, in the pixels of the screenshot you are looking at.`);
+    throw new Error(
+      `"${action}" needs x and y, in the screen space the tool description names — not in the pixels ` +
+        `of a downscaled image.`
+    );
   }
   // Zod accepts Infinity; the driver would hand it to the OS. One bad coordinate is a misfire.
   if (!Number.isFinite(input.x) || !Number.isFinite(input.y)) {
@@ -436,6 +445,10 @@ async function runActions(
   held: HeldInput,
   signal?: AbortSignal
 ): Promise<string> {
+  // Before ANY guard: an already-cancelled call must keep its abort verdict. The validation guards
+  // below are synchronous and would otherwise turn a cancel into a "would fail" error, which the run
+  // classifier records as a failure (`signal.aborted` is what makes a tool row neutral).
+  signal?.throwIfAborted();
   const batch = input.actions;
   if (batch && batch.length > 0) {
     // A batch entry does NOT inherit the call's `modifiers`. It used to, and a single `type` entry
@@ -474,7 +487,9 @@ async function runActions(
       }
       if (!computer.validatePress) continue;
       try {
-        computer.validatePress(keys);
+        // Awaited: the contract allows an async implementation, and a rejection that core did not
+        // wait for would be an unhandled rejection while the preflight silently "passed".
+        await computer.validatePress(keys);
       } catch (error) {
         throw new Error(`Action #${index + 1} of ${batch.length} (key) would fail: ${errorMessage(error)}`);
       }
