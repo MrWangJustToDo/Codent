@@ -33,11 +33,13 @@ import type { CoreEnvComputer, CoreEnvMouseButton } from "../../env";
 export const COMPUTER_ACTIONS = [
   "click",
   "double_click",
+  "triple_click",
   "move",
   "drag",
   "scroll",
   "type",
   "key",
+  "hold_key",
   "mouse_down",
   "mouse_up",
   "wait",
@@ -56,6 +58,9 @@ export const MAX_BATCH_ACTIONS = 12;
 
 /** Total wait a batch may spend, kept under the tool's own timeout so a cut cannot strand input. */
 export const MAX_BATCH_WAIT_MS = 20_000;
+
+/** The Anthropic computer tool's own limit on `repeat`; pressing more than this is a script. */
+export const MAX_KEY_REPEAT = 100;
 
 /**
  * The only keys a gesture may hold down.
@@ -97,7 +102,10 @@ const actionShape = {
     .array(z.string())
     .min(1)
     .optional()
-    .describe('Keys to press together, using KeyboardEvent.key names — e.g. ["Control", "c"], ["Enter"].'),
+    .describe(
+      'Keys to press together, using KeyboardEvent.key names — e.g. ["Control", "c"], ["Enter"]. ' +
+        "For `hold_key`, the keys to hold down for `ms`."
+    ),
   delta_x: z
     .number()
     .optional()
@@ -112,7 +120,20 @@ const actionShape = {
       "Vertical scroll in screen pixels; positive scrolls down. Linux/Windows convert it to " +
         "wheel notches (100 px ≈ one notch). A scroll needs a non-zero delta."
     ),
-  ms: z.number().int().min(0).max(MAX_WAIT_MS).optional().describe("Milliseconds to wait (wait only)."),
+  ms: z
+    .number()
+    .int()
+    .min(0)
+    .max(MAX_WAIT_MS)
+    .optional()
+    .describe("Milliseconds to wait (`wait`) or hold the keys (`hold_key`)."),
+  repeat: z
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_KEY_REPEAT)
+    .optional()
+    .describe("For `key`: press the chord this many times (1-100) in one call."),
   modifiers: z
     .array(z.enum(MODIFIER_KEYS))
     .min(1)
@@ -288,11 +309,13 @@ async function dispatchAction(
 
   switch (action) {
     case "click":
-    case "double_click": {
+    case "double_click":
+    case "triple_click": {
       const point = requirePoint(input, action);
-      const count = action === "double_click" ? 2 : 1;
+      const count = action === "triple_click" ? 3 : action === "double_click" ? 2 : 1;
       await computer.click(point.x, point.y, { button, count, signal });
-      return `${action === "double_click" ? "double-click" : "click"} ${point.x},${point.y} ${button}`;
+      const label = action === "triple_click" ? "triple-click" : action === "double_click" ? "double-click" : "click";
+      return `${label} ${point.x},${point.y} ${button}`;
     }
 
     case "move": {
@@ -336,8 +359,38 @@ async function dispatchAction(
       if (!input.keys || input.keys.length === 0) {
         throw new Error('"key" needs keys, e.g. ["Control", "c"].');
       }
-      await computer.press(input.keys, { signal });
-      return `press ${input.keys.join("+")}`;
+      const repeat = input.repeat ?? 1;
+      for (let index = 0; index < repeat; index += 1) await computer.press(input.keys, { signal });
+      return repeat > 1 ? `press ${input.keys.join("+")} ×${repeat}` : `press ${input.keys.join("+")}`;
+    }
+
+    case "hold_key": {
+      if (!input.keys || input.keys.length === 0) {
+        throw new Error('"hold_key" needs keys, e.g. ["Shift"].');
+      }
+      const ms = input.ms ?? 1000;
+      const pressed: string[] = [];
+      try {
+        for (const key of input.keys) {
+          await computer.keyDown(key, { signal });
+          pressed.push(key);
+          held.keys.push(key);
+        }
+        await delay(ms, signal);
+        return `hold ${input.keys.join("+")} ${ms}ms`;
+      } finally {
+        // Released in reverse even on abort, and dropped from `held` so the outer release does not
+        // send a second keyUp. A failed release does not change this call's verdict.
+        for (const key of [...pressed].reverse()) {
+          const index = held.keys.lastIndexOf(key);
+          if (index >= 0) held.keys.splice(index, 1);
+          try {
+            await computer.keyUp(key);
+          } catch {
+            // Same rule as `releaseHeld`: a release must not mask the action's own outcome.
+          }
+        }
+      }
     }
 
     case "mouse_down": {
@@ -462,7 +515,10 @@ async function runActions(
 
     // The tool has one static timeout, so a batch of maximum-length waits would be cut off from the
     // middle (leaving whatever it pressed). Refuse it up front with a message the model can act on.
-    const waits = batch.reduce((total, entry) => total + (entry.action === "wait" ? (entry.ms ?? 1000) : 0), 0);
+    const waits = batch.reduce(
+      (total, entry) => total + (entry.action === "wait" || entry.action === "hold_key" ? (entry.ms ?? 1000) : 0),
+      0
+    );
     if (waits > MAX_BATCH_WAIT_MS) {
       throw new Error(
         `This batch waits ${waits}ms, more than the ${MAX_BATCH_WAIT_MS}ms a single call is allowed. ` +
@@ -478,10 +534,12 @@ async function runActions(
     // which are part of the same chord.
     for (let index = 0; index < batch.length; index += 1) {
       const entry = withInheritedDefaults(batch[index]!, input);
-      if (entry.action !== "key") continue;
+      if (entry.action !== "key" && entry.action !== "hold_key") continue;
       const keys = [...(entry.modifiers ?? []), ...(entry.keys ?? [])];
       if (keys.length === 0) {
-        throw new Error(`Action #${index + 1} of ${batch.length} (key) needs \`keys\`, e.g. ["Control", "c"].`);
+        throw new Error(
+          `Action #${index + 1} of ${batch.length} (${entry.action}) needs \`keys\`, e.g. ["Control", "c"].`
+        );
       }
       if (!computer.validatePress) continue;
       try {
@@ -489,7 +547,7 @@ async function runActions(
         // wait for would be an unhandled rejection while the preflight silently "passed".
         await computer.validatePress(keys);
       } catch (error) {
-        throw new Error(`Action #${index + 1} of ${batch.length} (key) would fail: ${errorMessage(error)}`);
+        throw new Error(`Action #${index + 1} of ${batch.length} (${entry.action}) would fail: ${errorMessage(error)}`);
       }
     }
 

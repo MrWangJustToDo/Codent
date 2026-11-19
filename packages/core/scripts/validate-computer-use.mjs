@@ -502,6 +502,78 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
   assert.equal(write.inputSchema.safeParse({ actions: [{ action: "click", x: 1, y: 1 }] }).success, true);
 }
 
+// The three actions the official TanStack tool has and we did not: triple_click, hold_key, repeat.
+{
+  const { computer, calls } = fakeComputer();
+  const { tools } = activate(computer, { settleMs: 0 });
+  const write = tools.get(COMPUTER_ACTION_TOOL);
+
+  calls.length = 0;
+  await write.execute({ action: "triple_click", x: 5, y: 6 }, OPTS);
+  assert.deepEqual(
+    calls.filter(([name]) => name !== "screenshot"),
+    [["click", 5, 6, "left", 3]]
+  );
+
+  // `repeat` is one call, N presses of the same chord.
+  calls.length = 0;
+  const repeated = await write.execute({ action: "key", keys: ["a"], repeat: 3 }, OPTS);
+  assert.deepEqual(
+    calls.filter(([name]) => name !== "screenshot"),
+    [
+      ["press", ["a"]],
+      ["press", ["a"]],
+      ["press", ["a"]],
+    ]
+  );
+  assert.match(repeated.summary, /press a ×3/);
+
+  // `hold_key` holds for `ms` and always releases — including when the run is cancelled mid-hold.
+  calls.length = 0;
+  const held = await write.execute({ action: "hold_key", keys: ["Shift"], ms: 1 }, OPTS);
+  assert.deepEqual(
+    calls.filter(([name]) => name !== "screenshot"),
+    [
+      ["keyDown", "Shift"],
+      ["keyUp", "Shift"],
+    ]
+  );
+  assert.match(held.summary, /hold Shift 1ms/);
+
+  calls.length = 0;
+  const controller = new AbortController();
+  const pending = write.execute(
+    { action: "hold_key", keys: ["Shift"], ms: 50 },
+    { ...OPTS, abortSignal: controller.signal }
+  );
+  controller.abort(new Error("cancelled by the user"));
+  await assert.rejects(() => pending, /cancelled by the user/);
+  assert.deepEqual(
+    calls.filter(([name]) => name !== "screenshot"),
+    [
+      ["keyDown", "Shift"],
+      ["keyUp", "Shift"],
+    ],
+    "a cancelled hold still releases the key"
+  );
+
+  // A hold blocks the call like a wait, so it counts toward the batch's time budget.
+  await assert.rejects(
+    () =>
+      write.execute(
+        {
+          actions: [
+            { action: "hold_key", keys: ["Shift"], ms: 10_000 },
+            { action: "hold_key", keys: ["Shift"], ms: 10_000 },
+            { action: "hold_key", keys: ["Shift"], ms: 10_000 },
+          ],
+        },
+        OPTS
+      ),
+    /This batch waits 30000ms/
+  );
+}
+
 // A batch is validated BEFORE its first step. A backend validates a key name at the point of the
 // call, so a measured batch typed, waited, and only then failed on `Return` — and the model retried
 // the whole sequence. Only the host knows its key table, so the check is its optional
@@ -539,6 +611,12 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
   await assert.rejects(
     () => write.execute({ actions: [{ action: "type", text: "x" }, { action: "key" }] }, OPTS),
     /Action #2 of 2 \(key\) needs `keys`/
+  );
+
+  // `hold_key` is validated the same way: its keys are held, but they are the same backend names.
+  await assert.rejects(
+    () => write.execute({ actions: [{ action: "hold_key", keys: ["Bogus"] }] }, OPTS),
+    /Action #1 of 1 \(hold_key\) would fail: "Bogus" is not a key name/
   );
 
   // The host sees the chord `press` would receive, modifiers included.
