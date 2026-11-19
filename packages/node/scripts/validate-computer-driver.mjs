@@ -322,6 +322,39 @@ function fakeRobot(overrides = {}) {
   assert.deepEqual(await keyNames(["F13"]), ["f13"]);
   assert.deepEqual(await keyNames(["numpad_5"]), ["numpad_5"]);
 
+  // The official TanStack tool normalizes these spellings too (its `keys.ts`): xdotool/OpenAI key
+  // names and side-suffixed modifiers must work as a KEY and as a chord flag.
+  assert.deepEqual(await keyNames(["page_up"]), ["pageup"]);
+  assert.deepEqual(await keyNames(["prior"]), ["pageup"]);
+  assert.deepEqual(await keyNames(["next"]), ["pagedown"]);
+  assert.deepEqual(await keyNames(["kp_enter"]), ["enter"]);
+  assert.deepEqual(await keyNames(["caps_lock"]), ["capslock"]);
+  assert.deepEqual(await keyNames(["control_l"]), ["control"]);
+  calls.length = 0;
+  await computer.press(["control_l", "a"]);
+  assert.deepEqual(calls, [["keyTap", "a", ["control"]]], "a side-suffixed modifier is a chord flag");
+
+  // A single uppercase letter in a MODIFIED chord is the lowercase physical key: the modifier decides
+  // the case. Without a modifier it is left alone (a lone "A" is covered above).
+  for (const [keys, expected] of [
+    [
+      ["Control", "A"],
+      ["keyTap", "a", ["control"]],
+    ],
+    [
+      ["Shift", "A"],
+      ["keyTap", "a", ["shift"]],
+    ],
+    [
+      ["Control", "Shift", "A"],
+      ["keyTap", "a", ["control", "shift"]],
+    ],
+  ]) {
+    calls.length = 0;
+    await computer.press(keys);
+    assert.deepEqual(calls, [expected], `${keys.join("+")} lowers the letter`);
+  }
+
   // An unknown name is refused BEFORE anything is posted, with a message that names a usable
   // spelling — robotjs' own "Invalid key code specified." says nothing about what to send instead.
   calls.length = 0;
