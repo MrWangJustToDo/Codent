@@ -121,8 +121,9 @@ const actionShape = {
     .describe(
       'Modifier keys for THIS action: ["Control"] to Ctrl+click, ["Shift"] to extend a selection, ' +
         '["Control"] with scroll to zoom. Only Control / Shift / Alt / Meta — for any other key use ' +
-        "`key`. On `key` they are attached to the keystroke; in a batch put them on the entry that " +
-        "needs them (entries do not inherit the call's). On macOS Control+click IS the secondary click."
+        "`key`. On `key` they are attached to the keystroke. A batch entry's own value wins; a " +
+        "call-level value applies to every entry that can hold one. On macOS Control+click IS the " +
+        "secondary click."
     ),
   steps: z
     .number()
@@ -151,9 +152,10 @@ export const computerActionSchema = z.object({
         "approval and ONE screenshot at the end, so use it for sequences you are already sure about. " +
         "Set only the fields the action uses — the rest are ignored (a strict provider may require " +
         "them to be present anyway). A call-level `text` / `keys` / `button` applies to EVERY entry " +
-        "that reads it, so set them per entry when two entries need different values. Coordinates " +
-        "and `modifiers` are NOT shared between entries: each entry names its own target, and an " +
-        "entry that needs a modifier carries it."
+        "that reads it, so set them per entry when two entries need different values. A call-level " +
+        "`modifiers` applies to every entry that can hold one (`type`/`wait` ignore it — the result " +
+        "says so); an entry's own value wins. Coordinates are never shared: each entry names its own " +
+        "target."
     ),
 });
 
@@ -451,16 +453,12 @@ async function runActions(
   signal?.throwIfAborted();
   const batch = input.actions;
   if (batch && batch.length > 0) {
-    // A batch entry does NOT inherit the call's `modifiers`. It used to, and a single `type` entry
-    // then failed the whole batch (10 of 13 errors in a measured session: the model wrote
-    // `modifiers` on the call, every entry inherited it, and `type` refuses it). Refusing the shape
-    // outright says where the modifiers belong instead of silently applying them to some entries.
-    if (input.modifiers !== undefined) {
-      throw new Error(
-        "Put `modifiers` on the action that needs them: a batch entry does not inherit the call's " +
-          "modifiers (one `type` entry would otherwise fail the whole batch)."
-      );
-    }
+    // A call-level `modifiers` belongs to the gesture the model is describing, so it applies to every
+    // entry that can hold one. It used to be inherited by EVERY entry, which failed the batch as soon
+    // as one `type` entry refused it (10 of 13 errors in a measured session); refusing the shape
+    // outright then turned the natural `{modifiers, actions}` call into a hard error the model
+    // repeated. `type`/`wait` cannot hold modifiers, so they run plain and the summary says so.
+    const callModifiers = input.modifiers ?? [];
 
     // The tool has one static timeout, so a batch of maximum-length waits would be cut off from the
     // middle (leaving whatever it pressed). Refuse it up front with a message the model can act on.
@@ -512,7 +510,17 @@ async function runActions(
         throw new Error(`Action #${index + 1} of ${batch.length} (${action}) failed${done}: ${errorMessage(error)}`);
       }
     }
-    return summaries.join(" → ");
+    const ignored = batch.filter(
+      (entry) => entry.modifiers === undefined && (entry.action === "type" || entry.action === "wait")
+    ).length;
+    return (
+      summaries.join(" → ") +
+      (callModifiers.length > 0 && ignored > 0
+        ? ` (${callModifiers.join("+")} ignored on ${ignored} ${
+            ignored === 1 ? "entry" : "entries"
+          } that cannot hold modifiers)`
+        : "")
+    );
   }
   return runWithModifiers(computer, input, held, signal);
 }
@@ -520,21 +528,26 @@ async function runActions(
 /**
  * A batch entry inherits the payload fields it omitted.
  *
- * `text` / `keys` / `button` ARE inherited, and an inherited value applies to EVERY entry that reads
- * it (two `type` entries with one call-level `text` type it twice). The asymmetry with `modifiers` is
- * about failure modes, not about which one is "more per-entry": a wrongly inherited modifier is an
- * ERROR on every entry — a `type` entry refuses modifiers, so one call-level `modifiers` failed the
- * whole batch (10 of 13 errors in a measured session) — while a wrongly inherited payload is only a
- * repeated value, visible in the screenshot that comes back. Refusing a call-level `text` would
- * recreate the `"type" needs text` failure this inheritance exists to fix.
- *
- * `modifiers` is refused at the call level and coordinates are never inherited — each entry points at
- * its own place, and pointing a second entry at the first one's target is never what was meant.
+ * `text` / `keys` / `button` are inherited, and an inherited value applies to EVERY entry that reads
+ * it (two `type` entries with one call-level `text` type it twice). A call-level `modifiers` applies
+ * to every entry that can HOLD one: `type` and `wait` cannot, so they run plain and the call's
+ * summary names what was ignored, instead of failing the batch (a measured session lost 10 of 13
+ * calls to a call-level modifier meeting a `type` entry). An entry's own `modifiers` wins, so a batch
+ * can mix a Ctrl+click with a plain one. Coordinates are never inherited — each entry points at its
+ * own place, and pointing a second entry at the first one's target is never what was meant.
  */
 function withInheritedDefaults(entry: ComputerActionEntry, outer: ComputerActionInput): ComputerActionEntry {
   const merged: ComputerActionEntry = { ...entry };
   if (merged.button === undefined && outer.button !== undefined) merged.button = outer.button;
   if (merged.text === undefined && outer.text !== undefined) merged.text = outer.text;
   if (merged.keys === undefined && outer.keys !== undefined) merged.keys = outer.keys;
+  if (
+    merged.modifiers === undefined &&
+    outer.modifiers !== undefined &&
+    merged.action !== "type" &&
+    merged.action !== "wait"
+  ) {
+    merged.modifiers = outer.modifiers;
+  }
   return merged;
 }

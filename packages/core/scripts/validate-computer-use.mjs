@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- one conformance suite for the computer-use contract (two-tool split, screenshot projection/zoom, action schema + dispatch, batch inheritance/preflight, screenshot budget). The sections share the fake driver and extension harness; splitting them would duplicate that fixture and make the cases order-dependent. */
 /**
  * Computer use: the extension is provider-agnostic (tool call + vision) and its boundary is
  * `CoreEnv.computer`, so the whole contract is testable with a fake driver — no display, no native
@@ -415,11 +416,60 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
   );
   assert.equal(output.summary, 'type "search" → press Enter → wait 1ms — screen 1280x800 · pointer 10,20');
 
-  // A call-level `modifiers` on a BATCH is refused: inheritance used to apply it to every entry, so a
-  // single `type` in the batch failed the whole call (10 of 13 errors in a measured session).
-  await assert.rejects(
-    () => write.execute({ modifiers: ["Shift"], actions: [{ action: "click", x: 1, y: 1 }] }, OPTS),
-    /Put `modifiers` on the action that needs them/
+  // A call-level `modifiers` on a BATCH applies to every entry that can hold one. It used to be
+  // inherited by every entry (one `type` then failed the batch — 10 of 13 errors in a measured
+  // session), and refusing the shape turned the natural `{modifiers, actions}` call into an error the
+  // model repeated.
+  calls.length = 0;
+  const shifted = await write.execute(
+    {
+      modifiers: ["Shift"],
+      actions: [
+        { action: "click", x: 1, y: 1 },
+        { action: "click", x: 2, y: 2 },
+      ],
+    },
+    OPTS
+  );
+  assert.deepEqual(
+    calls.filter(([name]) => name === "keyDown").map(([, key]) => key),
+    ["Shift", "Shift"],
+    "every click holds the call-level modifier"
+  );
+  assert.match(shifted.summary, /Shift\+click 1,1 left → Shift\+click 2,2 left/);
+
+  // `type`/`wait` cannot hold a modifier: they run plain and the summary says what was ignored — the
+  // batch as a whole still runs.
+  calls.length = 0;
+  const mixed = await write.execute(
+    {
+      modifiers: ["Control"],
+      actions: [
+        { action: "type", text: "hi" },
+        { action: "click", x: 3, y: 4 },
+        { action: "wait", ms: 1 },
+      ],
+    },
+    OPTS
+  );
+  assert.deepEqual(
+    calls.filter(([name]) => name !== "screenshot"),
+    [
+      ["type", "hi"],
+      ["keyDown", "Control"],
+      ["click", 3, 4, "left", 1],
+      ["keyUp", "Control"],
+    ]
+  );
+  assert.match(mixed.summary, /Control ignored on 2 entries that cannot hold modifiers/);
+
+  // An entry's own modifiers win over the call-level ones.
+  calls.length = 0;
+  await write.execute({ modifiers: ["Shift"], actions: [{ action: "click", x: 1, y: 1, modifiers: ["Alt"] }] }, OPTS);
+  assert.deepEqual(
+    calls.filter(([name]) => name === "keyDown").map(([, key]) => key),
+    ["Alt"],
+    "the entry's own modifiers win"
   );
 
   // An entry that carries its own modifiers still works (the pointer gesture holds them).

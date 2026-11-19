@@ -162,7 +162,8 @@ export function createComputerUseExtension(
           `clicking coordinates when you can. ` +
           `Use \`modifiers\` for a modified gesture (Ctrl+click, Shift+click, Ctrl+scroll) and ` +
           `\`actions\` to batch a sure sequence into ONE call — a batch is one approval and one ` +
-          `screenshot. In a batch, put \`modifiers\` on the entry that needs them. ` +
+          `screenshot. A call-level \`modifiers\` applies to every entry that can hold one; put it ` +
+          `on the entry when only that entry needs it. ` +
           `If a drag does not register, retry it with \`steps\` so the pointer travels. ` +
           `Typing is injected, not verified: the screenshot that comes back shows whether it landed. ` +
           `If a name matches more than one target (a group chat and a contact called the same thing), ` +
