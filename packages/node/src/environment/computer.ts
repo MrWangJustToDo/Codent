@@ -127,6 +127,10 @@ const ROBOT_KEYS: Record<string, string> = {
   option: "alt",
   super: "command",
   win: "command",
+  // `KeyboardEvent.key` spells this one `NumLock`, and the backend's name lives in the `numpad_`
+  // family — without the alias it was refused as an unknown name, since "numlock" is neither a
+  // one-character key nor a table entry.
+  numlock: "numpad_lock",
 };
 
 function toRobotKey(key: string) {
