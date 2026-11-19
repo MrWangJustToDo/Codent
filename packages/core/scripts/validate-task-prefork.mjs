@@ -244,7 +244,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   // guard orphans a healthy one (the tool phase then spawns a second subagent for the same call id).
   const finish = /onFinish: async \(\) => \{([\s\S]*?)\n\s{4}\}/.exec(src);
   assert.ok(finish, "onFinish is declared");
-  const guard = /if \(!messages \|\| hasPendingRunContinuation\(messages\)\) return;/.exec(finish[1]);
+  const guard = /if \(!messages \|\| hasPendingRunContinuation\(messages(?:, [^)]*)?\)\) return;/.exec(finish[1]);
   assert.ok(
     guard,
     "onFinish asks hasPendingRunContinuation before discarding — an approval / client-tool wait ends " +

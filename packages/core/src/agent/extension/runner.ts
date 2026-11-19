@@ -102,7 +102,8 @@ export interface ExtensionRunnerOptions {
   onRegisterToolOutputDecorator?: (
     toolName: string,
     decorator: ToModelOutputDecorator,
-    ownerId: string
+    ownerId: string,
+    options?: { followIncumbent?: boolean }
   ) => (() => void) | void;
   /** Fallback cleanup for a host whose registration callback returns no disposer. */
   onRemoveToolOutputDecoratorOwner?: (ownerId: string) => void;
@@ -360,10 +361,10 @@ export class ExtensionRunner {
           );
         }
       },
-      registerToolOutputDecorator: (extensionId, toolName, decorator) => {
+      registerToolOutputDecorator: (extensionId, toolName, decorator, options) => {
         const ownerId = scopeExtensionOwnerId(this.options.agentId ?? "standalone", extensionId);
         return (
-          this.options.onRegisterToolOutputDecorator?.(toolName, decorator, ownerId) ??
+          this.options.onRegisterToolOutputDecorator?.(toolName, decorator, ownerId, options) ??
           (() => this.options.onRemoveToolOutputDecoratorOwner?.(ownerId))
         );
       },
@@ -1076,10 +1077,13 @@ export class ExtensionRunner {
         // back to `inactive` left "lease live + tools registered + panel says disabled" (the next
         // enable then stacked a third copy of every hook). Set it even when deactivate throws: the
         // agent is released either way, and leaving `active` blocked the retry path.
-        if (instance.context === incarnation) instance.state = "inactive";
-        // A disabled/rolled-back extension has no live reason to report; an `inactive` activation
-        // sets this again AFTER the rollback teardown (see `activateInstance`).
-        instance.inactiveReason = undefined;
+        if (instance.context === incarnation) {
+          instance.state = "inactive";
+          // A disabled/rolled-back extension has no live reason to report; an `inactive` activation
+          // sets this again AFTER the rollback teardown (see `activateInstance`). Same identity guard
+          // as the state write: a newer incarnation's reason must not be erased by this teardown.
+          instance.inactiveReason = undefined;
+        }
       }
     }
   }
@@ -1487,11 +1491,16 @@ export class ExtensionRunner {
     // leaving the panel and the model looking at a still-active extension. Record the transition
     // either way and report the failure in the returned message.
     let teardownError: unknown;
+    // Captured before the await: `destroyExtension` resolves the incarnation at call time, and this
+    // write-back happens after it. A re-enable that completed in between owns the instance now.
+    const incarnation = instance.context;
     try {
       await this.destroyExtension(instance);
     } catch (error) {
       teardownError = error;
-      instance.state = "inactive";
+      // Same identity rule as the teardown write-back inside `destroyExtension`: a newer incarnation
+      // must not be flipped to `inactive` by an older teardown's failure.
+      if (instance.context === incarnation) instance.state = "inactive";
       this.emitExtensionEvent("agent:extension-error", {
         extensionId: instance.api.id,
         phase: "teardown",

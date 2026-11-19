@@ -15,7 +15,7 @@
 import { TOOL_CANCELLED_MESSAGE } from "../../runtime-types/abort.js";
 import { TRUNCATED_TOOL_CALL_MESSAGE } from "../../runtime-types/tool-truncation.js";
 import { tryParseToolArguments } from "../../utils/parse-tool-arguments.js";
-import { BUILTIN_TOOL_NAMES } from "../tools/catalog/tool-names.js";
+import { BUILTIN_TOOL_NAMES, isClientToolName, type ClientToolClassifier } from "../tools/catalog/tool-names.js";
 
 import { isSettledToolCallPart, isToolCallPart } from "./message-parts.js";
 
@@ -341,6 +341,14 @@ export interface SettleToolCallsOptions {
   /** Whether a tool's schema rejects `{}` (so an empty object is a truncated payload). */
   requiresArguments?: ToolRequiresArguments;
   /**
+   * Whether the HOST answers this tool (a client tool), by identity rather than name.
+   *
+   * Must match the pump's classifier: a SERVER tool that shadows `ask_user` is ordinary server work,
+   * so preserving its call as "an answerable question" left it on the wire for the NEXT turn to
+   * execute — the abandoned-turn arguments the abort path exists to settle.
+   */
+  isClientTool?: ClientToolClassifier;
+  /**
    * Called once per call this settle pass actually settles, in pass order, with the part as it was
    * found. This is the ONLY correct way to report what was settled — see
    * {@link CancelToolCallOptions.onSettled}.
@@ -377,6 +385,16 @@ function isUnsettledToolCall(part: ToolCallPart): boolean {
 }
 
 /**
+ * A pending `ask_user` the HOST can still answer — the one wait a settle pass must not consume.
+ *
+ * Name first (cheap), then identity: only the seeded implementation is a question, so a SERVER tool
+ * that shadows `ask_user` is settled like any other abandoned call.
+ */
+function isAnswerableAskUser(part: ToolCallPart, isClientTool: ClientToolClassifier): boolean {
+  return part.name === BUILTIN_TOOL_NAMES.askUser && hasValidToolArguments(part) && isClientTool(part.name);
+}
+
+/**
  * Settle every remaining unsettled call with the interruption marker.
  *
  * The run ended because the response failed (stall / terminal-less return); a call that was
@@ -386,13 +404,12 @@ export function settleInterruptedRunToolCalls(
   messages: UIMessage[],
   message: string = TOOL_RUN_ENDED_MESSAGE,
   onSettled?: (part: ToolCallPart) => void,
-  preservePendingAskUser = true
+  preservePendingAskUser = true,
+  isClientTool: ClientToolClassifier = isClientToolName
 ): UIMessage[] {
   return settleToolCallsAs(
     messages,
-    (part) =>
-      isUnsettledToolCall(part) &&
-      !(preservePendingAskUser && part.name === BUILTIN_TOOL_NAMES.askUser && hasValidToolArguments(part)),
+    (part) => isUnsettledToolCall(part) && !(preservePendingAskUser && isAnswerableAskUser(part, isClientTool)),
     message,
     interruptedToolOutput,
     onSettled
@@ -444,19 +461,19 @@ function settlePasses(
       next,
       options.reason ?? TOOL_RUN_ENDED_MESSAGE,
       onSettled ? (part) => onSettled(part, "truncated") : undefined,
-      options.preservePendingAskUser !== false
+      options.preservePendingAskUser !== false,
+      options.isClientTool
     );
   }
   const reportCancelled = onSettled ? (part: ToolCallPart) => onSettled(part, "cancelled") : undefined;
+  const isClientTool = options.isClientTool ?? isClientToolName;
   next = cancelIncompleteToolCalls(next, reason, reportCancelled, options.requiresArguments);
   if (options.includeInFlight !== false) {
     next = cancelInFlightToolCalls(
       next,
       reason,
       options.preservePendingAskUser
-        ? (part) =>
-            isInFlightToolCall(part, options.requiresArguments) &&
-            !(part.name === BUILTIN_TOOL_NAMES.askUser && hasValidToolArguments(part))
+        ? (part) => isInFlightToolCall(part, options.requiresArguments) && !isAnswerableAskUser(part, isClientTool)
         : (part) => isInFlightToolCall(part, options.requiresArguments),
       reportCancelled
     );
@@ -588,13 +605,15 @@ export function describeToolCallBatch(
 export function settleInterruptedToolCalls(
   messages: UIMessage[],
   reason: string = INTERRUPTED_RUN_MESSAGE,
-  requiresArguments?: ToolRequiresArguments
+  requiresArguments?: ToolRequiresArguments,
+  isClientTool?: ClientToolClassifier
 ): UIMessage[] {
   return settleToolCalls(messages, {
     reason,
     includeInFlight: true,
     preservePendingAskUser: true,
     ...(requiresArguments ? { requiresArguments } : {}),
+    ...(isClientTool ? { isClientTool } : {}),
   });
 }
 

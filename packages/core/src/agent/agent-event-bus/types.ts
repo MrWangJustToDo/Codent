@@ -245,6 +245,10 @@ export interface AgentEventBus {
    * Subscribe to one observer event. Retained values replay immediately unless
    * `options.replay` is `false` (for callers that reconcile the initial value
    * themselves per-subscription).
+   *
+   * `includeParents` widens the RETAINED replay to an ancestor provider only — live delivery is
+   * unaffected, because dispatch travels child → ancestors (a child scope never receives a later
+   * parent frame).
    */
   on<T extends AgentEventType>(
     type: T,

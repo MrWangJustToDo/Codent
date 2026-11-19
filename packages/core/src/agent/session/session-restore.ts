@@ -14,6 +14,7 @@ import {
   cancelInterruptedBackgroundCommands,
   runningBackgroundCommandLogPaths,
 } from "../tools/builtin/shell/run-command-tool.js";
+import { clientToolClassifier } from "../tools/catalog/tool-names.js";
 
 import type { ResolvedCoreEnv } from "../../env";
 import type { SessionHost, SessionPersistInput } from "../../runtime-types/session-host.js";
@@ -209,10 +210,13 @@ export async function restoreManagedSession(
   const requiresArguments = host.getToolInputSchema
     ? (toolName: string) => toolSchemaRequiresArguments(host.getToolInputSchema?.(toolName))
     : undefined;
+  // `clientToolClassifier` calls through `host` (a prototype method reads `this.toolFacet`) and falls
+  // back to the static table when an older host exposes none.
+  const isClientTool = clientToolClassifier(host);
   const uiMessages =
     options.repairRuntime === false
       ? taskMessages
-      : settleInterruptedToolCalls(taskMessages, undefined, requiresArguments);
+      : settleInterruptedToolCalls(taskMessages, undefined, requiresArguments, isClientTool);
   // The repairs happen after `readSessionForRestore` wrote the canonical form, and `tracker.reset`
   // below is given the REPAIRED array — so without this write the settled transcript would only
   // ever exist in memory (the tracker would consider it persisted and every later save a no-op),

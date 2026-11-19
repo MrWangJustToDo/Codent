@@ -7,6 +7,7 @@
  */
 
 import { resolveApprovalRequirement } from "../agent/approval/approval-requirement.js";
+import { CLIENT_TOOL_NAMES } from "../agent/tools/catalog/tool-names.js";
 import { getToolMetadata } from "../agent/tools/runtime/define-tool.js";
 
 import type { AgentToolService } from "./services/agent-tool-service.js";
@@ -42,7 +43,10 @@ export class ToolFacet {
     const service = this.host.getToolService();
     const tools = this.host.getTools();
     service.useTools(tools);
-    return service.resolve(toolName)?.toModelOutput ?? getToolMetadata(tools[toolName])?.toModelOutput;
+    // The registry is authoritative: it already returns the LIVE entry's `toModelOutput`. A record
+    // fallback here could only fire when the registry resolved a DIFFERENT object than the record,
+    // which is exactly the divergence that applying a foreign tool's handler would mask.
+    return service.resolve(toolName)?.toModelOutput;
   }
 
   /**
@@ -74,6 +78,29 @@ export class ToolFacet {
     return service.isIncumbent(toolName) || !service.resolve(toolName);
   }
 
+  /**
+   * Whether a HOST answers this tool (a client tool) rather than the server.
+   *
+   * Inside the client-tool name gate, the live descriptor's `clientSide` is the answer — so an
+   * extension's SERVER tool that shadows `ask_user` is not driven as a host-answered call (the pump
+   * would otherwise park on a question nobody asked, and `addToolResult` would accept a host result
+   * for a server call). A name nothing is registered under answers from the static table, which is
+   * the embedder-injected client tool boundary.
+   */
+  isClientTool(toolName: string): boolean {
+    // Only a name in the static client set can be a host-answered call. Returning early for every
+    // other name keeps this predicate cheap — it runs per tool part on every status/interaction scan.
+    if (!CLIENT_TOOL_NAMES.has(toolName)) return false;
+    const service = this.host.getToolService();
+    service.useTools(this.host.getTools());
+    // A name NOTHING is registered under is the embedder boundary: the static table answers.
+    // A registered tool answers by identity — its own `clientSide`, plus the built-in table only
+    // when it IS the incumbent — so an extension's server tool that shadows `ask_user` (and declares
+    // no `present`) is NOT read as a host-answered call.
+    if (!service.resolve(toolName)) return true;
+    return service.resolvePresentation(toolName)?.clientSide === true;
+  }
+
   getToolPresentation(toolName: string): ToolPresentation | undefined {
     const service = this.host.getToolService();
     const tools = this.host.getTools();
@@ -86,9 +113,10 @@ export class ToolFacet {
   registerToolOutputDecorator(
     toolName: string,
     fn: Parameters<AgentToolService["registerDecorator"]>[1],
-    ownerId: string
+    ownerId: string,
+    options?: { followIncumbent?: boolean }
   ): () => void {
-    const dispose = this.host.getToolService().registerDecorator(toolName, fn, ownerId);
+    const dispose = this.host.getToolService().registerDecorator(toolName, fn, ownerId, options);
     this.host.getToolCompactCache().clear();
     return () => {
       dispose();

@@ -184,6 +184,10 @@ export class CompactionController {
   finish(lease: CompactionLease, outcome: CompactionOutcome): boolean {
     if (!this.isCurrent(lease)) return false;
     if (outcome.status === "completed") {
+      // A successful compaction of ANY kind invalidates the retry floor a failed auto attempt armed
+      // (see `clearAutoRetryFloor`). Owned here so a new kind cannot forget it, and applied before the
+      // status write: a throwing host writer must not leave the floor armed after a real checkpoint.
+      this.clearAutoRetryFloor();
       if (lease.kind === "reactive") {
         this.deps.emitEvent("compaction:reactive-complete", {
           originalCount: outcome.originalCount,

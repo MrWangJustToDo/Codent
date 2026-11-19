@@ -12,7 +12,7 @@
 import { approvalsToResumeMap } from "../../agent/approval/tool-approval-table.js";
 import { hasValidToolArguments } from "../../agent/stream/incomplete-tool-calls.js";
 import { isSettledToolCallPart, isToolCallPart } from "../../agent/stream/message-parts.js";
-import { CLIENT_TOOL_NAMES } from "../../agent/tools/catalog/tool-names.js";
+import { clientToolClassifier, type ClientToolClassifier } from "../../agent/tools/catalog/tool-names.js";
 import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
 
 import type { ToolApprovalRecord } from "../../agent/persistence/types.js";
@@ -30,6 +30,14 @@ export interface ApprovalResumeMiddlewareDeps {
    */
   getMessages: () => readonly UIMessage[];
   /**
+   * Whether the HOST answers this tool (a client tool), by identity rather than name.
+   *
+   * Optional: a standalone harness falls back to the static table. The pump classifies by identity,
+   * so this side must agree — otherwise a SERVER tool shadowing `ask_user` is skipped here (never
+   * resumed) while the pump treats it as deferred work and keeps pumping.
+   */
+  isClientTool?: ClientToolClassifier;
+  /**
    * Timeline sink for the diagnostic `tool:resume` row (held siblings re-added to the batch).
    * Optional so a standalone harness (validator) can construct the middleware without a bus.
    */
@@ -37,6 +45,7 @@ export interface ApprovalResumeMiddlewareDeps {
 }
 
 export function createApprovalResumeMiddleware(deps: ApprovalResumeMiddlewareDeps): ChatMiddleware<ToolRunContext> {
+  const isClientTool = clientToolClassifier(deps);
   return defineMiddleware("observe", {
     name: "approval-resume",
     onConfig: async (_ctx, config) => {
@@ -49,7 +58,7 @@ export function createApprovalResumeMiddleware(deps: ApprovalResumeMiddlewareDep
       // every plain sibling in the batch; only entries present in the map are still resumed. Add
       // the held siblings so answering the gate releases the WHOLE batch, as the engine contract
       // promises — otherwise the plain call is never run and its row spins until turn end.
-      const resumed = addHeldSiblings(approvals, deps.getMessages());
+      const resumed = addHeldSiblings(approvals, deps.getMessages(), isClientTool);
       if (resumed.length > 0) deps.emitEvent?.("tool:resume", { calls: resumed, count: resumed.length });
 
       return {
@@ -73,7 +82,8 @@ export function createApprovalResumeMiddleware(deps: ApprovalResumeMiddlewareDep
  */
 function addHeldSiblings(
   approvals: Map<string, ToolApprovalResolution>,
-  messages: readonly UIMessage[]
+  messages: readonly UIMessage[],
+  isClientTool: ClientToolClassifier
 ): Array<{ id: string; name?: string }> {
   const resumed: Array<{ id: string; name?: string }> = [];
   for (const message of messages) {
@@ -93,7 +103,7 @@ function addHeldSiblings(
       if (part.approval?.needsApproval === true) continue;
       if (part.output !== undefined || isSettledToolCallPart(part)) continue;
       if (part.state !== "input-complete" || !hasValidToolArguments(part)) continue;
-      if (CLIENT_TOOL_NAMES.has(part.name)) continue;
+      if (isClientTool(part.name)) continue;
       if (approvals.has(part.id)) continue;
       approvals.set(part.id, true);
       resumed.push(part.name ? { id: part.id, name: part.name } : { id: part.id });

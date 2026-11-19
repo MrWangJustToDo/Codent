@@ -116,6 +116,11 @@ export interface SessionHost {
   getToolCompactCache: () => ToolCompactCache;
   /** Input schema of a registered tool (restore classifies `{}` against it). */
   getToolInputSchema?: (toolName: string) => unknown;
+  /**
+   * Whether the HOST answers this tool (`ask_user`), by identity. Optional for older hosts; the
+   * restore settle falls back to the static client-tool table when absent.
+   */
+  isClientTool?: (toolName: string) => boolean;
   resolveTextAdapter?: () => Promise<TextAdapterConfig | null>;
   emitEvent: EmitAgentTelemetryFn;
   /** Update the agent's display name (broadcast via the state channel). */

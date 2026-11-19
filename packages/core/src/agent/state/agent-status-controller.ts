@@ -21,6 +21,7 @@ import {
   needsAgentResponseAfterTools,
   needsToolPhaseContinue,
 } from "../stream/tool-phase-utils.js";
+import { clientToolClassifier, type ClientToolClassifier } from "../tools/catalog/tool-names.js";
 
 import { whenClearForReconcilePolicy, type AgentRunOutcome, type StatusReconcilePolicy } from "./agent-run-outcome.js";
 
@@ -46,6 +47,14 @@ export interface AgentStatusControllerDeps {
   getError: () => string;
   setError: (error: string) => void;
   setPendingApprovalCount: (count: number) => void;
+  /**
+   * Whether the HOST answers this tool (a client tool), by identity rather than by name.
+   *
+   * Optional: a double with no tool service falls back to the static client-tool table. Passing it
+   * matters because a SERVER tool that shadows `ask_user` must not be named as the wait the status
+   * is parked on.
+   */
+  isClientTool?: (toolName: string) => boolean;
   /**
    * The live transcript.
    *
@@ -146,7 +155,11 @@ export class AgentStatusController {
 
   constructor(deps: AgentStatusControllerDeps) {
     this.deps = deps;
+    this.clientToolClassifier = clientToolClassifier(deps);
   }
+
+  /** The client-tool classifier, bound once: the host's identity answer, else the static table. */
+  private readonly clientToolClassifier: ClientToolClassifier;
 
   /**
    * Apply one state event. Production passes the agent's single transition writer; a legacy
@@ -168,7 +181,7 @@ export class AgentStatusController {
     // Parked on the user: whichever interaction was asked FIRST is still unanswered, so starting a
     // pump would only re-ask it. (The old count-only gate missed an unanswered `ask_user` that was
     // not first, and the `awaiting_user` special case only covered one spelling of the same state.)
-    if (firstPendingInteraction(messages)) return;
+    if (firstPendingInteraction(messages, this.clientToolClassifier)) return;
 
     const status = this.deps.getStatus();
     // Anything that is not actively working may start a pump: a settled verdict, a parked wait and
@@ -279,7 +292,7 @@ export class AgentStatusController {
     // approval was just requested", but a question asked EARLIER keeps its status until answered —
     // otherwise the status flips every time either side re-asserts itself.
     const messages = this.deps.getMessages?.();
-    const first = messages ? firstPendingInteraction(messages) : undefined;
+    const first = messages ? firstPendingInteraction(messages, this.clientToolClassifier) : undefined;
     if (first === undefined || first.kind === "approval") {
       if (this.deps.getStatus() !== "waiting") {
         this.dispatch({ type: "pause", wait: "approval" });
@@ -314,7 +327,7 @@ export class AgentStatusController {
     // Derive from the transcript first: a batch can hold both an approval and a question, and the
     // host answers them in the order they were asked, so the status names whichever is FIRST.
     const messages = this.deps.getMessages?.();
-    const first = messages ? firstPendingInteraction(messages) : undefined;
+    const first = messages ? firstPendingInteraction(messages, this.clientToolClassifier) : undefined;
     if (first) {
       // Re-asserting the same status every time the host re-dispatches is cheap: `setStatus` emits
       // `agent:status` only on a real transition, and `emitStateChange` dedupes its frame by
@@ -366,7 +379,7 @@ export class AgentStatusController {
     const matches = kind === "question" ? status === "awaiting_user" : isParkedStatus(status);
     if (!matches) return;
     const messages = this.deps.getMessages?.() ?? [];
-    if (firstPendingInteraction(messages)) return;
+    if (firstPendingInteraction(messages, this.clientToolClassifier)) return;
     const outcome = this.deps.getAgentState?.()?.outcome;
     this.dispatch({
       type: "settle",
@@ -381,7 +394,7 @@ export class AgentStatusController {
     this.deps.setPendingApprovalCount(countPendingToolApprovals(messages));
 
     // Conversation order: the status describes the interaction the host is asking FIRST.
-    const first = firstPendingInteraction(messages);
+    const first = firstPendingInteraction(messages, this.clientToolClassifier);
     if (first?.kind === "approval") {
       this.dispatch({ type: "pause", wait: "approval" });
       return;
@@ -413,8 +426,8 @@ export class AgentStatusController {
 
     const status = this.deps.getStatus();
     if (isParkedStatus(status)) return;
-    if (needsToolPhaseContinue(messages)) return;
-    if (needsAgentResponseAfterTools(messages)) return;
+    if (needsToolPhaseContinue(messages, this.clientToolClassifier)) return;
+    if (needsAgentResponseAfterTools(messages, this.clientToolClassifier)) return;
     if (isTerminalStatus(status)) return;
 
     if (isBusyStatus(status)) {
@@ -437,7 +450,7 @@ export class AgentStatusController {
    * queued (released when the question is answered) and matches the interaction snapshot.
    */
   syncPendingQuestionWait(messages: UIMessage[]): void {
-    if (firstPendingInteraction(messages)?.kind !== "clientTool") return;
+    if (firstPendingInteraction(messages, this.clientToolClassifier)?.kind !== "clientTool") return;
     if (this.deps.getStatus() === "awaiting_user") return;
     this.dispatch({ type: "pause", wait: "question" });
   }

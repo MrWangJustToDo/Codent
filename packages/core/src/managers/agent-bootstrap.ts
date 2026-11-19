@@ -302,8 +302,8 @@ export class AgentBootstrap {
       // Live run/session facts and one-shot model access for extensions (`ctx.signal`,
       // `ctx.getMessages()`, `ctx.llm`). A function because every fact is per run.
       getRuntime: () => managed.getExtensionRuntime(),
-      onRegisterToolOutputDecorator: (name, decorator, ownerId) =>
-        managed.registerToolOutputDecorator(name, decorator, ownerId),
+      onRegisterToolOutputDecorator: (name, decorator, ownerId, options) =>
+        managed.registerToolOutputDecorator(name, decorator, ownerId, options),
       onRemoveToolOutputDecoratorOwner: (ownerId) => managed.removeToolOutputDecoratorOwner(ownerId),
       onToolRegistrationBatchComplete: publishTools,
       onToolRegistrationComplete: publishTools,

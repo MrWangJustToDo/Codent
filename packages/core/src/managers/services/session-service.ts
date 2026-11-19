@@ -1,3 +1,7 @@
+/* eslint-disable max-lines -- Persistence orchestration: write coalescing, lock handover and the
+   restore/adopt transaction are one ordered protocol over the same SessionStore, so a split would
+   separate a decision from the state it protects. The next extraction seam is the restore/adopt
+   path, not the write path. */
 /**
  * SessionService — session persistence.
  * `uiMessages` are written only when callers pass them (app `useChat` layer).

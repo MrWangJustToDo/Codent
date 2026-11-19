@@ -325,16 +325,27 @@ export class AgentManager {
     // instead of leaving cleanup to a microtask the host may never reach before process.exit.
     if (this.buildsInFlight > 0) {
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, BUILD_WAIT_TIMEOUT_MS);
+        // Settle once: the build finishing and the timeout race, and the loser must also drop its
+        // closure from `buildWaiters` (a timed-out build left one there for the manager's lifetime).
+        let settled = false;
+        const settle = (): void => {
+          if (settled) return;
+          settled = true;
+          const index = this.buildWaiters.indexOf(waiter);
+          if (index >= 0) this.buildWaiters.splice(index, 1);
+          resolve();
+        };
+        function waiter(): void {
+          clearTimeout(timer);
+          settle();
+        }
+        const timer = setTimeout(settle, BUILD_WAIT_TIMEOUT_MS);
         // A disposed host is trying to exit: the bound must not keep the loop alive on its own.
         // Cast: core compiles with DOM lib where `setTimeout` returns `number`.
         (timer as { unref?: () => void }).unref?.();
-        // A build that does finish clears the timer; a timeout leaves the waiter in place, and a
-        // second `resolve` is a no-op.
-        this.buildWaiters.push(() => {
-          clearTimeout(timer);
-          resolve();
-        });
+        // A build that finishes clears the timer and settles; a timeout settles and removes its own
+        // waiter, so neither path leaves a stale closure behind.
+        this.buildWaiters.push(waiter);
       });
     }
     // Each stage runs even when an earlier one throws. A stage that FAILS leaves the manager

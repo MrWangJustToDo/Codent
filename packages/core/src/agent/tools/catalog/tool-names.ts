@@ -83,19 +83,41 @@ export const BUILTIN_TOOL_NAMES = {
 } as const;
 
 /**
- * Tools the CLIENT answers — the UI supplies the result instead of a server `execute`. A name
- * table over the built-ins, kept beside them so the pump predicate can recognize a client tool
- * instead of treating it as a server tool waiting to execute (`stream/tool-phase-utils.ts`).
+ * Tools the CLIENT answers — the UI supplies the result instead of a server `execute`.
  *
- * Deliberately a static set: the alternative is threading the registry's `present.clientSide`
- * flags into the pump predicate, which only matters for a host that injects its own client tool
- * programmatically (`createManagedAgent({ subagentTools })`). Such a tool has an `execute` the
- * server cannot run, so `hasDeferredToolExecution` reads its unanswered call as pending and the
- * tool phase does not converge. No shipped host does that — the hosted client tool is `ask_user`,
- * which is here — so this is an embedder boundary, not a bug to paper over with a permissive
- * "no output ⇒ done" rule (that would also swallow a genuinely pending server tool).
+ * This set is BOTH the default classifier and the admission gate: only a name in it can be a
+ * host-answered call. Inside the gate the live tool's `present.clientSide` decides, resolved per
+ * agent by `ToolFacet.isClientTool`; the pump predicates take that classifier as an argument and
+ * fall back to this set. The gate is what keeps the predicate cheap on every tool part, and the
+ * identity answer is what tells the seeded `ask_user` from an extension's SERVER tool shadowing the
+ * same name — which would otherwise be read as "the host owes an answer" (the pump parks on a
+ * question nobody asked, and `addToolResult` accepts a host result for a call the server executed).
+ * A host-injected client tool under a name outside this set is therefore not supported; it would be
+ * treated as a server tool.
+ *
+ * No shipped host injects its own client tool programmatically (`createManagedAgent({
+ * subagentTools })`); the hosted client tool is `ask_user`, which is here.
  */
 export const CLIENT_TOOL_NAMES: ReadonlySet<string> = new Set([BUILTIN_TOOL_NAMES.askUser]);
+
+/** Classifies a tool call by who answers it: the host (`true`) or the server (`false`). */
+export type ClientToolClassifier = (toolName: string) => boolean;
+
+/** The default classifier: the built-in client-tool names, name-based. */
+export const isClientToolName: ClientToolClassifier = (toolName) => CLIENT_TOOL_NAMES.has(toolName);
+
+/**
+ * Bind a host's client-tool classifier.
+ *
+ * The ONE spelling of "the host's identity answer, else the static table": the pump, the status
+ * controller, the settle passes, approval-resume and session restore all ask the same question, and
+ * a second spelling is how their answers drift apart. Calls through the host because a prototype
+ * method (`ManagedAgent.isClientTool`) reads `this`.
+ */
+export function clientToolClassifier(host?: { isClientTool?: (toolName: string) => boolean }): ClientToolClassifier {
+  if (!host?.isClientTool) return isClientToolName;
+  return (toolName) => host.isClientTool!(toolName);
+}
 
 /** The wire name of a built-in tool. */
 export type BuiltinToolName = (typeof BUILTIN_TOOL_NAMES)[keyof typeof BUILTIN_TOOL_NAMES];

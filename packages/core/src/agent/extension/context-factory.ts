@@ -68,7 +68,8 @@ export interface ContextFactoryHost {
   registerToolOutputDecorator: (
     extensionId: string,
     toolName: string,
-    decorator: ToModelOutputDecorator
+    decorator: ToModelOutputDecorator,
+    options?: { followIncumbent?: boolean }
   ) => (() => void) | undefined;
   registerCommand: (extensionId: string, cmd: ExtensionCommand, rank: DispatchRank) => void;
   registerInterceptor: <T extends InterceptableEvent>(
@@ -184,12 +185,12 @@ export function createExtensionContext(
       host.registerTool(api.id, def, host.rankOf(api.id));
     },
 
-    registerToolOutputDecorator: (toolName, decorator) => {
+    registerToolOutputDecorator: (toolName, decorator, options) => {
       if (!host.isLive(context)) {
         host.refuse(api.id, "registerToolOutputDecorator");
         return () => {};
       }
-      const disposeOwned = host.registerToolOutputDecorator(api.id, toolName, decorator);
+      const disposeOwned = host.registerToolOutputDecorator(api.id, toolName, decorator, options);
       let active = true;
       const dispose = () => {
         if (!active) return;

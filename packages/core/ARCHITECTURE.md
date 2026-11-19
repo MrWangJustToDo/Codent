@@ -409,8 +409,8 @@ Sources: `managers/middleware/*` for run stack; `agent/plan/plan-mode-middleware
                              CONDITION + COUNTER: nudge when the trailing tool calls repeat. Scans the
                              run for a reminder inside it and re-admits only past a threshold
 16. background-middleware    the background class, in order: one-shot completion pushes
-                             (<ctx kind=background_notification>, persisted + id-deduped, `jobs` /
-                             `tasks` attrs, BOTH kinds) and then the <background_jobs> pointer
+                             (<ctx kind=background_notification>, persisted + id-deduped, one `jobs`
+                             attr listing every announced id, BOTH kinds) and then the <background_jobs> pointer
                              (hash-admitted, commands only: only jobs the wire does not already
                              announce and whose call is still visible). One collect → inject → mark
                              block for both kinds; it reads the trunk facade, never a source.
@@ -466,7 +466,7 @@ no error and no other guard noticing. Rules:
 
 Validate: `pnpm --filter @codent/core run validate:message-ops-purity`.
 
-TanStack runs tools sequentially but emits batched `TOOL_CALL_END` results only after the whole tool phase. `early-tool-result-ui` calls `AgentUIChannel.addToolResult` in `onAfterToolCall` so finished tools (e.g. the first of two `task` calls) show complete while later tools still run. The later stream chunks re-apply the same output idempotently.
+TanStack runs a turn's server tools in parallel but emits batched `TOOL_CALL_END` results only after the whole tool phase. `early-tool-result-ui` calls `AgentUIChannel.addToolResult` in `onAfterToolCall` so finished tools (e.g. the first of two `task` calls) show complete while later tools still run. The later stream chunks re-apply the same output idempotently.
 
 **Approval continuation:** After the user (or auto-approve) responds, a second `chat()` run executes pending tools and TanStack may re-emit `TOOL_CALL_START`/`ARGS` with an `argsMap`. `AgentUIChannel` drops those replays when the `toolCallId` already exists in UI messages so the call is not cloned onto a new assistant (approval metadata stays on the original part). `TOOL_CALL_END`/`RESULT` still flow to update that part.
 Status logic is centralized in `AgentStatusController` (`agent/state/agent-status-controller.ts`). `status-middleware` is the runtime hook for status; `lifecycle-middleware` owns usage and run finalization side-effects. Chat and detached runs converge on `statusController.applyRunOutcome(...)` (see `agent/state/agent-run-outcome.ts`).
@@ -490,7 +490,7 @@ Status logic is centralized in `AgentStatusController` (`agent/state/agent-statu
 
 Exception: when the terminal (abort **or** error) still has an unanswered `ask_user` part, the
 status lands on `awaiting_user` instead — the question belongs to the user and is deliberately not
-cancelled, so input must queue behind it (`AgentStatusController.parkOnPendingQuestion`).
+cancelled, so input must queue behind it (`AgentStatusController.syncPendingQuestionWait`).
 
 ---
 

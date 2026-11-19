@@ -72,9 +72,11 @@ function isBuiltinTask(deps: ExtensionsMiddlewareDeps, toolName: string): boolea
 
 export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): ChatMiddleware<ToolRunContext> {
   // Collect modified results per toolCallId from tool:after interceptors during this run.
-  // Applied to the model-facing results in onToolPhaseComplete (which runs before TanStack
-  // builds the tool-result messages), because onAfterToolCall returns void and cannot
-  // rewrite the result back to the model (TanStack 0.43.1 API constraint).
+  // Applied to the model-facing results in onToolPhaseComplete, which runs before TanStack builds
+  // the tool-result messages. `onAfterToolCall` could also return `{ type: "replaceResult" }`, but
+  // the phase hook is the single apply point this middleware owns: it is where the per-run stash is
+  // cleared on abort/error and where the interceptor-timeout rule is enforced once, for every call
+  // in the phase.
   const modifiedResults = new Map<string, unknown>();
   // A standalone middleware (validators, ad-hoc hosts) keeps its own ledger; production injects
   // the agent's so the authorization pipeline and this seam share one outcome.
@@ -199,8 +201,8 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
         };
         await eventBus.intercept(event);
 
-        // If an interceptor set modifiedResult, stash it for onToolPhaseComplete (we cannot
-        // return it from onAfterToolCall — that hook returns void in TanStack 0.43.1).
+        // If an interceptor set modifiedResult, stash it for onToolPhaseComplete — the phase hook is
+        // the single apply point for every held modification (see the middleware header).
         //
         // Not when the chain timed out: the handler may still be running and can write the field
         // after the bus cleared it. A half-executed interceptor is not evidence of a decision.

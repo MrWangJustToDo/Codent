@@ -367,10 +367,15 @@ class LocalAgentSessionImpl implements AgentSession {
     }
     unsubs.push(() => this.releaseSource(generation));
 
+    // A subscriber registered here is removed by `close()` too, not only by its own disposer: the
+    // handle is documented as detachable by a host that does not hold the disposer, and leaving the
+    // handler on the shared emitter meant it resumed receiving on the next `subscribe()` (which
+    // re-wires the bus), while long-lived handles accumulated one dormant listener per close cycle.
     let active = true;
-    return () => {
+    const dispose = () => {
       if (!active) return;
       active = false;
+      this.subscriberDisposers.delete(dispose);
       for (const unsub of unsubs) {
         try {
           unsub();
@@ -379,7 +384,12 @@ class LocalAgentSessionImpl implements AgentSession {
         }
       }
     };
+    this.subscriberDisposers.add(dispose);
+    return dispose;
   }
+
+  /** Handlers registered through {@link subscribe}, removed by {@link close} as well as by them. */
+  private readonly subscriberDisposers = new Set<() => void>();
 
   /** Fingerprints already reported, so a flapping subscriber cannot flood the log per frame. */
   private readonly reportedSubscriberFailures = new Set<string>();
@@ -406,12 +416,13 @@ class LocalAgentSessionImpl implements AgentSession {
   }
 
   /**
-   * Detach this handle's bus subscription.
+   * Detach this handle's bus subscription AND every handler registered through {@link subscribe}.
    *
    * `close()` exists because a host that holds the session handle does not necessarily hold the
    * disposer `subscribe()` returned; without it the only way to stop projecting was to destroy the
-   * whole agent. It releases the ONE shared subscription (not just the caller's), so every
-   * outstanding disposer becomes inert; a later `subscribe()` wires a fresh one. Idempotent.
+   * whole agent. It releases the ONE shared subscription (not just the caller's) and removes this
+   * handle's subscribers, so a later `subscribe()` starts clean instead of reviving a retired
+   * handler. Idempotent.
    */
   async close(): Promise<void> {
     if (!this.sourceTeardown && this.sourceRefCount === 0) return;
@@ -421,6 +432,16 @@ class LocalAgentSessionImpl implements AgentSession {
   private teardownSource(): void {
     this.sourceGeneration += 1;
     this.sourceRefCount = 0;
+    // Drop the subscribers, not only the bus source: `sourceWired = false` below lets the next
+    // `subscribe()` re-attach, and a handler left on `this.events` would start receiving again.
+    for (const dispose of [...this.subscriberDisposers]) {
+      try {
+        dispose();
+      } catch {
+        // Ignore teardown errors
+      }
+    }
+    this.subscriberDisposers.clear();
     const teardown = this.sourceTeardown;
     this.sourceTeardown = null;
     this.sourceWired = false;

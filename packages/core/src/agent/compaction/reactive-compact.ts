@@ -41,9 +41,10 @@ const DEFAULT_REACTIVE_KEEP_TOKENS = 16_000;
 /**
  * Stable provider failure codes meaning "the input did not fit the context window".
  *
- * `context_overflow` is `@tanstack/ai`'s normalized code (0.69+, exported there as
+ * `context_overflow` is `@tanstack/ai`'s normalized code (exported there as
  * `CONTEXT_OVERFLOW_CODE`). We hold it as a literal rather than importing the
- * constant because the installed 0.68 does not export one — see
+ * constant so the set stays wider than the SDK's single code and does not depend on
+ * which SDK version is installed — see
  * {@link isPromptTooLongError} for why the set is wider than the SDK's single code.
  *
  * The rest are the pre-normalization spellings that still arrive from an installed

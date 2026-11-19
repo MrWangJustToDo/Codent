@@ -492,8 +492,17 @@ export interface ExtensionContext {
   /**
    * Decorate a tool's model-facing output for this agent. The runner removes the decorator when
    * the extension is disabled or destroyed; the returned disposer removes it earlier.
+   *
+   * `followIncumbent` targets the SEEDED built-in implementation even while another extension
+   * shadows the name — and keeps targeting it after that shadow is removed. Core's built-ins use it
+   * (LSP diagnostics must survive a user tool shadowing `write_file`); a user decorator should leave
+   * it off, so the implementation it was registered against is the only one it ever wraps.
    */
-  registerToolOutputDecorator(toolName: string, decorator: ToModelOutputDecorator): () => void;
+  registerToolOutputDecorator(
+    toolName: string,
+    decorator: ToModelOutputDecorator,
+    options?: { followIncumbent?: boolean }
+  ): () => void;
   registerCommand(cmd: ExtensionCommand): void;
   registerInterceptor<T extends InterceptableEvent>(
     eventType: InterceptorHook,

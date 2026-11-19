@@ -815,6 +815,8 @@ export class ManagedAgent {
       // Same transcript the retained `interactions` projection reads, so the count and the list
       // can never describe two different states.
       getMessages: () => this.getUI()?.getMessages() ?? [],
+      // Identity, not name: a server tool that shadows `ask_user` is not the wait the status names.
+      isClientTool: (toolName) => this.isClientTool(toolName),
       setFinishReason: (reason) => {
         this.run.setLastFinishReason(reason);
       },
@@ -1393,7 +1395,7 @@ export class ManagedAgent {
     const messages = this.getChatController()?.getMessages() ?? this.getUI()?.getMessages() ?? [];
     // One ordered scan; the two typed lists are views of it, so `pending[0]`, `approvals[0]` and
     // the status rule (`firstPendingInteraction`) all name the same interaction.
-    const pending = collectPendingInteractions(messages);
+    const pending = collectPendingInteractions(messages, (toolName) => this.isClientTool(toolName));
     const approvals: SessionInteractionsSnapshot["approvals"] = [];
     const askUser: SessionInteractionsSnapshot["askUser"] = [];
     for (const entry of pending) {
@@ -1558,13 +1560,22 @@ export class ManagedAgent {
     // no row rebuild.
     if (this.parentId) this.manager?.getAgent(this.parentId)?.refreshSubagents();
     // Approvals / ask_user pause also surface through emitStateChange (status +
-    // pending-count transitions), so keep the retained interaction snapshot fresh — but only when
-    // the transcript it is derived from moved. See {@link interactionsRevision}.
+    // pending-count transitions), so keep the retained interaction snapshot fresh.
+    this.publishInteractions();
+  }
+
+  /**
+   * Publish the retained interaction snapshot.
+   *
+   * Usually driven by a transcript change (that is where approvals and questions appear), so an
+   * unchanged revision is a no-op. `force` is for the one other input the snapshot depends on: which
+   * tool implementations are live (`isClientTool`), which a shadow toggle changes with no new message.
+   */
+  private publishInteractions(options: { force?: boolean } = {}): void {
     const revision = this.getUI()?.getRevision();
-    if (revision === undefined || revision !== this.interactionsRevision) {
-      this.interactionsRevision = revision ?? -1;
-      this.eventBus?.emit("session:interaction", this.readInteractions());
-    }
+    if (!options.force && revision !== undefined && revision === this.interactionsRevision) return;
+    this.interactionsRevision = revision ?? -1;
+    this.eventBus?.emit("session:interaction", this.readInteractions());
   }
 
   /**
@@ -2510,6 +2521,9 @@ export class ManagedAgent {
     if (signature === this.lastToolPresentationSignature) return;
     this.lastToolPresentationSignature = signature;
     this.getEventBus()?.emit("session:tool-presentation", { descriptors });
+    // Which pending calls are questions depends on the LIVE registry (`isClientTool`), so a shadow
+    // toggle changes the interaction snapshot even though the transcript did not move.
+    this.publishInteractions({ force: true });
   }
 
   /** Unregister a command previously added by an extension (used when disabling). */
@@ -3449,6 +3463,17 @@ export class ManagedAgent {
   }
 
   /**
+   * Whether the HOST answers this tool (a client tool) rather than the server.
+   *
+   * Identity, not name: a server tool that shadows `ask_user` must not be parked on as a question or
+   * accept a host result. The pump predicates take this as their classifier; the static
+   * client-tool table is only the fallback for a name nothing is registered under.
+   */
+  isClientTool(toolName: string): boolean {
+    return this.toolFacet.isClientTool(toolName);
+  }
+
+  /**
    * EXACT identity: is the LIVE implementation under `name` the one this agent was seeded with?
    *
    * Read by the task pre-fork, plan-mode `run_command` and the extensions middleware's
@@ -3476,9 +3501,10 @@ export class ManagedAgent {
   registerToolOutputDecorator(
     toolName: string,
     fn: Parameters<AgentToolService["registerDecorator"]>[1],
-    ownerId = this.id
+    ownerId = this.id,
+    options?: { followIncumbent?: boolean }
   ): () => void {
-    return this.toolFacet.registerToolOutputDecorator(toolName, fn, ownerId);
+    return this.toolFacet.registerToolOutputDecorator(toolName, fn, ownerId, options);
   }
 
   /** Remove every decorator belonging to an owner (extension disable/destroy). */

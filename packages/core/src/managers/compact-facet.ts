@@ -301,6 +301,7 @@ export async function runManualCompact(
     const compressionRatio = tokensBefore > 0 ? Math.round((1 - tokensAfter / tokensBefore) * 100) : 0;
     const todoNote = todos.length > 0 ? ` (${todos.length} todos preserved)` : "";
 
+    // `finish` clears the auto-retry floor it armed (one owner for every compaction kind).
     host.compactions.finish(host.lease, { status: "completed", tokensBefore, tokensAfter });
     return {
       ok: true,

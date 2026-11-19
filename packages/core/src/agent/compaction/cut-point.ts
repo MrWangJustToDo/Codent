@@ -6,10 +6,10 @@
  * boundaries so tool call/result pairs are never split.
  */
 
-import { extractTextFromContent } from "../../utils/message-content.js";
 import { isContextModelMessage } from "../turn-context/turn-context-message.js";
 
 import {
+  compactionMarkerText,
   extractCompactionSummaryBody,
   hasOuterEndMarker,
   isCompactionSummaryModelMessage,
@@ -46,7 +46,7 @@ export function extractExistingSummary(messages: ModelMessage[]): {
   const first = messages[0];
   if (first.role !== "user") return { cleanMessages: messages };
 
-  const text = extractTextFromContent(first.content);
+  const text = compactionMarkerText(first.content);
   // Only treat it as a real compact checkpoint when the outer closing marker is
   // present solo on its own line. This keeps summaries that merely quote the
   // markers (or streamed bodies without a closing marker yet) from being

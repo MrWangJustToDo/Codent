@@ -1,3 +1,6 @@
+/* eslint-disable max-lines -- One exhaustive table: every telemetry event's log level/category/
+   formatter plus the projection suppressions. Splitting it would let a new event land without a
+   decision, which is exactly what the exhaustive typing prevents. */
 /**
  * Default event → AgentLog mapping for {@link bridgeTelemetryToAgentLog}.
  */
@@ -674,9 +677,10 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
       `Subagent started: ${p(event).description ?? event.agentId}${taskBindingSuffix(p(event))}`,
   },
   /**
-   * Not logged: the queue is UI state, re-published on every admission and discard, so a line per
-   * emission would flood the timeline with a fact the task rows already show. `false` is the
-   * "no log line" marker this table uses.
+   * Not logged BY DEFAULT: the queue is UI state, re-published on every admission and discard, so a
+   * line per emission would flood the timeline with a fact the task rows already show. `false` is the
+   * "no log line unless a policy opts in" marker this table uses for telemetry cells; projection
+   * cells (see `PROJECTION_EVENT_LOG_RULES`) are never writable, overrides included.
    */
   "subagent:queue": false,
   /** An eagerly started `task` run was thrown away — the line that names an orphan. */

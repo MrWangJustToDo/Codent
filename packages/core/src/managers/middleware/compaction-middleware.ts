@@ -134,7 +134,7 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
           }
 
           if (result.compacted) {
-            deps.compactions.clearAutoRetryFloor();
+            // `finish` clears the retry floor for every kind (see `CompactionController.finish`).
             deps.compactions.finish(lease, {
               status: "completed",
               tokensBefore: result.tokensBefore,

@@ -38,7 +38,7 @@ import {
 } from "../stream/tool-phase-utils.js";
 import { peekTaskPreforkCoordinator } from "../subagent/subagent-runs.js";
 import { reconcileSettledTaskParts } from "../subagent/task-background.js";
-import { CLIENT_TOOL_NAMES } from "../tools/catalog/tool-names.js";
+import { clientToolClassifier, type ClientToolClassifier } from "../tools/catalog/tool-names.js";
 import { AgentUIChannel } from "../ui/ui-channel.js";
 
 import { runManagedSpan } from "./run-span.js";
@@ -139,6 +139,21 @@ export class AgentChatController {
    * {@link MAX_TURN_TOOL_PHASES}.
    */
   private turnPhases = 0;
+  /**
+   * The pump's client-tool classifier: the live tool's identity, not its name.
+   *
+   * The identity answer is cheap for a non-client name (`ToolFacet.isClientTool` gates on the static
+   * set first), so this runs on every tool part without a registry walk. A SERVER tool that shadows
+   * `ask_user` is therefore not parked on as a host-answered question; a host double without the
+   * optional method keeps the static answer.
+   */
+  private classifierCache: ClientToolClassifier | undefined;
+
+  private get classifyClientTool(): ClientToolClassifier {
+    // Memoized: the pump asks this per tool part. Reading `this.managed` here (not in a field
+    // initializer) keeps it independent of parameter-property initialization order.
+    return (this.classifierCache ??= clientToolClassifier(this.managed));
+  }
   /**
    * Set by the `keepPumping` hand-off so the next pump knows it continues the same prompt.
    *
@@ -307,7 +322,7 @@ export class AgentChatController {
     // dropped the question); clearing it here is the only recovery short of `/new`. Only when no
     // pump/pre-fork is live: with a live run the stale wait is a symptom, and Esc must still abort.
     const messages = this.channel.getMessages();
-    const pending = hasPendingInteraction(messages);
+    const pending = hasPendingInteraction(messages, this.classifyClientTool);
     if (!pending && !this.isPumpLive() && registeredPrefork === 0) {
       const status = this.managed.getStatus();
       if (isParkedStatus(status)) {
@@ -336,7 +351,9 @@ export class AgentChatController {
    */
   isRunActive(): boolean {
     return (
-      this.isPumpLive() || hasPendingInteraction(this.channel.getMessages()) || this.managed.compactions.isRunning()
+      this.isPumpLive() ||
+      hasPendingInteraction(this.channel.getMessages(), this.classifyClientTool) ||
+      this.managed.compactions.isRunning()
     );
   }
 
@@ -564,7 +581,7 @@ export class AgentChatController {
     // is false again, the compaction lease is gone, and the only remaining evidence is that the
     // target already has a pump or is parked on an interaction. Draining then injects the new
     // conversation's queued input ahead of a gated tool result and starts a second pump.
-    if (this.isPumpLive() || hasPendingInteraction(this.channel.getMessages())) return;
+    if (this.isPumpLive() || hasPendingInteraction(this.channel.getMessages(), this.classifyClientTool)) return;
     if (!this.hasQueuedMessages()) return;
     const drained = this.drainSteerIntoChannel() || this.drainFollowUpIntoChannel();
     if (drained) {
@@ -632,10 +649,16 @@ export class AgentChatController {
    * Force-submit: abort the current run, cancel incomplete tools, finalize the
    * aborted turn, inject the message, and start a new pump immediately.
    *
+   * After the interrupt: a client question survives the abort by design, so the message is QUEUED
+   * instead of written into the transcript (the pump would break on the question immediately and the
+   * caller would be told a message was sent that the model never saw).
+   *
    * This is the Option/Ctrl+Enter keybinding while the agent is running.
    *
    * Anything already queued is KEPT and delivered after this message, in the order it was written — the
-   * interrupt stops the run, not the user's other input.
+   * interrupt stops the run, not the user's other input. Exception: in the two QUEUE cases above
+   * (manual compact, pending question) nothing is interrupted, so the message joins the FIFO behind
+   * whatever was already queued.
    */
   forceSubmit(content: string | ContentPart[]): boolean {
     assertNotCompactionSummaryInput(content);
@@ -657,8 +680,18 @@ export class AgentChatController {
     // Only a live run is interrupted. On an idle agent `interruptCurrentRun` emitted `agent:abort`
     // and finalized an "aborted" turn that never existed (`agent:stop` with no `turn:start`), which
     // inflates any consumer that counts runs by `agent:stop`.
+    //
+    // Interrupt FIRST, then decide where the message goes: an approval wait is denied here (that is
+    // what force-submit means), while a client question is preserved by design.
     if (this.isRunActive() || this.managed.run.isCurrentRunValid()) {
       this.interruptCurrentRun("force-submit", { keepQueue: true });
+    }
+    // Still parked on a question because the abort deliberately keeps it answerable: writing the
+    // message now would show it in the transcript with no pump able to send it. Queue it as a
+    // follow-up — it is released when the question is answered.
+    if (hasPendingAskUser(this.channel.getMessages(), this.classifyClientTool)) {
+      this.followUp(content);
+      return true;
     }
     this.channel.addUserMessage(content);
     this.persistMessages("user-message");
@@ -794,7 +827,7 @@ export class AgentChatController {
     // `hasDeferredToolExecution` treats `output !== undefined` as settled, so the pump would skip
     // the real execution.
     const part = findToolCallPart(this.channel.getMessages(), toolCallId);
-    if (!part || !CLIENT_TOOL_NAMES.has(part.name) || part.output !== undefined) {
+    if (!part || !this.classifyClientTool(part.name) || part.output !== undefined) {
       this.managed.emitEvent("session:diagnostic", {
         area: "tool",
         level: "warn",
@@ -818,7 +851,8 @@ export class AgentChatController {
     // (a host could settle a different tool while an `ask_user` is still open). Clearing it here
     // rather than in each host is what lets the resumed pump leave `awaiting_user`; see
     // `prepareRunPhase`.
-    if (!hasPendingAskUser(this.channel.getMessages())) this.managed.setClientToolWaiting(false);
+    if (!hasPendingAskUser(this.channel.getMessages(), this.classifyClientTool))
+      this.managed.setClientToolWaiting(false);
     // The answer is durable state, not just a channel write: without this the process could die
     // between the answer and the resumed pump's persist, leaving an unanswered `ask_user` on disk
     // while the host already reported the answer sent.
@@ -933,7 +967,7 @@ export class AgentChatController {
     // admission failure for the next turn), but it cannot reopen a turn boundary.
     this.runChain = this.runChain.catch((error) => {
       if (this.lifecycleEpoch !== epoch || this.managed.isDestroyed()) return;
-      if (hasPendingInteraction(this.channel.getMessages())) return;
+      if (hasPendingInteraction(this.channel.getMessages(), this.classifyClientTool)) return;
       const status = this.managed.getStatus();
       if (isParkedStatus(status) || isTerminalStatus(status)) return;
       const normalized = toError(error);
@@ -1005,7 +1039,7 @@ export class AgentChatController {
   }
 
   private shouldKeepPumping(messages: UIMessage[]): boolean {
-    return shouldContinueAgentPump(messages) || this.hasQueuedMessages();
+    return shouldContinueAgentPump(messages, this.classifyClientTool) || this.hasQueuedMessages();
   }
 
   /**
@@ -1014,7 +1048,7 @@ export class AgentChatController {
    * Returns false when the pump should exit.
    */
   private prepareContinuationPhase(messages: UIMessage[]): { continue: boolean; messages: UIMessage[] } {
-    if (needsToolPhaseContinue(messages)) {
+    if (needsToolPhaseContinue(messages, this.classifyClientTool)) {
       // Still executing / resuming tools — do not inject user messages yet.
       this.managed.markNextPrepareAsContinuation();
       return { continue: true, messages };
@@ -1023,7 +1057,7 @@ export class AgentChatController {
     const steered = this.drainSteerIntoChannel();
     let current = this.channel.getMessages();
 
-    if (steered || needsAgentResponseAfterTools(current)) {
+    if (steered || needsAgentResponseAfterTools(current, this.classifyClientTool)) {
       this.managed.markNextPrepareAsContinuation();
       return { continue: true, messages: current };
     }
@@ -1125,7 +1159,7 @@ export class AgentChatController {
         reconcileSettledTaskParts(this.managed);
 
         let currentMessages = this.channel.getMessages();
-        if (hasPendingInteraction(currentMessages)) break;
+        if (hasPendingInteraction(currentMessages, this.classifyClientTool)) break;
 
         if (toolPhase > 0) {
           const prepared = this.prepareContinuationPhase(currentMessages);
@@ -1139,7 +1173,7 @@ export class AgentChatController {
           // A settled TOOL turn is not a stopping point: its tools still have to run, and injecting
           // user text now would put it before the tool result. `prepareContinuationPhase` owns that
           // ordering from phase 1 on.
-          !needsToolPhaseContinue(currentMessages)
+          !needsToolPhaseContinue(currentMessages, this.classifyClientTool)
         ) {
           // A chain pump admitted only because input was queued must deliver it BEFORE the first
           // model call. Previously phase 0 re-sent the settled transcript, the model answered a
@@ -1182,18 +1216,20 @@ export class AgentChatController {
         await this.approvalDecisions.authorizePendingApprovals();
 
         const after = this.channel.getMessages();
-        if (hasPendingInteraction(after)) break;
+        if (hasPendingInteraction(after, this.classifyClientTool)) break;
         if (!this.shouldKeepPumping(after)) break;
       }
 
       // Accrue before the decision below: the `keepPumping` branch is what asks whether the turn
-      // has any budget left, and it must see the phases this pump just spent.
-      this.turnPhases += toolPhases;
-
+      // has any budget left, and it must see the phases this pump just spent. Inside the currency
+      // check: an interrupted pump breaks out of the loop after `interruptCurrentRun` already zeroed
+      // the counter for the turn it abandoned, so accruing outside would hand the abandoned turn's
+      // phases to the CONTINUATION pump (which deliberately does not reset `turnPhases`).
       if (runToken.isCurrent) {
+        this.turnPhases += toolPhases;
         this.syncPlanModeFromMessages();
         let messages = this.channel.getMessages();
-        let waitingForUser = hasPendingInteraction(messages);
+        let waitingForUser = hasPendingInteraction(messages, this.classifyClientTool);
         let keepPumping = !waitingForUser && this.shouldKeepPumping(messages);
         // Prefer status already set by executeStream (error/abort) over message-derived waits.
         let outcomeKind = this.managed.runFinalizer.deriveChatOutcome({ hasError, waitingForUser });
@@ -1227,7 +1263,7 @@ export class AgentChatController {
             outcomeKind === "aborted" ? TOOL_CANCELLED_MESSAGE : TOOL_APPROVAL_ABANDONED_MESSAGE
           );
           messages = this.channel.getMessages();
-          waitingForUser = hasPendingInteraction(messages);
+          waitingForUser = hasPendingInteraction(messages, this.classifyClientTool);
         }
 
         // Phase cap or early stream end while tools/model still need work — chain
@@ -1280,7 +1316,7 @@ export class AgentChatController {
         // deliberately leaves an errored run alone, and `interruptCurrentRun` (the abort path) clears
         // its queue instead. Deliver each message once; if the next run fails too the queue is already
         // empty, so this cannot loop.
-        if (outcomeKind === "error" && !hasPendingInteraction(this.channel.getMessages())) {
+        if (outcomeKind === "error" && !hasPendingInteraction(this.channel.getMessages(), this.classifyClientTool)) {
           if (this.drainSteerIntoChannel() || this.drainFollowUpIntoChannel()) {
             // The drain wrote the queued `prompt:submit` row(s); the resumed pump must not write a
             // second "user" row for the same message. (The drain persists the user message itself.)
@@ -1316,7 +1352,7 @@ export class AgentChatController {
             // `input-complete` call still on the wire, so the next turn executed it. A pending
             // `ask_user` is the exception, exactly as on the normal path: the failure did not answer
             // the user's question, and cancelling it would make the session unanswerable.
-            const stillWaiting = hasPendingInteraction(this.channel.getMessages());
+            const stillWaiting = hasPendingInteraction(this.channel.getMessages(), this.classifyClientTool);
             if (!stillWaiting) {
               this.applyCancelledIncompleteTools(true, {
                 cause: "stream-error",
@@ -1556,6 +1592,7 @@ export class AgentChatController {
       reason: options.reason ?? TOOL_CANCELLED_MESSAGE,
       includeInFlight,
       requiresArguments,
+      isClientTool: this.classifyClientTool,
       ...(options.interrupted ? { interrupted: true } : {}),
       ...((options.preservePendingAskUser ?? true) ? { preservePendingAskUser: true } : {}),
     });
@@ -1631,7 +1668,7 @@ export class AgentChatController {
         // A denied gate stays in `pending` only; the approval-resolved row carries the refusal.
         continue;
       }
-      if (CLIENT_TOOL_NAMES.has(part.name) && part.state === "input-complete" && hasValidToolArguments(part)) {
+      if (this.classifyClientTool(part.name) && part.state === "input-complete" && hasValidToolArguments(part)) {
         needsClient.push(ref);
         continue;
       }

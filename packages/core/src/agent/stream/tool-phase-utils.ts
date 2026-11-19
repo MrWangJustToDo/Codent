@@ -1,6 +1,6 @@
 import { isParkedStatus } from "../../runtime-types/agent-status.js";
 import { parseToolArguments } from "../../utils/parse-tool-arguments.js";
-import { BUILTIN_TOOL_NAMES, CLIENT_TOOL_NAMES } from "../tools/catalog/tool-names.js";
+import { BUILTIN_TOOL_NAMES, isClientToolName, type ClientToolClassifier } from "../tools/catalog/tool-names.js";
 
 import { findLastMeaningfulAssistant, isEmptyAssistantShell } from "./empty-assistant-shell.js";
 import { hasValidToolArguments } from "./incomplete-tool-calls.js";
@@ -67,13 +67,16 @@ export function isPendingToolApprovalPart(part: ToolCallPart): boolean {
 /**
  * Non-approval server tools still waiting after batch gating (e.g. `tree` + `run_command`).
  */
-export function hasDeferredToolExecution(messages: UIMessage[]): boolean {
+export function hasDeferredToolExecution(
+  messages: UIMessage[],
+  isClientTool: ClientToolClassifier = isClientToolName
+): boolean {
   const lastAssistant = lastAssistantMessage(messages);
   if (!lastAssistant) return false;
 
   for (const part of lastAssistant.parts) {
     if (!isToolCallPart(part)) continue;
-    if (CLIENT_TOOL_NAMES.has(part.name)) continue;
+    if (isClientTool(part.name)) continue;
     if (part.approval?.needsApproval) continue;
     if (part.state === "complete" || part.output !== undefined) continue;
     if (part.state === "input-complete" || part.state === "input-streaming" || part.state === "awaiting-input") {
@@ -88,17 +91,23 @@ export function hasApprovedToolsPendingExecution(messages: UIMessage[]): boolean
   return hasApprovalRespondedToolsPendingExecution(messages);
 }
 
-export function needsToolPhaseContinue(messages: UIMessage[]): boolean {
-  return hasDeferredToolExecution(messages) || hasApprovalRespondedToolsPendingExecution(messages);
+export function needsToolPhaseContinue(
+  messages: UIMessage[],
+  isClientTool: ClientToolClassifier = isClientToolName
+): boolean {
+  return hasDeferredToolExecution(messages, isClientTool) || hasApprovalRespondedToolsPendingExecution(messages);
 }
 
 /**
  * Tool results (including synthetic denial) are present but the model has not
  * produced follow-up text for this turn yet. Requires another `chat()` pump.
  */
-export function needsAgentResponseAfterTools(messages: UIMessage[]): boolean {
-  if (needsToolPhaseContinue(messages)) return false;
-  if (hasPendingInteraction(messages)) return false;
+export function needsAgentResponseAfterTools(
+  messages: UIMessage[],
+  isClientTool: ClientToolClassifier = isClientToolName
+): boolean {
+  if (needsToolPhaseContinue(messages, isClientTool)) return false;
+  if (hasPendingInteraction(messages, isClientTool)) return false;
 
   const toolTurnAssistant = findToolTurnAwaitingFollowUp(messages);
   if (!toolTurnAssistant) return false;
@@ -134,8 +143,11 @@ function hasMeaningfulFollowUpAssistantAfter(messages: UIMessage[], toolTurnAssi
 }
 
 /** Whether {@link AgentChatController} should invoke another `runAgentStream`. */
-export function shouldContinueAgentPump(messages: UIMessage[]): boolean {
-  return needsToolPhaseContinue(messages) || needsAgentResponseAfterTools(messages);
+export function shouldContinueAgentPump(
+  messages: UIMessage[],
+  isClientTool: ClientToolClassifier = isClientToolName
+): boolean {
+  return needsToolPhaseContinue(messages, isClientTool) || needsAgentResponseAfterTools(messages, isClientTool);
 }
 
 /**
@@ -160,8 +172,11 @@ export function shouldContinueAgentPump(messages: UIMessage[]): boolean {
  * and re-pumps after them, so a boundary that reads this cannot disagree with the pump loop about
  * whether the run is over — the disagreement is the bug this exists to prevent.
  */
-export function hasPendingRunContinuation(messages: UIMessage[]): boolean {
-  return hasPendingInteraction(messages) || needsToolPhaseContinue(messages);
+export function hasPendingRunContinuation(
+  messages: UIMessage[],
+  isClientTool: ClientToolClassifier = isClientToolName
+): boolean {
+  return hasPendingInteraction(messages, isClientTool) || needsToolPhaseContinue(messages, isClientTool);
 }
 
 /** A pending interaction, in the shape the status needs to name the wait. */
@@ -181,7 +196,10 @@ export type PendingInteraction =
  * the kind), it just cannot be answered by id. {@link collectPendingInteractions} omits those,
  * because a host can only present an answerable entry.
  */
-export function firstPendingInteraction(messages: UIMessage[]): PendingInteraction | undefined {
+export function firstPendingInteraction(
+  messages: UIMessage[],
+  isClientTool: ClientToolClassifier = isClientToolName
+): PendingInteraction | undefined {
   for (const message of messages) {
     if (message.role !== "assistant") continue;
     for (const part of message.parts) {
@@ -195,7 +213,7 @@ export function firstPendingInteraction(messages: UIMessage[]): PendingInteracti
           toolName: part.name,
         };
       }
-      const asked = pendingAskUserEntry(part);
+      const asked = pendingAskUserEntry(part, isClientTool);
       if (asked) {
         return { kind: "clientTool", toolCallId: asked.toolCallId, toolName: asked.toolName };
       }
@@ -232,8 +250,11 @@ export function resolvePendingInteractions(snapshot: {
  * status name" can never disagree. Every caller asked the two questions together (approvals OR
  * `ask_user`), and each predicate used to scan every assistant part on its own.
  */
-export function hasPendingInteraction(messages: UIMessage[]): boolean {
-  return firstPendingInteraction(messages) !== undefined;
+export function hasPendingInteraction(
+  messages: UIMessage[],
+  isClientTool: ClientToolClassifier = isClientToolName
+): boolean {
+  return firstPendingInteraction(messages, isClientTool) !== undefined;
 }
 
 export function hasPendingToolApprovals(messages: UIMessage[]): boolean {
@@ -287,14 +308,17 @@ export function isToolContinuationPrepare(status: AgentStatus, messages?: Array<
   return messages[messages.length - 1].role !== "user";
 }
 
-export function hasPendingAskUser(messages: UIMessage[]): boolean {
+export function hasPendingAskUser(
+  messages: UIMessage[],
+  isClientTool: ClientToolClassifier = isClientToolName
+): boolean {
   // Same rule as approvals: `collectPendingAskUser` (the retained projection) walks the whole
   // chain, so this predicate must too or the two disagree.
   for (const message of messages) {
     if (message.role !== "assistant") continue;
     for (const part of message.parts) {
       if (!isToolCallPart(part)) continue;
-      if (pendingAskUserEntry(part)) return true;
+      if (pendingAskUserEntry(part, isClientTool)) return true;
     }
   }
   return false;
@@ -307,8 +331,13 @@ export function hasPendingAskUser(messages: UIMessage[]): boolean {
  * ({@link collectPendingInteractions}) cannot disagree about a part.
  */
 function pendingAskUserEntry(
-  part: ToolCallPart
+  part: ToolCallPart,
+  isClientTool: ClientToolClassifier
 ): (SessionInteractionsSnapshot["askUser"][number] & { kind: "clientTool"; toolName: string }) | undefined {
+  // Identity, not name: a SERVER tool that shadows `ask_user` is executed by the server, so its
+  // unanswered call is not a question the host owes an answer to. The name check stays for the
+  // argument shape (only `ask_user` carries `question`/`options`).
+  if (!isClientTool(part.name)) return undefined;
   if (part.name !== BUILTIN_TOOL_NAMES.askUser) return undefined;
   if (part.state !== "input-complete" || part.output !== undefined) return undefined;
   // A stream cut short (max_tokens / RUN_FINISHED) promotes an unfinished call to
@@ -328,14 +357,14 @@ function pendingAskUserEntry(
 }
 
 /** One host-facing entry for a pending part, or undefined when the part is not a wait. */
-function pendingEntry(part: ToolCallPart): PendingInteractionEntry | undefined {
+function pendingEntry(part: ToolCallPart, isClientTool: ClientToolClassifier): PendingInteractionEntry | undefined {
   if (isPendingToolApprovalPart(part)) {
     const approvalId = part.approval?.id;
     // Without an id the approval cannot be answered, so it must not reach a host's queue.
     if (!approvalId) return undefined;
     return { kind: "approval", approvalId, toolName: part.name, toolCallId: part.id };
   }
-  const asked = pendingAskUserEntry(part);
+  const asked = pendingAskUserEntry(part, isClientTool);
   if (!asked) return undefined;
   const { kind, toolName: _toolName, ...rest } = asked;
   return { kind, ...rest };
@@ -350,13 +379,16 @@ function pendingEntry(part: ToolCallPart): PendingInteractionEntry | undefined {
  * {@link collectPendingAskUser} are typed views of it, so hosts and the status cannot disagree
  * about which wait is current.
  */
-export function collectPendingInteractions(messages: UIMessage[]): PendingInteractionEntry[] {
+export function collectPendingInteractions(
+  messages: UIMessage[],
+  isClientTool: ClientToolClassifier = isClientToolName
+): PendingInteractionEntry[] {
   const out: PendingInteractionEntry[] = [];
   for (const message of messages) {
     if (message.role !== "assistant") continue;
     for (const part of message.parts) {
       if (!isToolCallPart(part)) continue;
-      const entry = pendingEntry(part);
+      const entry = pendingEntry(part, isClientTool);
       if (entry) out.push(entry);
     }
   }
@@ -364,9 +396,12 @@ export function collectPendingInteractions(messages: UIMessage[]): PendingIntera
 }
 
 /** Pending tool approvals, in ask order. A view of {@link collectPendingInteractions}. */
-export function collectPendingApprovals(messages: UIMessage[]): SessionInteractionsSnapshot["approvals"] {
+export function collectPendingApprovals(
+  messages: UIMessage[],
+  isClientTool: ClientToolClassifier = isClientToolName
+): SessionInteractionsSnapshot["approvals"] {
   const out: SessionInteractionsSnapshot["approvals"] = [];
-  for (const entry of collectPendingInteractions(messages)) {
+  for (const entry of collectPendingInteractions(messages, isClientTool)) {
     if (entry.kind !== "approval") continue;
     const { kind: _kind, ...rest } = entry;
     out.push(rest);
@@ -375,9 +410,12 @@ export function collectPendingApprovals(messages: UIMessage[]): SessionInteracti
 }
 
 /** Pending `ask_user` requests, in ask order. A view of {@link collectPendingInteractions}. */
-export function collectPendingAskUser(messages: UIMessage[]): SessionInteractionsSnapshot["askUser"] {
+export function collectPendingAskUser(
+  messages: UIMessage[],
+  isClientTool: ClientToolClassifier = isClientToolName
+): SessionInteractionsSnapshot["askUser"] {
   const out: SessionInteractionsSnapshot["askUser"] = [];
-  for (const entry of collectPendingInteractions(messages)) {
+  for (const entry of collectPendingInteractions(messages, isClientTool)) {
     if (entry.kind !== "clientTool") continue;
     const { kind: _kind, ...rest } = entry;
     out.push(rest);

@@ -46,6 +46,13 @@ export interface AgentChatHost {
   getModeState(): ModeState;
   getPolicyFacts(): AgentPolicyFacts;
   getApprovalRequirement(toolName: string): ApprovalRequirement | undefined;
+  /**
+   * Whether the HOST answers this tool (a client tool), by identity rather than by name.
+   *
+   * Optional so a test double without a tool service keeps working; the pump then falls back to the
+   * static client-tool table.
+   */
+  isClientTool?(toolName: string): boolean;
   getCoreEnv(): ResolvedCoreEnv;
   getToolCompactCache(): ToolCompactCache;
   /** Drop the channel→wire projection cache (a transcript clear must not hit a stale wire). */

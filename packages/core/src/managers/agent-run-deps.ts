@@ -84,6 +84,14 @@ export interface AgentRunDeps {
    * extension tool as the built-in.
    */
   isBuiltinTool: (toolName: string) => boolean;
+  /**
+   * Whether the HOST answers this tool (a client tool), by identity rather than name.
+   *
+   * Read live for the same reason as `isBuiltinTool`: an extension may shadow `ask_user` between
+   * turns. The approval-resume middleware uses it to decide whether a held sibling resumes through
+   * the tool phase or waits for the host.
+   */
+  isClientTool: (toolName: string) => boolean;
   getTodoManager: () => TodoManager | null;
   getExtensionRunner: () => ExtensionRunner | null;
   /** The agent's background-job registry (drained by the notification middleware). */
@@ -190,6 +198,7 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     // Identity, not the rendering predicate: these callers must see a shadowing extension as "not
     // the built-in" (and an unregistered name as "not the built-in" too).
     isBuiltinTool: (toolName) => managed.isIncumbentTool(toolName),
+    isClientTool: (toolName) => managed.isClientTool(toolName),
     getTodoManager: () => managed.getTodoManager(),
     getExtensionRunner: () => managed.getExtensionRunner(),
     getCommandService: () => managed.getCommandService(),

@@ -72,6 +72,14 @@ interface PreforkEntry {
   state: "queued" | "running";
   /** Whether this entry currently occupies a concurrency slot. */
   occupying: boolean;
+  /**
+   * Slot generation this entry's claim belongs to.
+   *
+   * A session switch zeroes `active` for the conversation being left, while runs from it are still
+   * unwinding. Without this, such a run's release decremented — or was transferred to — the NEXT
+   * session's counter, so the cap could drift upward for the rest of the session.
+   */
+  generation: number;
   aborted: boolean;
   /**
    * Subagents this entry has spawned so far.
@@ -107,6 +115,13 @@ export class TaskPreforkCoordinator {
   /** Serial `task` calls waiting for the same cap (they are not registered pre-forks). */
   private readonly serialWaiters: Array<() => void> = [];
   private active = 0;
+  /**
+   * Bumped when a session switch discards the conversation these slots belonged to.
+   *
+   * `active` is zeroed at the same moment, so a slot claim from the previous generation must not
+   * decrement or transfer it afterwards (see {@link PreforkEntry.generation}).
+   */
+  private slotGeneration = 0;
 
   /** Set by {@link setOnChange}: announced on every queue/occupancy mutation. */
   private onChange?: () => void;
@@ -314,7 +329,10 @@ export class TaskPreforkCoordinator {
     this.abortAll();
     this.abortDetached();
     const waiters = this.serialWaiters.splice(0);
-    // The slots those waiters were queued for belong to the conversation being left.
+    // The slots those waiters were queued for belong to the conversation being left. Bump the
+    // generation too: a run from that conversation is still unwinding, and its release must not
+    // decrement the counter the next session is already filling.
+    this.slotGeneration += 1;
     this.active = 0;
     for (const resolve of waiters) resolve();
     if (waiters.length > 0) this.notify();
@@ -403,11 +421,12 @@ export class TaskPreforkCoordinator {
    * accidentally reported as a discarded pre-fork.
    */
   async runWithSlot<T>(factory: () => Promise<T>): Promise<T> {
+    const generation = this.slotGeneration;
     await this.acquireSlot();
     try {
       return await factory();
     } finally {
-      this.releaseSlot();
+      this.releaseSlot(generation);
       this.notify();
     }
   }
@@ -422,7 +441,23 @@ export class TaskPreforkCoordinator {
     });
   }
 
-  private releaseSlot(): void {
+  /**
+   * Release the slot one pre-fork entry occupies.
+   *
+   * A claim from the conversation being left was already zeroed by `resetForSessionSwitch`, so it
+   * must not decrement (or promote into) the counter the next session is filling.
+   */
+  private releaseEntrySlot(entry: PreforkEntry): void {
+    if (entry.generation !== this.slotGeneration) return;
+    this.active = Math.max(0, this.active - 1);
+    this.promote();
+  }
+
+  private releaseSlot(generation: number): void {
+    // A slot claimed by the conversation being left was already zeroed by `resetForSessionSwitch`:
+    // transferring it to a waiter (which is the branch below) would count a run that is leaving
+    // against the next session's cap.
+    if (generation !== this.slotGeneration) return;
     const waiter = this.serialWaiters.shift();
     if (waiter) {
       // The slot is transferred directly; active stays unchanged.
@@ -462,6 +497,7 @@ export class TaskPreforkCoordinator {
     const entry: PreforkEntry = {
       state: "queued",
       occupying: false,
+      generation: this.slotGeneration,
       aborted: false,
       spawned: [],
       gate,
@@ -521,11 +557,7 @@ export class TaskPreforkCoordinator {
     if (entry.aborted) {
       if (entry.occupying) {
         entry.occupying = false;
-        // Clamped: `resetForSessionSwitch` already zeroed the counter for the conversation being
-        // left, and an unwinding run's `finally` must not drive it negative (a negative `active`
-        // admits `cap + n` streams in the next session).
-        this.active = Math.max(0, this.active - 1);
-        this.promote();
+        this.releaseEntrySlot(entry);
       }
       this.notify();
       return cancelledStubResult();
@@ -540,8 +572,7 @@ export class TaskPreforkCoordinator {
       return await factory();
     } finally {
       entry.occupying = false;
-      this.active = Math.max(0, this.active - 1);
-      this.promote();
+      this.releaseEntrySlot(entry);
       // After `promote`: a freed slot usually admits someone, so this announcement carries the
       // post-promotion queue rather than a one-off intermediate state.
       this.notify();
@@ -563,7 +594,10 @@ export class TaskPreforkCoordinator {
       if (!admitted) {
         const waiter = this.serialWaiters.shift();
         if (!waiter) break;
-        // The slot is already free; hand it to the serial waiter without changing `active`.
+        // `promote` only runs after a slot was RELEASED, so this admission has to claim that free
+        // slot. Leaving `active` unchanged (the shape of a release-time TRANSFER) under-counted every
+        // serial run admitted from here, letting the cap drift upward.
+        this.active += 1;
         waiter();
         admitted = true;
       }

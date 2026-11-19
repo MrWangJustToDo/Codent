@@ -186,6 +186,20 @@ export class MessageTransformerRegistry {
         }
         current = result;
       } catch (err) {
+        // Drop the FAILED transformer's copy: a timeout is not cancellation (see
+        // `callback-timeout`), so the transformer may still hold the array it was handed and mutate
+        // it afterwards; keeping that array as `current` let a timed-out extension rewrite the wire
+        // after this seam returned — and for the next transformer in the chain.
+        //
+        // In-place edits made BEFORE the throw are not undone (that would need a snapshot taken
+        // before every call); this isolates the array from anything the transformer does after the
+        // seam gives up on it. That state may be extension-authored, and `apply` must not throw, so
+        // a hostile object fails the clone without escaping.
+        try {
+          current = current.map(cloneModelMessage);
+        } catch {
+          // Keep the last readable messages; the run continues.
+        }
         this.host.reportTransformerFailure(extensionId, err);
       }
     }

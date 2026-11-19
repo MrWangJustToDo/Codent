@@ -48,8 +48,16 @@ import type { AgentSessionEvent, AgentStreamEvent } from "@codent/core";
  * `formatToolOutput` is the same call the app makes for a local row. It returns "" for a tool with
  * no renderer (extension tools, plan bodies), which leaves the raw-JSON fallback in place for those.
  */
-function formattedResultText(name: string | undefined, output: unknown): string {
+function formattedResultText(
+  name: string | undefined,
+  output: unknown,
+  isBuiltin?: (toolName: string) => boolean
+): string {
   if (!name || output === undefined) return "";
+  // Identity, not name: a tool that SHADOWS a built-in must not be rendered by the built-in's
+  // formatter (it printed `Exit code: undefined` / `Edited undefined` for a foreign output shape).
+  // An unknown name stays permissive — the same rule the app's `isBuiltinTool` applies.
+  if (isBuiltin && !isBuiltin(name)) return "";
   try {
     return formatToolOutput(output, name);
   } catch {
@@ -274,7 +282,7 @@ export class ToolProjection {
           // No extractable content: the tool's formatter beats the raw JSON that used to follow
           // (`rawOutput`), and a media result keeps the extractor's answer so an image is not also
           // printed as prose.
-          (images.length === 0 ? formattedResultText(state?.name, part.output) : "") ||
+          (images.length === 0 ? formattedResultText(state?.name, part.output, this.deps.lookup().isBuiltin) : "") ||
           (part.error ?? ""));
     if (state) {
       // Kept so a late `write_file` oldText read can rebuild a terminal row without losing the

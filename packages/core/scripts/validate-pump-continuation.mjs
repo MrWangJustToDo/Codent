@@ -190,7 +190,11 @@ assert.equal(shouldDeferMidRunQueue({ pumpDepth: 0, status: "idle" }), false, "i
   // A chain pump admits on queued input; it must deliver that input BEFORE the first model call,
   // and must not do it while tools still need to run (that would put user text before the result).
   const phaseZero = src.slice(src.indexOf("} else if ("), src.indexOf("await this.executeStream"));
-  assert.match(phaseZero, /needsToolPhaseContinue\(currentMessages\)/, "a settled TOOL turn is not drained");
+  assert.match(
+    phaseZero,
+    /needsToolPhaseContinue\(currentMessages(?:, [^)]*)?\)/,
+    "a settled TOOL turn is not drained"
+  );
   assert.match(phaseZero, /drainSteerIntoChannel\(\)/, "phase 0 drains steering");
   assert.match(phaseZero, /if \(!steered\) this\.drainFollowUpIntoChannel\(\)/, "follow-up only when no steer");
 

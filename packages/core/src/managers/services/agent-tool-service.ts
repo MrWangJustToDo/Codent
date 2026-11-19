@@ -41,7 +41,13 @@ export class AgentToolService {
   private registry: AgentToolRegistry;
   private readonly decorators = new Map<
     string,
-    Array<{ ownerId: string; fn: ToModelOutputDecorator; liveTool: ResolvedAgentTool["tool"] }>
+    Array<{
+      ownerId: string;
+      fn: ToModelOutputDecorator;
+      liveTool: ResolvedAgentTool["tool"];
+      /** Explicit incumbent intent: wrap the seeded implementation, not whichever tool was live. */
+      followIncumbent: boolean;
+    }>
   >();
 
   constructor(tools: ToolsRecord = {}) {
@@ -92,13 +98,20 @@ export class AgentToolService {
     // Metadata belongs to the LIVE tool — the same rule `ToolRegistry.resolve` applies to `present`
     // and `toModelOutput`. Two ways to match:
     //   - identity: the tool this decorator was registered against is still live;
-    //   - incumbent: the built-in is live again, so a decorator written for it re-applies after a
-    //     shadowing tool is disabled (dropping it there made LSP diagnostics vanish for the rest of
-    //     the session).
-    // A decorator never attaches to a DIFFERENT extension's tool unless that is the exact object it
-    // registered against.
+    //   - explicit incumbent intent (`followIncumbent`, used by core's built-ins): the decorator
+    //     targets the seeded implementation, so it applies while that implementation is live —
+    //     whether or not a user extension was shadowing the name when it registered, and after that
+    //     shadow is removed (dropping it there made LSP diagnostics vanish for the rest of the
+    //     session, including when LSP activated AFTER a startup shadow).
+    // A decorator registered against an extension's tool never leaks onto the built-in once that
+    // extension is disabled: it has no incumbent intent, and `entry.tool` is then a different object.
+    // `liveTool !== undefined` keeps "registered before anything existed" meaning "wraps nothing".
     const incumbentLive = this.registry.isIncumbent(name);
-    const applicable = decorators.filter((decorator) => decorator.liveTool === entry.tool || incumbentLive);
+    const applicable = decorators.filter(
+      (decorator) =>
+        decorator.liveTool === entry.tool ||
+        (decorator.followIncumbent && incumbentLive && decorator.liveTool !== undefined)
+    );
     if (applicable.length === 0) return entry;
     // A tool with no handler of its own still runs the decorator chain: the base is the identity
     // (the same JSON normalization the framework applies), not "skip the decorator". Without this,
@@ -112,11 +125,16 @@ export class AgentToolService {
   }
 
   /** Register an agent-scoped model-output decorator; the returned disposer removes only it. */
-  registerDecorator(toolName: string, fn: ToModelOutputDecorator, ownerId: string): () => void {
+  registerDecorator(
+    toolName: string,
+    fn: ToModelOutputDecorator,
+    ownerId: string,
+    options: { followIncumbent?: boolean } = {}
+  ): () => void {
     // Capture the live tool this decorator was written for. `undefined` (registered before the tool
     // exists) means it applies to nothing, rather than to whatever takes the name later.
     const liveTool = this.registry.resolve(toolName)?.tool;
-    const entry = { ownerId, fn, liveTool };
+    const entry = { ownerId, fn, liveTool, followIncumbent: options.followIncumbent === true };
     const list = this.decorators.get(toolName) ?? [];
     list.push(entry);
     this.decorators.set(toolName, list);
@@ -191,7 +209,12 @@ export class AgentToolService {
     // tool but the registry has no stack for it yet (bootstrap seeds them in that order).
     const owner = this.registry.resolve(def.name)?.ownerId;
     if (existing && owner !== undefined && owner !== ctx.ownerId && !this.registry.isIncumbent(def.name)) {
-      ctx.warn?.(`Tool "${def.name}" already registered by another extension, overwriting`);
+      // Neutral by construction: the winner is decided by dispatch rank, so this claim may be the
+      // one that runs or the one that is buried. Saying "overwriting" told an operator the opposite
+      // of what happened whenever the new claim ranked lower.
+      ctx.warn?.(
+        `Tool "${def.name}" is already registered by another extension; dispatch order decides which implementation runs`
+      );
     }
 
     const serverTool = defineServerTool({

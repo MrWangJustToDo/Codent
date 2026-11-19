@@ -48,12 +48,31 @@ export function mergeAbortSignals(...signals: Array<AbortSignal | undefined | nu
   if (live.length === 1) return live[0];
   if (typeof AbortSignal.any === "function") return AbortSignal.any(live);
   const controller = new AbortController();
+  // The fallback cannot know when the consumer is done, so it detaches as soon as ANY source fires:
+  // otherwise every merged call left a listener (and its closed-over controller) on the long-lived
+  // run/incarnation signal until that signal aborted, tripping Node's max-listeners warning.
+  //
+  // Known limit: when this merge is itself used as a SOURCE of another merge, the inner merge's
+  // listeners survive until one of the inner sources aborts. Releasing them when the outer signal
+  // stops being needed would detach a signal other consumers still hold, so it is deliberately not
+  // attempted; the native `AbortSignal.any` path (every supported Node) has no such shape.
+  const listeners: Array<{ signal: AbortSignal; handler: () => void }> = [];
+  const detach = (): void => {
+    for (const { signal, handler } of listeners) signal.removeEventListener("abort", handler);
+    listeners.length = 0;
+  };
   for (const signal of live) {
     if (signal.aborted) {
       controller.abort(signal.reason);
+      detach();
       break;
     }
-    signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
+    const handler = (): void => {
+      detach();
+      controller.abort(signal.reason);
+    };
+    signal.addEventListener("abort", handler, { once: true });
+    listeners.push({ signal, handler });
   }
   return controller.signal;
 }

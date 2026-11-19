@@ -1,7 +1,12 @@
 import { truncateText } from "../../utils/text-truncation.js";
 
 import { eventError } from "./event-error.js";
-import { DEFAULT_EVENT_LOG_RULES, SPECIALIZED_EVENT_LOG, type EventLogRule } from "./event-log-rules.js";
+import {
+  DEFAULT_EVENT_LOG_RULES,
+  PROJECTION_EVENT_LOG_RULES,
+  SPECIALIZED_EVENT_LOG,
+  type EventLogRule,
+} from "./event-log-rules.js";
 import { SPECIALIZED_EVENT_LOG_HANDLERS } from "./event-log-specialized.js";
 import { MAX_LOG_MESSAGE_CHARS, readEventPayload as p, summarizePayload } from "./payload.js";
 
@@ -22,6 +27,14 @@ export interface EventLogPolicy {
 }
 
 export type EventLogResolver = (event: AgentEvent) => AgentLog | null | undefined;
+
+/**
+ * Session-projection / internal events: a snapshot that re-publishes on every change.
+ *
+ * Never writable, overrides included — letting a host policy re-enable one wrote a whole transcript
+ * snapshot into a single log line. Derived from the table rather than kept as a second name list.
+ */
+const PROJECTION_EVENT_TYPES: ReadonlySet<string> = new Set(Object.keys(PROJECTION_EVENT_LOG_RULES));
 
 function resolveRule(type: AgentEventType, policy?: EventLogPolicy): EventLogRule | false | undefined {
   const override = policy?.events?.[type];
@@ -99,14 +112,23 @@ export function bridgeTelemetryToAgentLog(
   if (!enabled) return () => {};
 
   return bus.on("*", (event) => {
-    // The table's `false` cells are authoritative, BEFORE any override. They are the projection /
-    // internal events (`session:messages`, `tool:chunk`, …), and letting a host policy re-enable
-    // one wrote a whole transcript snapshot into a single log line. The table already says "never".
+    // The table's `false` cells are authoritative by default. A PROJECTION cell is never writable,
+    // overrides included: a snapshot re-publishes on every change, so an override wrote a whole
+    // transcript snapshot into a single log line. A TELEMETRY cell that is `false` by default
+    // (`turn:start`, `turn:end`, `message:start`, `message:end`, `subagent:queue`) is a different
+    // decision — "not logged unless a policy opts in" — so an explicit rule is honoured instead of
+    // being silently inert.
     //
     // Checked BEFORE `resolveLog`: this runs on every streamed delta (`session:messages`) and every
     // stdout chunk (`tool:chunk`), and resolving the owning log walks the scope chain for an event
     // that can never produce a row.
-    if (DEFAULT_EVENT_LOG_RULES[event.type] === false) return;
+    const override = policy?.events?.[event.type];
+    if (
+      DEFAULT_EVENT_LOG_RULES[event.type] === false &&
+      (PROJECTION_EVENT_TYPES.has(event.type) || override === undefined || override === false)
+    ) {
+      return;
+    }
 
     const log = resolveLog(event);
     if (!log) return;
@@ -114,7 +136,6 @@ export function bridgeTelemetryToAgentLog(
     // Policy overrides must still win before the specialized handlers: those events have their own
     // multi-row formatting, but an explicit `false` means "never write this event" and an explicit
     // rule means "use this".
-    const override = policy?.events?.[event.type];
     if (override === false) return;
     if (override) {
       writeLog(log, override, event, override.formatMessage(event));

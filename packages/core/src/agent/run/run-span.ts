@@ -11,6 +11,7 @@ import { formatAgentStreamError } from "../stream/assert-async-iterable.js";
 import { EMPTY_MODEL_STREAM_MESSAGE, shouldFlagEmptyModelStream } from "../stream/empty-model-stream.js";
 import { hasTruncatedToolCalls, toolSchemaRequiresArguments } from "../stream/incomplete-tool-calls.js";
 import { hasPendingInteraction } from "../stream/tool-phase-utils.js";
+import { clientToolClassifier } from "../tools/catalog/tool-names.js";
 
 import {
   DEFAULT_MODEL_STREAM_STALL_MS,
@@ -91,6 +92,8 @@ export async function runManagedSpan(
   // truncated". Optional call: a host double may expose no tool service at all.
   const requiresArguments = (toolName: string): boolean | undefined =>
     toolSchemaRequiresArguments(managed.getToolInputSchema?.(toolName));
+  // One classifier for the span: the host's identity answer, else the static table.
+  const isClientTool = clientToolClassifier(managed);
   const observation: ModelStreamObservation = {
     sawTerminal: false,
     toolStarts: 0,
@@ -104,7 +107,7 @@ export async function runManagedSpan(
       sawTerminal: observation.sawTerminal,
       toolStarts: observation.toolStarts,
       hasTruncatedToolCalls: hasTruncatedToolCalls(messages, requiresArguments),
-      hasPendingInteraction: hasPendingInteraction(messages),
+      hasPendingInteraction: hasPendingInteraction(messages, isClientTool),
     });
 
   try {

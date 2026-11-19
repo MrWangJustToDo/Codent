@@ -34,6 +34,14 @@ const ALLOWLIST = new Map([
     "core/agent/run/chat-controller.ts",
     "Chat run orchestration: pump admission/continuation, mid-run queue, session-switch refusal contract, approval answering, stream-outcome finalization. Their ORDER is the invariant, so a split has to carry it; the refusal gate and queue drain helpers are the next unit.",
   ],
+  [
+    "core/managers/services/session-service.ts",
+    "Persistence orchestration: write coalescing, lock handover and the restore/adopt transaction are one ordered protocol over the same SessionStore. The next extraction seam is the restore/adopt path.",
+  ],
+  [
+    "core/agent/log/event-log-rules.ts",
+    "One exhaustive table: every telemetry event's log level/category/formatter plus the projection suppressions. Splitting it would let a new event land without a decision.",
+  ],
 ]);
 
 const over = [];

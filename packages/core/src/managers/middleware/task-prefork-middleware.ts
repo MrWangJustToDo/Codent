@@ -40,7 +40,7 @@ import {
   peekTaskPreforkCoordinator,
 } from "../../agent/subagent/subagent-runs.js";
 import { SUBAGENT_NO_TRUNCATE } from "../../agent/subagent/types.js";
-import { BUILTIN_TOOL_NAMES } from "../../agent/tools/catalog/tool-names.js";
+import { BUILTIN_TOOL_NAMES, clientToolClassifier } from "../../agent/tools/catalog/tool-names.js";
 import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
 import { generateId } from "../../utils/generate-id.js";
 
@@ -225,7 +225,8 @@ export function createTaskPreforkMiddleware(deps: TaskPreforkMiddlewareDeps): Ch
         managed.getChatController()?.getMessages() ??
         managed.getUI()?.getMessages() ??
         deps.getUIChannel?.()?.getMessages();
-      if (!messages || hasPendingRunContinuation(messages)) return;
+      const isClientTool = clientToolClassifier(managed);
+      if (!messages || hasPendingRunContinuation(messages, isClientTool)) return;
       discardRegistered(managed, "run-finish");
     },
     // A `task` call can be REFUSED after its pre-fork started: an extension's `tool:before:…`

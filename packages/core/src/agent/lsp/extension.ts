@@ -252,19 +252,25 @@ async function activateLsp(
   // handlers so the summary survives the `onConfig` / tool-compact rewrite.
   const AUTO_DIAG_TOOLS = [BUILTIN_TOOL_NAMES.writeFile, BUILTIN_TOOL_NAMES.editFile] as const;
   for (const toolName of AUTO_DIAG_TOOLS) {
-    ctx.registerToolOutputDecorator(toolName, async (ctx, next) => {
-      const base = await next(ctx);
-      const output = ctx.output as Record<string, unknown> | undefined;
-      const diag = output?._lspDiagnostics;
-      if (typeof diag !== "string" || diag.length === 0) return base;
+    // `followIncumbent`: the diagnostics belong to the built-in write/edit row, so the decorator must
+    // keep applying when a user extension shadows the name at startup, and again once it is removed.
+    ctx.registerToolOutputDecorator(
+      toolName,
+      async (ctx, next) => {
+        const base = await next(ctx);
+        const output = ctx.output as Record<string, unknown> | undefined;
+        const diag = output?._lspDiagnostics;
+        if (typeof diag !== "string" || diag.length === 0) return base;
 
-      const suffix = `\n\n${diag}`;
-      if (typeof base === "string") return base + suffix;
-      if (Array.isArray(base)) {
-        return [...base, { type: "text" as const, content: suffix }];
-      }
-      return base;
-    });
+        const suffix = `\n\n${diag}`;
+        if (typeof base === "string") return base + suffix;
+        if (Array.isArray(base)) {
+          return [...base, { type: "text" as const, content: suffix }];
+        }
+        return base;
+      },
+      { followIncumbent: true }
+    );
   }
 
   // ---- Runtime access from CoreEnv ----

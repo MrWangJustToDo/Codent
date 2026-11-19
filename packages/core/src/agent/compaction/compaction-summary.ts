@@ -18,7 +18,6 @@
  * compaction run (formatted by {@link formatCompactionSummaryContent}).
  */
 
-import { extractTextFromContent } from "../../utils/message-content.js";
 import { isContextUIMessage } from "../turn-context/turn-context-message.js";
 
 import { CONVERSATION_SUMMARY_END, CONVERSATION_SUMMARY_START, isCompactionSummaryText } from "./summary-marker.js";
@@ -27,31 +26,54 @@ import type { ContentPart, ModelMessage, UIMessage } from "@tanstack/ai";
 
 export { CONVERSATION_SUMMARY_END, CONVERSATION_SUMMARY_START, isCompactionSummaryText } from "./summary-marker.js";
 
-function extractFirstText(content: string | readonly ContentPart[]): string | undefined {
+/** The minimum a text part has to expose; `ContentPart` and `UIMessage` parts are both assignable. */
+interface TextLikePart {
+  type: string;
+  content?: unknown;
+  text?: unknown;
+}
+
+/**
+ * The text every compaction-marker reader agrees on: each non-empty text part, joined.
+ *
+ * ONE reader for the user-input guard, the channel detector and the wire/cut-point detector. They
+ * previously had two: the guard read only the FIRST text part while the detectors joined every
+ * part, so `[{type:"text",content:""},{type:"text",content:"[CONVERSATION SUMMARY]…"}]` passed the
+ * guard and was still treated as a checkpoint. Non-text parts contribute nothing — a text marker
+ * lives in a text part, and including modality placeholders would make the guard and the detector
+ * disagree again.
+ */
+export function compactionMarkerText(content: string | readonly TextLikePart[] | null | undefined): string {
+  if (content == null) return "";
   if (typeof content === "string") return content;
+  // Defensive shape check: the declared union is string | parts, but this is the single reader every
+  // detector funnels through, so a malformed value degrades to "no text" instead of throwing.
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
   for (const part of content) {
     if (part.type !== "text") continue;
-    const value = (part as { content?: unknown; text?: unknown }).content ?? (part as { text?: unknown }).text;
-    return typeof value === "string" ? value : undefined;
+    const value = part.content ?? part.text;
+    if (typeof value === "string" && value.length > 0) parts.push(value);
   }
-  return undefined;
+  return parts.join("\n");
 }
 
 /**
  * Reject user-authored text that forges the compaction summary markers.
  *
  * Compaction checkpoints are detected purely by marker matching (see the
- * header note), so any message whose first text starts with
- * `[CONVERSATION SUMMARY]` would be treated as a compaction checkpoint and
- * break auto-compact / cut-point detection. Call this at every user-message
- * entry point (send / follow-up / force-submit) before the message reaches
- * the channel.
+ * header note), so any message whose text starts with `[CONVERSATION SUMMARY]`
+ * would be treated as a compaction checkpoint and break auto-compact /
+ * cut-point detection. The text is {@link compactionMarkerText}'s join of every
+ * non-empty text part — the same reader the detectors use, so a marker cannot
+ * hide behind an empty first part. Call this at every user-message entry point
+ * (send / follow-up / force-submit) before the message reaches the channel.
  *
  * @throws if the input begins with {@link CONVERSATION_SUMMARY_START}
  */
 export function assertNotCompactionSummaryInput(content: string | readonly ContentPart[]): void {
-  const text = extractFirstText(content);
-  if (text !== undefined && isCompactionSummaryText(text)) {
+  const text = compactionMarkerText(content);
+  if (isCompactionSummaryText(text)) {
     throw new Error(
       `Input starts with the reserved compaction marker "${CONVERSATION_SUMMARY_START}" and ` +
         "would be misread as a compaction summary checkpoint. Please reword the message."
@@ -61,20 +83,15 @@ export function assertNotCompactionSummaryInput(content: string | readonly Conte
 
 export function isCompactionSummaryModelMessage(message: ModelMessage): boolean {
   if (message.role !== "user") return false;
-  return isCompactionSummaryText(extractTextFromContent(message.content));
+  return isCompactionSummaryText(compactionMarkerText(message.content));
 }
 
 export function isCompactionSummaryUIMessage(message: UIMessage): boolean {
   if (message.role !== "user") return false;
-  // Join every non-empty text part, like the wire detector (`extractTextFromContent`) does. Reading
-  // only the FIRST part let `[{text:""}, {text:"[CONVERSATION SUMMARY]…"}]` pass a user-input guard
-  // while `cut-point` still recognized the message as a checkpoint.
-  const text = message.parts
-    .filter((part): part is Extract<typeof part, { type: "text" }> => part.type === "text")
-    .map((part) => part.content)
-    .filter((value) => value.length > 0)
-    .join("\n");
-  return isCompactionSummaryText(text);
+  // Same reader as the guard and the wire detector (`compactionMarkerText`): joining every non-empty
+  // text part. Reading only the FIRST part let `[{text:""}, {text:"[CONVERSATION SUMMARY]…"}]` pass a
+  // user-input guard while `cut-point` still recognized the message as a checkpoint.
+  return isCompactionSummaryText(compactionMarkerText(message.parts));
 }
 
 /**
