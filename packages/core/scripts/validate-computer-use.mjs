@@ -224,6 +224,32 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
     "the result states the conversion (declared / seen, not its inverse)"
   );
   assert.ok(fullText.includes("is not 1280x800"), "…naming the size it actually delivered");
+  assert.equal(fullText.includes(" band ("), false, "a full screenshot is the screen, not a band of it");
+}
+
+// The exact zoom a measured session asked for while aiming at the Dock: 640-710 of an 800-high
+// screen is the bottom-center BAND, and it ends at 89% — 11% above the bottom edge. That sentence is
+// what the old result lacked; the model read the rect as a label and gave up on zoom.
+{
+  const { computer } = fakeComputer({ zoom: async () => pngBytes(1568, 157) });
+  const { tools } = activate(computer, { settleMs: 0 });
+  const read = tools.get(COMPUTER_SCREENSHOT_TOOL);
+  const shot = await read.execute({ zoom: { x: 300, y: 640, width: 700, height: 70 } }, OPTS);
+  const text = read.toModelOutput({ output: shot })[0].content;
+  assert.match(text, /the bottom-center band \(x 23%-78%, y 80%-89% of the screen\)/);
+}
+
+// A region covering the frame is the screen, not a band that happens to span 0%-100% on both axes.
+{
+  const { computer } = fakeComputer({ zoom: async () => pngBytes(DISPLAY.width, DISPLAY.height) });
+  const { tools } = activate(computer, { settleMs: 0 });
+  const read = tools.get(COMPUTER_SCREENSHOT_TOOL);
+  const whole = await read.execute({ zoom: { x: 0, y: 0, width: DISPLAY.width, height: DISPLAY.height } }, OPTS);
+  assert.match(
+    read.toModelOutput({ output: whole })[0].content,
+    /the whole screen \(x 0%-100%, y 0%-100%\)/,
+    "a full-frame zoom is named as the whole screen"
+  );
 }
 
 // ============================================================================
@@ -676,6 +702,15 @@ function pngBytes(width, height) {
     "…with exact arithmetic to apply it"
   );
   assert.match(text, /Coordinates you SEND are always screen pixels/, "and the invariant");
+
+  // The region is placed in the WHOLE screen, not just described by its rect: a measured session
+  // zoomed 640-710 on an 800-high screen, saw wallpaper, and concluded zoom was broken — the rect was
+  // in the text, but nothing said it was the bottom band ending 11% short of the Dock at 94%+.
+  assert.match(
+    text,
+    /the top-left band \(x 8%-39%, y 6%-31% of the screen\)/,
+    "the region's place in the screen is stated"
+  );
 
   // A full screenshot is not magnified: no region, no scale, and the image is the display frame.
   const shot = await read.execute({}, OPTS);

@@ -226,6 +226,46 @@ export function screenModelParts(output: ScreenToolOutput): ContentPart[] {
 }
 
 /**
+ * Where a zoom region sits in the whole screen, in words and percentages.
+ *
+ * A zoom is the only result whose image is not the screen, so the model has to know WHICH part of
+ * the screen it is looking at. The absolute rect was already in the text, but a model that has lost
+ * the layout reads "(300,640)-(1000,710)" as a label rather than a location: a measured session
+ * zoomed y 640-710 on an 800-high screen, saw wallpaper, and concluded zoom was broken instead of
+ * noticing the band ended at 89% — 11% above the bottom edge, where the Dock was. A coarse band name
+ * plus the percentages makes that self-evident without a second image.
+ */
+function describeRegionPlacement(
+  region: { x: number; y: number; width: number; height: number },
+  display: { width: number; height: number }
+): string {
+  const percent = (value: number, total: number) => Math.round((value / total) * 100);
+  // A region covering the frame is the screen, not a band of it: "the middle-center band (x 0%-100%,
+  // y 0%-100%)" reads as a contradiction, and `zoom` accepts the whole display.
+  if (
+    region.x <= 0 &&
+    region.y <= 0 &&
+    region.x + region.width >= display.width &&
+    region.y + region.height >= display.height
+  ) {
+    return `the whole screen (x 0%-100%, y 0%-100%)`;
+  }
+  // `center * length` puts the centre in a bucket: 0-20-40-60-80-100 for five bands, thirds for
+  // three. Clamped on both sides: a region ending exactly at the edge computes a centre of 1, and a
+  // malformed output (the wire is rebuilt from JSON) could compute one below 0 — an unclamped index
+  // prints "undefined" into the model-facing text.
+  const band = (center: number, labels: readonly string[]) =>
+    labels[Math.min(labels.length - 1, Math.max(0, Math.floor(center * labels.length)))]!;
+  const vertical = band((region.y + region.height / 2) / display.height, ["top", "upper", "middle", "lower", "bottom"]);
+  const horizontal = band((region.x + region.width / 2) / display.width, ["left", "center", "right"]);
+  return (
+    `the ${vertical}-${horizontal} band (x ${percent(region.x, display.width)}%-` +
+    `${percent(region.x + region.width, display.width)}%, y ${percent(region.y, display.height)}%-` +
+    `${percent(region.y + region.height, display.height)}% of the screen)`
+  );
+}
+
+/**
  * Say, on every result, which space the coordinates belong to.
  *
  * A zoom is the one case where the image is not the screen: the crop is captured at full physical
@@ -257,6 +297,7 @@ function describeFrame(output: ScreenToolOutput): string {
   }
 
   const { x, y, width: w, height: h } = output.region;
+  const placement = describeRegionPlacement({ x, y, width: w, height: h }, output.display);
   const image = output.image;
   const ratio = image && w > 0 ? image.width / w : undefined;
   if (image && ratio !== undefined && Number.isFinite(ratio)) {
@@ -267,6 +308,7 @@ function describeFrame(output: ScreenToolOutput): string {
       return (
         `${SCREENSHOT_MARKER} ${output.summary}. This is the screen region (${x},${y})-(${x + w},${y + h}) ` +
         `at 1:1 (${image.width}x${image.height}) in the ${width}x${height} screen space. ` +
+        `The region is ${placement}. ` +
         `To place a point you see in it: screen_x = ${x} + image_x, screen_y = ${y} + image_y. ` +
         `Coordinates you SEND are screen pixels in (0,0)-(${width},${height}), where ${origin}. ${downscaleRule(image)}`
       );
@@ -276,6 +318,7 @@ function describeFrame(output: ScreenToolOutput): string {
       `${SCREENSHOT_MARKER} ${output.summary}. This is a MAGNIFIED view: the image is ` +
       `${image.width}x${image.height} = ${factor}x the screen region (${x},${y})-(${x + w},${y + h}) ` +
       `in the ${width}x${height} screen space. ` +
+      `The region is ${placement}. ` +
       // The formula is exact; `factor` above is only the approximate reading of it.
       `To place a point you see in it: screen_x = ${x} + image_x * ${w} / ${image.width}, ` +
       `screen_y = ${y} + image_y * ${h} / ${image.height}. ` +
@@ -288,7 +331,7 @@ function describeFrame(output: ScreenToolOutput): string {
   return (
     `${SCREENSHOT_MARKER} ${output.summary}. This is a view of exactly the screen region ` +
     `(${x},${y})-(${x + w},${y + h}) in the ${width}x${height} screen space, at a scale this host ` +
-    `could not report. Do NOT use this image's own pixels as coordinates: keep sending screen ` +
-    `coordinates in (0,0)-(${width},${height}), where ${origin}.`
+    `could not report. The region is ${placement}. Do NOT use this image's own pixels as coordinates: keep ` +
+    `sending screen coordinates in (0,0)-(${width},${height}), where ${origin}.`
   );
 }
