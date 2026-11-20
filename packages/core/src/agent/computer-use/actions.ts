@@ -104,9 +104,9 @@ const actionShape = {
     .optional()
     .describe(
       'Keys to press together, using KeyboardEvent.key names — e.g. ["Control", "c"], ["Enter"]. ' +
-        "A single character must be a lowercase letter or a digit (a lone uppercase letter is sent " +
-        "as Shift+lower); use `type` for text with punctuation. For `hold_key`, the keys to hold " +
-        "down for `ms`."
+        "A single character is a key: lowercase letters, digits and the space key are pressed " +
+        "directly, and a lone uppercase letter is sent as Shift+lower. Punctuation is text — use " +
+        "`type` for it. For `hold_key`, the physical keys to hold down for `ms`."
     ),
   delta_x: z
     .number()

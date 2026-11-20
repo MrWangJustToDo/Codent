@@ -104,7 +104,7 @@ export function createComputerUseExtension(
     `coordinate you send is a pixel in that ` +
     `space, with (0,0) at its top-left. A full screenshot may be downscaled before you see it: if ` +
     `the image is not ${width}x${height}, multiply what you measure by declared / seen (screen_x = ` +
-    `reading_x * ${width} / image width).`;
+    `reading_x * ${width} / image width, screen_y = reading_y * ${height} / image height).`;
 
   return {
     id: "codent-computer-use",
@@ -117,10 +117,10 @@ export function createComputerUseExtension(
       ctx.registerTool({
         name: COMPUTER_SCREENSHOT_TOOL,
         description:
-          `Take a screenshot of the user's screen and look at it. ${space} ` +
-          `Use "zoom" to read small text at full resolution — a zoom result states its own pixel size ` +
-          `and the factor to divide by when you convert a position back to screen coordinates; the ` +
-          `coordinates you SEND stay in the ${width}x${height} screen space. ` +
+          `Take a screenshot of the host's screen and look at it. ${space} ` +
+          `Use "zoom" to read small text at higher resolution — a zoom result states its own pixel size ` +
+          `and the exact arithmetic to map a position back to screen coordinates; the coordinates you ` +
+          `SEND stay in the ${width}x${height} screen space. ` +
           `This does not change anything on the screen.`,
         inputSchema: z.object({
           zoom: z
@@ -156,9 +156,9 @@ export function createComputerUseExtension(
       ctx.registerTool({
         name: COMPUTER_ACTION_TOOL,
         description:
-          `Control the user's real mouse and keyboard: ${computer.environment}. ${space} ` +
+          `Control the host's real mouse and keyboard: ${computer.environment}. ${space} ` +
           `Coordinates are always in that screen space — never in a downscaled image. ` +
-          `Each call returns a fresh screenshot of the result. ` +
+          `Each call returns a fresh screenshot of the result when the screen can be captured. ` +
           `Look before you act (${COMPUTER_SCREENSHOT_TOOL}), and prefer keyboard shortcuts over ` +
           `clicking coordinates when you can. ` +
           `Use \`modifiers\` for a modified gesture (Ctrl+click, Shift+click, Ctrl+scroll) and ` +

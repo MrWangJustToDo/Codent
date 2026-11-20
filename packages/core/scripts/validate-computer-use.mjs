@@ -187,6 +187,22 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
   const blindTools = activate(blind, { settleMs: 0 }).tools;
   await assert.rejects(() => blindTools.get(COMPUTER_SCREENSHOT_TOOL).execute({}, OPTS), /could not be captured/);
 
+  // An ACTION whose follow-up capture fails still returns its summary; the projection must say that no
+  // screenshot is attached instead of describing a frame the model cannot see (and must not carry the
+  // screenshot marker, which would make the history cap count it).
+  const { computer: blindAction } = fakeComputer({ screenshot: async () => null });
+  const blindWrite = activate(blindAction, { settleMs: 0 }).tools.get(COMPUTER_ACTION_TOOL);
+  const blindOutput = await blindWrite.execute({ action: "click", x: 1, y: 1 }, OPTS);
+  assert.equal(blindOutput.base64, undefined, "no image bytes");
+  const blindParts = blindWrite.toModelOutput({ output: blindOutput });
+  assert.equal(
+    blindParts.some((part) => part.type === "image"),
+    false
+  );
+  assert.match(blindParts[0].content, /click 1,1 left/);
+  assert.match(blindParts[0].content, /No screenshot is attached to this result/);
+  assert.equal(blindParts[0].content.includes(SCREENSHOT_MARKER), false, "not a screenshot for the history cap");
+
   // Zoom goes through the host's region capture and reports the region, not the screen.
   const zoomed = await read.execute({ zoom: { x: 0, y: 0, width: 320, height: 200 } }, OPTS);
   assert.deepEqual(calls.at(-1), ["zoom", { x: 0, y: 0, width: 320, height: 200 }]);
@@ -216,7 +232,10 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
     "an unmeasured crop claims no delivered size"
   );
   assert.ok(zoomParts[0].content.includes("(0,0)-(320,200)"), "…still naming the region in screen space");
-  assert.ok(read.toModelOutput({ output: output })[0].content.includes("screen pixels in (0,0)-(1280,800)"));
+  assert.ok(
+    read.toModelOutput({ output: output })[0].content.includes("screen pixels with x 0-1279 and y 0-799"),
+    "the coordinate space is stated as a half-open range"
+  );
   // A provider may downscale the attachment (a measured session saw 1280x800 arrive as 1024x640);
   // the rule is on every result, so the model does not have to discover it by trial and error.
   const fullText = read.toModelOutput({ output: output })[0].content;
@@ -225,6 +244,7 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
     "the result states the conversion (declared / seen, not its inverse)"
   );
   assert.ok(fullText.includes("is not 1280x800"), "…naming the size it actually delivered");
+  assert.ok(fullText.includes("screen_y = reading_y * 800 / image height"), "…with the y axis as well as x");
   assert.equal(fullText.includes(" band ("), false, "a full screenshot is the screen, not a band of it");
 }
 
@@ -238,6 +258,17 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
   const shot = await read.execute({ zoom: { x: 300, y: 640, width: 700, height: 70 } }, OPTS);
   const text = read.toModelOutput({ output: shot })[0].content;
   assert.match(text, /the bottom-center band \(x 23%-78%, y 80%-89% of the screen\)/);
+}
+
+// A crop smaller than its region (a capped/oversized-region capture) is SCALED, not "MAGNIFIED 0.7x".
+{
+  const { computer } = fakeComputer({ zoom: async () => pngBytes(500, 50) });
+  const { tools } = activate(computer, { settleMs: 0 });
+  const read = tools.get(COMPUTER_SCREENSHOT_TOOL);
+  const shot = await read.execute({ zoom: { x: 300, y: 640, width: 700, height: 70 } }, OPTS);
+  const text = read.toModelOutput({ output: shot })[0].content;
+  assert.match(text, /This is a SCALED view: the image is 500x50 = 0\.71x the screen region/);
+  assert.match(text, /screen_x = 300 \+ image_x \* 700 \/ 500/);
 }
 
 // A region covering the frame is the screen, not a band that happens to span 0%-100% on both axes.
@@ -884,7 +915,7 @@ function pngBytes(width, height) {
   const shot = await read.execute({}, OPTS);
   assert.equal(shot.region, undefined);
   assert.equal(shot.scale, undefined);
-  assert.match(read.toModelOutput({ output: shot })[0].content, /screen pixels in \(0,0\)-\(1280,800\)/);
+  assert.match(read.toModelOutput({ output: shot })[0].content, /screen pixels with x 0-1279 and y 0-799/);
 }
 
 // A crop that is exactly the region (a 1x panel) says "1:1", and gives the OFFSET mapping — a model

@@ -213,16 +213,20 @@ export async function captureScreen(
  * is not a valid tool output and must be passed through untouched.
  */
 export function screenModelParts(output: ScreenToolOutput): ContentPart[] {
-  const parts: ContentPart[] = [{ type: "text", content: describeFrame(output) }];
   // A tool output is not guaranteed to be this shape by the type system alone — it round-trips
-  // through JSON, and `getToolModelOutput` is a public seam. A missing image must not throw away the
-  // reminder text, so the parts are read defensively.
+  // through JSON, and `getToolModelOutput` is a public seam. Read the parts defensively.
   const base64 = typeof output?.base64 === "string" ? output.base64 : undefined;
   const mimeType = typeof output?.mimeType === "string" ? output.mimeType : undefined;
-  if (base64 && mimeType) {
-    parts.push({ type: "image", source: { type: "data", value: base64, mimeType } });
+  if (!base64 || !mimeType) {
+    // The action path still returns its one-line result when the follow-up capture failed. The frame
+    // text would describe a screenshot that is not attached, so say what is actually true instead.
+    // No SCREENSHOT_MARKER: this is not a screenshot the history cap should count.
+    return [{ type: "text", content: `${output.summary}. No screenshot is attached to this result.` }];
   }
-  return parts;
+  return [
+    { type: "text", content: describeFrame(output) },
+    { type: "image", source: { type: "data", value: base64, mimeType } },
+  ];
 }
 
 /**
@@ -284,16 +288,23 @@ function describeFrame(output: ScreenToolOutput): string {
   // nothing on this side can see that. Rather than let the model discover it by trial and error, the
   // rule is stated on every result that KNOWS the size it delivered — never with a guessed one, or it
   // would tell the model to multiply by the wrong ratio.
-  const downscaleRule = (declared: { width: number; height: number }) =>
+  // `axis` names the frame the scaled reading lands in: a full screenshot's declared frame IS the
+  // screen space, while a zoom's is the IMAGE frame the formula below consumes. Calling both
+  // "screen_x" made the zoom rule read as a final screen coordinate (missing the region offset).
+  const downscaleRule = (declared: { width: number; height: number }, axis: "screen" | "image") =>
     `If the image you actually see is not ${declared.width}x${declared.height} (a provider may ` +
-    `downscale it), multiply what you measure by declared / seen (screen_x = reading_x * ` +
-    `${declared.width} / image width) before converting.`;
+    `downscale it), multiply what you measure by declared / seen (${axis}_x = reading_x * ` +
+    `${declared.width} / image width, ${axis}_y = reading_y * ${declared.height} / image height) ` +
+    `before converting.`;
+  // The coordinate space is half-open: the last valid pixel is width-1 / height-1. Saying
+  // "(0,0)-(W,H)" read as a closed interval and contradicted the bounds check.
+  const sendSpace = `screen pixels with x 0-${width - 1} and y 0-${height - 1}`;
 
   if (!output.region) {
     // A full screenshot is display-sized by construction (the box filter emits exactly this frame),
     // but the ATTACHMENT may still be downscaled by the provider — so the sentence names the screen
     // space the coordinates belong to, never "THIS image".
-    return `${SCREENSHOT_MARKER} ${output.summary}. ${screen}; coordinates you send are screen pixels in (0,0)-(${width},${height}), where ${origin}. ${downscaleRule({ width, height })}`;
+    return `${SCREENSHOT_MARKER} ${output.summary}. ${screen}; coordinates you send are ${sendSpace}, where ${origin}. ${downscaleRule({ width, height }, "screen")}`;
   }
 
   const { x, y, width: w, height: h } = output.region;
@@ -310,19 +321,23 @@ function describeFrame(output: ScreenToolOutput): string {
         `at 1:1 (${image.width}x${image.height}) in the ${width}x${height} screen space. ` +
         `The region is ${placement}. ` +
         `To place a point you see in it: screen_x = ${x} + image_x, screen_y = ${y} + image_y. ` +
-        `Coordinates you SEND are screen pixels in (0,0)-(${width},${height}), where ${origin}. ${downscaleRule(image)}`
+        `Coordinates you SEND are ${sendSpace}, where ${origin}. ${downscaleRule(image, "image")}`
       );
     }
     const factor = Math.round(ratio * 100) / 100;
+    // Only a larger image is MAGNIFIED. A capped/oversized-region crop can be smaller than the
+    // region (factor < 1), and calling that "MAGNIFIED 0.7x" contradicted the number in the same
+    // sentence; the formula is exact either way.
+    const view = ratio > 1 ? "MAGNIFIED" : "SCALED";
     return (
-      `${SCREENSHOT_MARKER} ${output.summary}. This is a MAGNIFIED view: the image is ` +
+      `${SCREENSHOT_MARKER} ${output.summary}. This is a ${view} view: the image is ` +
       `${image.width}x${image.height} = ${factor}x the screen region (${x},${y})-(${x + w},${y + h}) ` +
       `in the ${width}x${height} screen space. ` +
       `The region is ${placement}. ` +
       // The formula is exact; `factor` above is only the approximate reading of it.
       `To place a point you see in it: screen_x = ${x} + image_x * ${w} / ${image.width}, ` +
       `screen_y = ${y} + image_y * ${h} / ${image.height}. ` +
-      `Coordinates you SEND are always screen pixels in (0,0)-(${width},${height}), where ${origin}. ${downscaleRule(image)}`
+      `Coordinates you SEND are always ${sendSpace}, where ${origin}. ${downscaleRule(image, "image")}`
     );
   }
   // The bytes could not be measured, so the delivered size — and therefore whether this is magnified
@@ -332,6 +347,6 @@ function describeFrame(output: ScreenToolOutput): string {
     `${SCREENSHOT_MARKER} ${output.summary}. This is a view of exactly the screen region ` +
     `(${x},${y})-(${x + w},${y + h}) in the ${width}x${height} screen space, at a scale this host ` +
     `could not report. The region is ${placement}. Do NOT use this image's own pixels as coordinates: keep ` +
-    `sending screen coordinates in (0,0)-(${width},${height}), where ${origin}.`
+    `sending ${sendSpace}, where ${origin}.`
   );
 }
