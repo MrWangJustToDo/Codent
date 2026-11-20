@@ -557,6 +557,12 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
     "a cancelled hold still releases the key"
   );
 
+  // A hold is a physical key; an uppercase character is Shift+letter, not one key.
+  await assert.rejects(
+    () => write.execute({ action: "hold_key", keys: ["A"], ms: 1 }, OPTS),
+    /holds physical keys, and "A" is Shift\+a/
+  );
+
   // A hold blocks the call like a wait, so it counts toward the batch's time budget.
   await assert.rejects(
     () =>
@@ -571,6 +577,36 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
         OPTS
       ),
     /This batch waits 30000ms/
+  );
+}
+
+// Points outside the display are refused before the OS sees them: an out-of-range click used to
+// reach moveMouse(12500,12500) on a 2560-wide screen and land wherever the OS clamped the pointer,
+// while the summary still named the requested point.
+{
+  const { computer, calls } = fakeComputer();
+  const { tools } = activate(computer, { settleMs: 0 });
+  const write = tools.get(COMPUTER_ACTION_TOOL);
+
+  await assert.rejects(
+    () => write.execute({ action: "click", x: 1280, y: 10 }, OPTS),
+    /"click" point 1280,10 is outside the 1280x800 screen; use x 0-1279, y 0-799/
+  );
+  await assert.rejects(
+    () => write.execute({ action: "drag", x: 1, y: 1, to_x: 1, to_y: 800 }, OPTS),
+    /"drag" point 1,800 is outside the 1280x800 screen/
+  );
+  await assert.rejects(
+    () => write.execute({ action: "scroll", x: -1, y: 1, delta_y: 10 }, OPTS),
+    /"scroll" point -1,1 is outside the 1280x800 screen/
+  );
+
+  // The last valid pixel is width-1 / height-1.
+  calls.length = 0;
+  await write.execute({ action: "click", x: 1279, y: 799 }, OPTS);
+  assert.deepEqual(
+    calls.filter(([name]) => name === "click"),
+    [["click", 1279, 799, "left", 1]]
   );
 }
 
@@ -613,10 +649,14 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
     /Action #2 of 2 \(key\) needs `keys`/
   );
 
-  // `hold_key` is validated the same way: its keys are held, but they are the same backend names.
+  // `hold_key` is validated the same way, one physical key at a time.
   await assert.rejects(
     () => write.execute({ actions: [{ action: "hold_key", keys: ["Bogus"] }] }, OPTS),
     /Action #1 of 1 \(hold_key\) would fail: "Bogus" is not a key name/
+  );
+  await assert.rejects(
+    () => write.execute({ actions: [{ action: "hold_key", keys: ["A"] }] }, OPTS),
+    /Action #1 of 1 \(hold_key\) would fail: "hold_key" holds physical keys/
   );
 
   // The host sees the chord `press` would receive, modifiers included.

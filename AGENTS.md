@@ -658,6 +658,9 @@ usable display answers (headless CI, containers, `DISPLAY` pointing at a dead X 
 then omits `computer`, and bootstrap loads the extension only when `config.computerUse !== false &&
 env.computer` — a screen the model cannot actually see or drive is worse than no screen tools.
 
+The capability is **one display**: the primary on macOS/Windows, the default X screen on Linux.
+Secondary monitors are not captured, and coordinates cannot address them on macOS/Windows.
+
 Presence is decided by a **child process** on Linux, because the addon's headless failure is a
 segfault (`getScreenSize()` dereferences a NULL `Display*`), not an exception — nothing in-process can
 catch it. The probe result is memoized per process, and the driver calls `setXDisplayName($DISPLAY)`
@@ -689,10 +692,11 @@ held keys as `key`/`text` on the action, OpenAI's CUA carries `keys: string[]` o
 a `path` of drag waypoints and a batched `actions[]`. A call-level `modifiers` applies to every batch
 entry that can hold one (`type`/`wait` ignore it, and the result says so); an entry's own value wins.
 
-**Two host-level failures are reported, not hidden.** Linux/X11 cannot type non-ASCII through the addon
-(robotjs casts each code point to a single `char`), so the driver routes such text through `xdotool` and
-*refuses with instructions* when it is missing — typing plausible-looking ASCII instead is the failure
-mode that leaves the model unable to tell which layer mangled the text. macOS/Windows carry BMP text
+**Two host-level failures are reported, not hidden.** Linux/X11 cannot type non-ASCII or Shift symbols
+through the addon (robotjs casts each code point to a single `char`, and its char→keysym path loses the
+Shift level: `!` arrives as `1`, `"` as nothing), so the driver routes all such text through `xdotool`
+and *refuses with instructions* when it is missing — typing plausible-looking ASCII instead is the
+failure mode that leaves the model unable to tell which layer mangled the text. macOS/Windows carry BMP text
 correctly but truncate anything outside it (a 16-bit `UniChar`/`wScan`), so astral input (emoji) is
 refused there rather than typed as a wrong character. An all-black capture (macOS without Screen
 Recording, or a locked display) is a valid PNG, so the driver warns once per process instead of feeding

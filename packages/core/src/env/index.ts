@@ -352,8 +352,8 @@ export interface CoreEnvComputer {
   /**
    * Reject keys this host cannot press, without pressing anything.
    *
-   * Optional, and pure validation. Core calls it for every `key` entry of a batch BEFORE the first
-   * step runs, because a backend validates at the point of the call — inside a batch that point is
+   * Optional, and pure validation. Core calls it for every `key` / `hold_key` entry of a batch
+   * BEFORE the first step runs, because a backend validates at the point of the call — inside a batch that point is
    * after earlier steps have moved the pointer and typed (a measured batch typed, waited, and only
    * then failed on `Return`; the model retried the whole sequence). Only the host knows its
    * backend's key table, so this is asked rather than guessed. A host that omits it keeps the

@@ -18,9 +18,11 @@
  *   A process WITHOUT the permission still reads `getScreenSize` / `getMousePos` / `screenshot`
  *   perfectly, so an experiment run from a plain shell looks like "the addon is broken" (the pointer
  *   never moves). Run such an experiment inside the host process that actually holds the permission.
- *   The coordinate space is the same as `getScreenSize` (logical points): `capture()` returns the
- *   backing store (2x on a Retina panel), while `moveMouse` / `scrollMouse` / `getMousePos` stay in
- *   points — which is why the display scaling in this adapter needs no Retina correction.
+ *   The adapter maps display space into whatever `getScreenSize()` reports. `capture()` returns the
+ *   backing store (2x on a Retina panel); `moveMouse` / `scrollMouse` / `getMousePos` use the
+ *   backend's pointer space. These agree on a 1x display; a HiDPI display needs verification, since
+ *   the backend reads its size from `CGDisplayPixelsWide` (pixels) while Quartz pointer coordinates
+ *   are points.
  * - Linux: needs X11. Wayland reports a screen but refuses injection, so `getScreenSize()` is the
  *   probe that decides presence here too.
  */
@@ -30,7 +32,7 @@ import { createRequire } from "node:module";
 import { promisify } from "node:util";
 
 import { encodeScreenPng } from "./png.js";
-import { assertPressable, splitChord } from "./robot-keys.js";
+import { assertPressable, resolvePress } from "./robot-keys.js";
 
 import type { ScreenBitmap } from "./png.js";
 import type {
@@ -312,6 +314,27 @@ const PASTEBOARD_TIMEOUT_MS = 5_000;
 const execFileAsync = promisify(execFile);
 
 /**
+ * True when the X11 character path would type the wrong character.
+ *
+ * `typeString` maps a character to a keysym and then to a keycode WITHOUT the Shift level: `!` is
+ * the `1` key, `@` the `2` key, and `"` has no mapping at all. Letters (with `isupper` adding Shift),
+ * digits, space, tab and newline are safe; every other printable ASCII character is not.
+ */
+function hasNonAlnumAscii(text: string): boolean {
+  return /[^A-Za-z0-9 \t\n]/.test(text);
+}
+
+/** The channel that types `text` correctly on `platform`. */
+export type TypeChannel = NonAsciiTypeChannel;
+
+export function typeChannel(platform: string, text: string): TypeChannel {
+  if (platform === "linux") return hasNonAscii(text) || hasNonAlnumAscii(text) ? "xdotool" : "typeString";
+  // macOS/Windows spell ASCII out correctly; only non-ASCII needs the platform channel (pasteboard on
+  // macOS, Unicode injection or the astral refusal on Windows).
+  return hasNonAscii(text) ? nonAsciiTypeChannel(platform, text) : "typeString";
+}
+
+/**
  * Which channel carries non-ASCII text on `platform`.
  *
  * Pure, so the matrix is assertable on any host: the key-event path is what the IME intercepts, and
@@ -442,9 +465,9 @@ async function typeViaXdotool(text: string, signal?: AbortSignal): Promise<void>
     const code = (err as NodeJS.ErrnoException).code;
     const reason = code === "ENOENT" ? "xdotool is not installed" : errorMessage(err);
     throw new Error(
-      `Cannot type non-ASCII text on Linux/X11: ${reason}. The bundled input library only types ASCII ` +
-        `there. Install xdotool (e.g. \`sudo apt install xdotool\`) to type other languages, or type the ` +
-        `text some other way.`
+      `Cannot type "${truncateText(text, 12)}" on Linux/X11: ${reason}. The bundled input library ` +
+        `loses Shift symbols and non-ASCII characters there; install xdotool (e.g. ` +
+        `\`sudo apt install xdotool\`) to type this text, or type it some other way.`
     );
   }
 }
@@ -549,7 +572,10 @@ export function createNodeComputer(options: CreateNodeComputerOptions = {}): Cor
 
   const moveTo = (x: number, y: number, live: { width: number; height: number } = liveScreen()) => {
     const point = toScreen(x, y, live);
-    robot.moveMouse(point.x, point.y);
+    // The tool already rejects a point outside `display`, but a screen that SHRANK since creation can
+    // map an in-display point past the live edge. The OS would clamp it or drop the move, and the
+    // click would then land at the previous pointer position; clamp here instead.
+    robot.moveMouse(clamp(point.x, 0, live.width - 1), clamp(point.y, 0, live.height - 1));
   };
 
   const captureFull = () => {
@@ -661,53 +687,48 @@ export function createNodeComputer(options: CreateNodeComputerOptions = {}): Cor
       // `CGEventSetFlags` from the ARGUMENT — defaulting to none — so a "held" Command never reached
       // the key: Cmd+a typed a literal "a", and a Cmd+V paste typed "v". `keyTap` is the backend's
       // only way to express the flag.
-      const { key, modifiers } = splitChord(keys);
-      // A single uppercase letter in a MODIFIED chord is the lowercase physical key: the modifier
-      // decides the case (["Control","A"] is Ctrl+A, not Ctrl+Shift+A), and robotjs resolves a
-      // one-character name through the layout's UNSHIFTED table — "A" is not in it on macOS. The
-      // official TanStack tool does the same in `toCombo`; a lone "A" (no modifier) stays untouched.
-      const named = modifiers.length > 0 && /^[A-Z]$/.test(key) ? key.toLowerCase() : key;
-      const mapped = assertPressable(named);
+      // `resolvePress` splits the chord, lowers a single uppercase letter (the modifier decides the
+      // case — `["Control","A"]` is Ctrl+A, and a lone `["A"]` becomes Shift+lower because keyTap("A")
+      // is a no-op on macOS and an invalid VK on Windows), and validates the key.
+      const { key, modifiers } = resolvePress(keys);
       // The second argument must be OMITTED, not passed as `undefined`: robotjs branches on
       // `info.Length()`, so `keyTap(key, undefined)` takes the two-argument path and fails flag
       // validation with "Invalid key flag specified." — every modifier-less key (Escape, Enter, Tab,
       // PageDown, the arrows) threw instead of being pressed.
-      if (modifiers.length > 0) robot.keyTap(mapped, modifiers);
-      else robot.keyTap(mapped);
+      if (modifiers.length > 0) robot.keyTap(key, modifiers);
+      else robot.keyTap(key);
     },
 
-    // Core asks this for every `key` entry of a batch before the first step runs. It shares
-    // `splitChord` + `assertPressable` with `press`, so "would fail" and "fails" cannot disagree.
+    // Core asks this for every `key` / `hold_key` entry of a batch before the first step runs. It
+    // shares `resolvePress` with `press`, so "would fail" and "fails" cannot disagree.
     validatePress(keys) {
-      const { key } = splitChord(keys);
-      assertPressable(key);
+      resolvePress(keys);
     },
 
     async type(text, typeOptions) {
       typeOptions?.signal?.throwIfAborted();
-      // robotjs' X11 path casts each code point to a single `char` (keypress.c: `char ch = value`),
-      // so CJK/accents/emoji arrive as the wrong ASCII character — silently. Linux therefore goes
-      // through xdotool. macOS/Windows spell BMP code points out properly, but a focused field with
-      // an IME still swallows them on macOS (a measured "王恒" arrived as "王"), so macOS goes through
-      // the pasteboard instead; both keyboard paths truncate an astral code point (a 16-bit
-      // `UniChar` / `wScan`), so a keyboard-path emoji is refused rather than typed as a glyph.
-      if (hasNonAscii(text)) {
-        const channel = nonAsciiTypeChannel(platform, text);
-        if (channel === "xdotool") {
-          await typeViaXdotool(text, typeOptions?.signal);
-          return;
-        }
-        if (channel === "pasteboard") {
-          await typeViaPasteboard(robot, writePasteboard, text, typeOptions?.signal);
-          return;
-        }
-        if (channel === "refuse") {
-          throw new Error(
-            `Cannot type "${truncateText(text, 12)}" with the native input backend on ${platform}: ` +
-              `it truncates characters outside the Basic Multilingual Plane (emoji), which would type ` +
-              `the wrong character. Type ASCII/BMP text instead, or paste it.`
-          );
-        }
+      // The X11 path maps a character to a keysym/keycode and LOSES the Shift level (`!` arrives as
+      // `1`, `"` as no key at all), and casts code points to a single `char` (CJK/emoji truncated).
+      // Linux therefore sends anything outside plain letters/digits/space/tab/newline through
+      // xdotool. macOS/Windows spell BMP text out correctly, but a focused IME swallows injected
+      // characters on macOS (a measured "王恒" arrived as "王"), so macOS routes non-ASCII through the
+      // pasteboard; both keyboard paths truncate an astral code point (a 16-bit `UniChar` / `wScan`),
+      // so Windows refuses astral text rather than typing a glyph.
+      const channel = typeChannel(platform, text);
+      if (channel === "xdotool") {
+        await typeViaXdotool(text, typeOptions?.signal);
+        return;
+      }
+      if (channel === "pasteboard") {
+        await typeViaPasteboard(robot, writePasteboard, text, typeOptions?.signal);
+        return;
+      }
+      if (channel === "refuse") {
+        throw new Error(
+          `Cannot type "${truncateText(text, 12)}" with the native input backend on ${platform}: ` +
+            `it truncates characters outside the Basic Multilingual Plane (emoji), which would type ` +
+            `the wrong character. Type ASCII/BMP text instead, or paste it.`
+        );
       }
       robot.typeString(text);
     },

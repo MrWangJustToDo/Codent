@@ -104,7 +104,9 @@ const actionShape = {
     .optional()
     .describe(
       'Keys to press together, using KeyboardEvent.key names — e.g. ["Control", "c"], ["Enter"]. ' +
-        "For `hold_key`, the keys to hold down for `ms`."
+        "A single character must be a lowercase letter or a digit (a lone uppercase letter is sent " +
+        "as Shift+lower); use `type` for text with punctuation. For `hold_key`, the keys to hold " +
+        "down for `ms`."
     ),
   delta_x: z
     .number()
@@ -217,6 +219,43 @@ function requirePoint(input: ComputerActionInput | ComputerActionEntry, action: 
   return { x: input.x, y: input.y };
 }
 
+/**
+ * Reject a point outside the model's display.
+ *
+ * The driver maps display points into the live screen and hands them to the OS. An out-of-range
+ * point is not a harmless miss: the OS clamps it (or drops the move), and the click then lands at
+ * the previous pointer position while the summary still names the requested point. Zoom and cursor
+ * already clamp; clicks, moves and drags refuse instead of lying.
+ */
+function assertInDisplay(
+  point: { x: number; y: number },
+  display: { width: number; height: number },
+  action: ComputerAction
+): void {
+  if (point.x < 0 || point.y < 0 || point.x >= display.width || point.y >= display.height) {
+    throw new Error(
+      `"${action}" point ${point.x},${point.y} is outside the ${display.width}x${display.height} ` +
+        `screen; use x 0-${display.width - 1}, y 0-${display.height - 1}.`
+    );
+  }
+}
+
+/**
+ * `hold_key` holds PHYSICAL keys; an uppercase character means Shift+letter, which is two keys.
+ *
+ * `assertPressable` remaps a lone uppercase for `press` (one chord), but a hold has no chord: the
+ * backend's `keyDown("A")` is a no-op on macOS and an invalid VK on Windows. Refuse it here and say
+ * how to express the same gesture.
+ */
+function assertHoldableKey(key: string): void {
+  if (/^[A-Z]$/.test(key)) {
+    throw new Error(
+      `"hold_key" holds physical keys, and "${key}" is Shift+${key.toLowerCase()}. Hold "Shift" and ` +
+        `"${key.toLowerCase()}" as two keys, or put "Shift" in \`modifiers\`.`
+    );
+  }
+}
+
 function requireDragTarget(input: ComputerActionInput | ComputerActionEntry) {
   if (typeof input.to_x !== "number" || typeof input.to_y !== "number") {
     throw new Error('"drag" needs to_x and to_y: the point the dragged thing is dropped at.');
@@ -312,6 +351,7 @@ async function dispatchAction(
     case "double_click":
     case "triple_click": {
       const point = requirePoint(input, action);
+      assertInDisplay(point, computer.display, action);
       const count = action === "triple_click" ? 3 : action === "double_click" ? 2 : 1;
       await computer.click(point.x, point.y, { button, count, signal });
       const label = action === "triple_click" ? "triple-click" : action === "double_click" ? "double-click" : "click";
@@ -320,19 +360,23 @@ async function dispatchAction(
 
     case "move": {
       const point = requirePoint(input, "move");
+      assertInDisplay(point, computer.display, "move");
       await computer.move(point.x, point.y, { signal });
       return `move ${point.x},${point.y}`;
     }
 
     case "drag": {
       const from = requirePoint(input, "drag");
+      assertInDisplay(from, computer.display, "drag");
       const to = requireDragTarget(input);
+      assertInDisplay(to, computer.display, "drag");
       await drag(computer, from, to, button, input.steps ?? 1, signal);
       return `drag ${from.x},${from.y} → ${to.x},${to.y}`;
     }
 
     case "scroll": {
       const point = requirePoint(input, "scroll");
+      assertInDisplay(point, computer.display, "scroll");
       const deltaX = input.delta_x ?? 0;
       const deltaY = input.delta_y ?? 0;
       if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) {
@@ -372,6 +416,7 @@ async function dispatchAction(
       const pressed: string[] = [];
       try {
         for (const key of input.keys) {
+          assertHoldableKey(key);
           await computer.keyDown(key, { signal });
           pressed.push(key);
           held.keys.push(key);
@@ -541,11 +586,19 @@ async function runActions(
           `Action #${index + 1} of ${batch.length} (${entry.action}) needs \`keys\`, e.g. ["Control", "c"].`
         );
       }
-      if (!computer.validatePress) continue;
       try {
-        // Awaited: the contract allows an async implementation, and a rejection that core did not
-        // wait for would be an unhandled rejection while the preflight silently "passed".
-        await computer.validatePress(keys);
+        if (entry.action === "hold_key") {
+          // A hold takes a LIST of physical keys, not a chord: `["Control", "A"]` holds both, so
+          // each name is validated on its own (and an uppercase character is refused).
+          for (const key of keys) {
+            assertHoldableKey(key);
+            if (computer.validatePress) await computer.validatePress([key]);
+          }
+        } else if (computer.validatePress) {
+          // Awaited: the contract allows an async implementation, and a rejection that core did not
+          // wait for would be an unhandled rejection while the preflight silently "passed".
+          await computer.validatePress(keys);
+        }
       } catch (error) {
         throw new Error(`Action #${index + 1} of ${batch.length} (${entry.action}) would fail: ${errorMessage(error)}`);
       }

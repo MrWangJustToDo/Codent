@@ -40,7 +40,9 @@ export { createNodeIsolateDriver } from "./isolate-driver.js";
 export {
   createNodeComputer,
   nonAsciiTypeChannel,
+  typeChannel,
   type NonAsciiTypeChannel,
+  type TypeChannel,
   type NodeComputerRobot,
   type CreateNodeComputerOptions,
 } from "./computer.js";

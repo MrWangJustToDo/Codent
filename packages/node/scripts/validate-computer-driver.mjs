@@ -24,7 +24,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { inflateSync } from "node:zlib";
 
-import { createNodeComputer, createNodeEnv, encodeScreenPng, nonAsciiTypeChannel } from "../dist/index.mjs";
+import {
+  createNodeComputer,
+  createNodeEnv,
+  encodeScreenPng,
+  nonAsciiTypeChannel,
+  typeChannel,
+} from "../dist/index.mjs";
 
 /** Reported distinctly from a pass — a shrunken run must not read as a green one. */
 const SKIP_MARKER = "[validator-skip]";
@@ -298,11 +304,18 @@ function fakeRobot(overrides = {}) {
   assert.deepEqual(await keyNames([" "]), ["space"]);
   assert.deepEqual(await keyNames(["ArrowUp"]), ["up"]);
   assert.deepEqual(await keyNames(["Meta"]), ["command"]);
-  // Single characters pass through unchanged — robotjs resolves any one-character name through its
-  // char→keycode table, so "A" and "a" are the same physical key (the case comes from Shift, which
-  // the model has to name: `["Shift", "a"]`).
-  assert.deepEqual(await keyNames(["A"]), ["A"]);
-  assert.deepEqual(await keyNames(["/"]), ["/"]);
+  // A lone uppercase letter is Shift+lower on every backend: `keyTap("A")` is a no-op on macOS
+  // (the char→keycode table holds the UNSHIFTED character) and carries an unpacked Shift high byte
+  // on Windows (`VkKeyScan`). Lowercase letters/digits stay one-argument taps.
+  calls.length = 0;
+  await computer.press(["A"]);
+  assert.deepEqual(calls, [["keyTap", "a", ["shift"]]], "a lone uppercase is Shift+lower");
+  assert.deepEqual(await keyNames(["a"]), ["a"]);
+  // Any other single character is TEXT, not a key: the X11 path loses the Shift level (`!` → `1`)
+  // and macOS/Windows cannot press it through keyTap. Refused with a pointer at `type`.
+  await assert.rejects(() => computer.press(["/"]), /is a character, not a key/);
+  await assert.rejects(() => computer.press(["!"]), /Use `type` for text/);
+  await assert.rejects(() => computer.keyDown("!"), /is a character, not a key/);
 
   // Aliases models actually send. robotjs matches its table with `strcmp`, so `Return`, `Esc` and
   // `Spacebar` used to fail with "Invalid key code specified." while `enter` / `escape` / `space`
@@ -361,10 +374,10 @@ function fakeRobot(overrides = {}) {
   await assert.rejects(() => computer.press(["Hyper"]), /not a key name this host can press/);
   assert.deepEqual(calls, [], "no event is posted for a name the backend cannot press");
 
-  // Non-ASCII is NOT a single-character key name: the addon's `strlen(k) == 1` counts bytes, so "é"
-  // takes the table path and fails there. It must be refused before an event, like any unknown name.
+  // Non-ASCII is not pressable as a single character (the one-byte path cannot carry it): refused
+  // before an event, with the same pointer at `type` as any other text character.
   calls.length = 0;
-  await assert.rejects(() => computer.press(["é"]), /not a key name/);
+  await assert.rejects(() => computer.press(["é"]), /is a character, not a key/);
   assert.deepEqual(calls, [], "a multi-byte character is not pressed as a key");
 
   // The batch preflight shares that check (and the chord split), so "would fail" and "fails" agree.
@@ -436,10 +449,15 @@ function fakeRobot(overrides = {}) {
       `${platform}: hold and release`
     );
 
+    // A lone uppercase is a real press on every platform (Shift+lower), not keyTap("A").
+    calls.length = 0;
+    await c.press(["A"]);
+    assert.deepEqual(calls, [["keyTap", "a", ["shift"]]], `${platform}: uppercase is Shift+lower`);
+
     // The preflight is platform-independent: an unknown name and a multi-byte character are refused
     // before any event, and every name in the backend table is accepted.
     assert.throws(() => c.validatePress(["Hyper"]), /not a key name/, `${platform}: unknown name`);
-    assert.throws(() => c.validatePress(["é"]), /not a key name/, `${platform}: multi-byte char`);
+    assert.throws(() => c.validatePress(["é"]), /is a character, not a key/, `${platform}: multi-byte char`);
     c.validatePress(["F13"]);
     c.validatePress(["numpad_5"]);
 
@@ -628,6 +646,18 @@ function fakeRobot(overrides = {}) {
   assert.equal(nonAsciiTypeChannel("darwin", "🙂"), "pasteboard", "macOS can paste an emoji");
   assert.equal(nonAsciiTypeChannel("win32", "你好"), "typeString");
   assert.equal(nonAsciiTypeChannel("win32", "🙂"), "refuse", "a 16-bit code unit would type a glyph");
+
+  // Linux ASCII punctuation needs xdotool too: the X11 char path loses the Shift level (`!` → `1`,
+  // `"` → nothing). Plain letters/digits/spaces stay on typeString.
+  assert.equal(typeChannel("linux", "hello 123"), "typeString");
+  assert.equal(typeChannel("linux", "hello!"), "xdotool");
+  assert.equal(typeChannel("linux", "a@b.com"), "xdotool");
+  assert.equal(typeChannel("linux", "你好"), "xdotool");
+  assert.equal(typeChannel("darwin", "hello!"), "typeString");
+  assert.equal(typeChannel("darwin", "你好"), "pasteboard");
+  assert.equal(typeChannel("win32", "hello!"), "typeString");
+  assert.equal(typeChannel("win32", "你好"), "typeString");
+  assert.equal(typeChannel("win32", "🙂"), "refuse");
 }
 
 // ---------------------------------------------------------------------------

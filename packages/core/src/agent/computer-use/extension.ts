@@ -100,7 +100,8 @@ export function createComputerUseExtension(
   // is its inverse (0.8) and lands the click 20% short — `validate:computer-use` asserts the phrase
   // AND the absence of the inverse.
   const space =
-    `The screen is ${width}x${height} pixels, and every coordinate you send is a pixel in that ` +
+    `The screen is ${width}x${height} pixels (the primary display on macOS/Windows), and every ` +
+    `coordinate you send is a pixel in that ` +
     `space, with (0,0) at its top-left. A full screenshot may be downscaled before you see it: if ` +
     `the image is not ${width}x${height}, multiply what you measure by declared / seen (screen_x = ` +
     `reading_x * ${width} / image width).`;
@@ -109,7 +110,7 @@ export function createComputerUseExtension(
     id: "codent-computer-use",
     name: "Computer use",
     version: "1.0.0",
-    description: "See and control the user's real screen: screenshots, mouse, keyboard.",
+    description: "See and control the host's real screen: screenshots, mouse, keyboard.",
     order: BUILTIN_EXTENSION_ORDER,
 
     activate(ctx) {

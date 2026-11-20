@@ -98,14 +98,21 @@ const ROBOT_KEY_NAMES = new Set(
 function assertPressable(key: string): string {
   const mapped = toRobotKey(key);
   if (mapped.length === 1) {
-    if (mapped.charCodeAt(0) < 0x80) return mapped;
-  } else if (ROBOT_KEY_NAMES.has(mapped)) {
-    return mapped;
+    // A single lowercase letter or digit is a physical key on every backend. Anything else is TEXT,
+    // not a key: the X11 path loses the Shift level (`!` arrives as `1`), and macOS/Windows `keyTap`
+    // cannot press a shifted character at all. `resolvePress` turns a lone uppercase letter into
+    // Shift+lower before this runs; a bare uppercase reaching here (keyDown) is refused for the same
+    // reason.
+    if (/^[a-z0-9]$/.test(mapped)) return mapped;
+    throw new Error(
+      `"${key}" is a character, not a key this host can press reliably. Use \`type\` for text, ` +
+        `or name the key (e.g. "Enter", "Shift+a").`
+    );
   }
+  if (ROBOT_KEY_NAMES.has(mapped)) return mapped;
   throw new Error(
     `"${key}" is not a key name this host can press. Use a KeyboardEvent.key name — "Enter", ` +
-      `"Escape", "Tab", "PageUp", "Meta" — or a single ASCII character; non-ASCII text goes ` +
-      `through "type", not "key".`
+      `"Escape", "Tab", "PageUp", "Meta" — or a single lowercase letter/digit.`
   );
 }
 
@@ -169,4 +176,22 @@ function splitChord(keys: string[]): { key: string; modifiers: string[] } {
   return { key: keys[keys.length - 1]!, modifiers };
 }
 
-export { assertPressable, splitChord };
+/**
+ * Normalize one press: split the chord, lower a single uppercase letter (the modifier decides the
+ * case), and validate the key.
+ *
+ * `press` sends the returned key with the returned flags; `validatePress` runs the same function, so
+ * "would fail" and "fails" cannot disagree. A lone `"A"` becomes Shift+lower on every platform
+ * (`keyTap("A")` is a no-op on macOS and an invalid VK on Windows).
+ */
+export function resolvePress(keys: string[]): { key: string; modifiers: string[] } {
+  const { key, modifiers } = splitChord(keys);
+  if (!/^[A-Z]$/.test(key)) return { key: assertPressable(key), modifiers };
+  return {
+    key: assertPressable(key.toLowerCase()),
+    // A modifier in the chord already decides the case; adding Shift again would make Ctrl+Shift+A.
+    modifiers: modifiers.length === 0 ? ["shift"] : modifiers,
+  };
+}
+
+export { assertPressable };
