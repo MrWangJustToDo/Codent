@@ -690,7 +690,8 @@ ten images; `steps` interpolates a drag, because robotjs teleports the pointer a
 never sees a gesture. The reference implementations are the argument: Anthropic's computer tool spells
 held keys as `key`/`text` on the action, OpenAI's CUA carries `keys: string[]` on every pointer action,
 a `path` of drag waypoints and a batched `actions[]`. A call-level `modifiers` applies to every batch
-entry that can hold one (`type`/`wait` ignore it, and the result says so); an entry's own value wins.
+entry that can hold one; in a batch a `type`/`wait` entry ignores its own value too (the result says
+so), while a single `type`/`wait` keeps refusing it.
 
 **Two host-level failures are reported, not hidden.** Linux/X11 cannot type non-ASCII or Shift symbols
 through the addon (robotjs casts each code point to a single `char`, and its char→keysym path loses the

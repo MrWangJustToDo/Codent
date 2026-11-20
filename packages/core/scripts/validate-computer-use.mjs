@@ -503,6 +503,37 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
     "the entry's own modifiers win"
   );
 
+  // A batch `type`/`wait` entry cannot hold a modifier: its own value is dropped (with a note)
+  // instead of failing the sequence. The SINGLE-action path still refuses it.
+  calls.length = 0;
+  const entryModifiers = await write.execute(
+    {
+      actions: [
+        { action: "type", text: "hi", modifiers: ["Shift"] },
+        { action: "click", x: 1, y: 1 },
+      ],
+    },
+    OPTS
+  );
+  assert.deepEqual(
+    calls.filter(([name]) => name !== "screenshot"),
+    [
+      ["type", "hi"],
+      ["click", 1, 1, "left", 1],
+    ]
+  );
+  assert.match(entryModifiers.summary, /Shift ignored on 1 entry that cannot hold modifiers/);
+
+  const waitModifiers = await write.execute({ actions: [{ action: "wait", ms: 1, modifiers: ["Shift"] }] }, OPTS);
+  assert.match(waitModifiers.summary, /Shift ignored on 1 entry that cannot hold modifiers/);
+
+  // The note fires without a call-level modifier, and names both sources when they differ.
+  const unionModifiers = await write.execute(
+    { modifiers: ["Control"], actions: [{ action: "type", text: "x", modifiers: ["Shift"] }] },
+    OPTS
+  );
+  assert.match(unionModifiers.summary, /Control\+Shift ignored on 1 entry that cannot hold modifiers/);
+
   // An entry that carries its own modifiers still works (the pointer gesture holds them).
   calls.length = 0;
   await write.execute(
@@ -801,10 +832,15 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
     "an entry without a point is refused, not pointed at the call's coordinates"
   );
 
-  // A held modifier on `type` changes the GESTURE (Cmd+V → Cmd+Shift+V), not the text.
+  // A held modifier on `type` changes the GESTURE (Cmd+V → Cmd+Shift+V), not the text. A SINGLE
+  // action keeps the refusal; the same shape inside a batch is dropped with a note.
   await assert.rejects(
     () => write.execute({ action: "type", text: "x", modifiers: ["Shift"] }, OPTS),
     /cannot take modifiers/
+  );
+  await assert.rejects(
+    () => write.execute({ action: "wait", ms: 1, modifiers: ["Shift"] }, OPTS),
+    /"wait" cannot take modifiers/
   );
 
   // An abort that arrives from ANOTHER signal keeps its identity: the step context must not wrap it

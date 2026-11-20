@@ -144,9 +144,9 @@ const actionShape = {
     .describe(
       'Modifier keys for THIS action: ["Control"] to Ctrl+click, ["Shift"] to extend a selection, ' +
         '["Control"] with scroll to zoom. Only Control / Shift / Alt / Meta — for any other key use ' +
-        "`key`. On `key` they are attached to the keystroke. A batch entry's own value wins; a " +
-        "call-level value applies to every entry that can hold one. On macOS Control+click IS the " +
-        "secondary click."
+        "`key`. On `key` they are attached to the keystroke. In a batch a `type`/`wait` entry " +
+        "ignores both the call's and its own value (reported in the result); for other actions an " +
+        "entry's own value wins. On macOS Control+click IS the secondary click."
     ),
   steps: z
     .number()
@@ -176,9 +176,9 @@ export const computerActionSchema = z.object({
         "Set only the fields the action uses — the rest are ignored (a strict provider may require " +
         "them to be present anyway). A call-level `text` / `keys` / `button` applies to EVERY entry " +
         "that reads it, so set them per entry when two entries need different values. A call-level " +
-        "`modifiers` applies to every entry that can hold one (`type`/`wait` ignore it — the result " +
-        "says so); an entry's own value wins. Coordinates are never shared: each entry names its own " +
-        "target."
+        "`modifiers` applies to every entry that can hold one; in a batch a `type`/`wait` entry " +
+        "ignores its own value too (the result says so), while an entry's own value wins for the " +
+        "other actions. Coordinates are never shared: each entry names its own target."
     ),
 });
 
@@ -477,6 +477,8 @@ async function runWithModifiers(
   // modify the characters — it modifies the GESTURE: Cmd+V becomes Cmd+Shift+V, a different command
   // in most apps. Refuse it instead of silently changing what was asked for.
   if (input.action === "type") {
+    // A SINGLE action keeps this refusal: a held key changes the gesture (Cmd+V -> Cmd+Shift+V).
+    // Batch entries never reach here with modifiers — `normalizeBatchEntry` drops them.
     throw new Error(
       '"type" cannot take modifiers: the text is injected as a whole, and a held key turns the ' +
         'paste into a different shortcut. Use "key" for a modified keystroke.'
@@ -578,7 +580,7 @@ async function runActions(
     // (a host without it keeps the step-local failure). `keys` also carries the entry's modifiers,
     // which are part of the same chord.
     for (let index = 0; index < batch.length; index += 1) {
-      const entry = withInheritedDefaults(batch[index]!, input);
+      const entry = normalizeBatchEntry(batch[index]!, input);
       if (entry.action !== "key" && entry.action !== "hold_key") continue;
       const keys = [...(entry.modifiers ?? []), ...(entry.keys ?? [])];
       if (keys.length === 0) {
@@ -606,7 +608,7 @@ async function runActions(
 
     const summaries: string[] = [];
     for (let index = 0; index < batch.length; index += 1) {
-      const entry = withInheritedDefaults(batch[index]!, input);
+      const entry = normalizeBatchEntry(batch[index]!, input);
       try {
         summaries.push(await runWithModifiers(computer, entry, held, signal));
       } catch (error) {
@@ -621,14 +623,22 @@ async function runActions(
         throw new Error(`Action #${index + 1} of ${batch.length} (${action}) failed${done}: ${errorMessage(error)}`);
       }
     }
-    const ignored = batch.filter(
-      (entry) => entry.modifiers === undefined && (entry.action === "type" || entry.action === "wait")
-    ).length;
+    // Count every type/wait entry that actually brought a modifier — from the call or on the entry
+    // itself. Counting only the inherited half made an entry-level value silently disappear; the note
+    // also has to fire without a call-level value (the entry's own is the only one there).
+    const ignoredEntries = batch.filter(
+      (entry) =>
+        (entry.action === "type" || entry.action === "wait") &&
+        ((entry.modifiers?.length ?? 0) > 0 || callModifiers.length > 0)
+    );
+    const ignoredModifiers = [
+      ...new Set([...callModifiers, ...ignoredEntries.flatMap((entry) => entry.modifiers ?? [])]),
+    ];
     return (
       summaries.join(" → ") +
-      (callModifiers.length > 0 && ignored > 0
-        ? ` (${callModifiers.join("+")} ignored on ${ignored} ${
-            ignored === 1 ? "entry" : "entries"
+      (ignoredEntries.length > 0
+        ? ` (${ignoredModifiers.join("+")} ignored on ${ignoredEntries.length} ${
+            ignoredEntries.length === 1 ? "entry" : "entries"
           } that cannot hold modifiers)`
         : "")
     );
@@ -643,9 +653,11 @@ async function runActions(
  * it (two `type` entries with one call-level `text` type it twice). A call-level `modifiers` applies
  * to every entry that can HOLD one: `type` and `wait` cannot, so they run plain and the call's
  * summary names what was ignored, instead of failing the batch (a measured session lost 10 of 13
- * calls to a call-level modifier meeting a `type` entry). An entry's own `modifiers` wins, so a batch
- * can mix a Ctrl+click with a plain one. Coordinates are never inherited — each entry points at its
- * own place, and pointing a second entry at the first one's target is never what was meant.
+ * calls to a call-level modifier meeting a `type` entry). Inside a batch an entry's own `modifiers`
+ * wins for the actions that can hold one; a `type`/`wait` entry's own value is dropped too (see
+ * `normalizeBatchEntry`), while a SINGLE `type`/`wait` still refuses it. Coordinates are never
+ * inherited — each entry points at its own place, and pointing a second entry at the first one's
+ * target is never what was meant.
  */
 function withInheritedDefaults(entry: ComputerActionEntry, outer: ComputerActionInput): ComputerActionEntry {
   const merged: ComputerActionEntry = { ...entry };
@@ -660,5 +672,21 @@ function withInheritedDefaults(entry: ComputerActionEntry, outer: ComputerAction
   ) {
     merged.modifiers = outer.modifiers;
   }
+  return merged;
+}
+
+/**
+ * One batch entry as it will actually run.
+ *
+ * `withInheritedDefaults` fills the payload fields; a `type`/`wait` entry also drops its own
+ * `modifiers`. Those actions cannot hold a key, and failing the whole sequence over a field the
+ * action does not use contradicted the schema's "the rest are ignored" (a measured session had 24
+ * such entries, all inside batches). The SINGLE-action path does not go through this: there a held
+ * key changes the gesture (Cmd+V -> Cmd+Shift+V) and there is no sequence to salvage, so it keeps
+ * refusing.
+ */
+function normalizeBatchEntry(entry: ComputerActionEntry, outer: ComputerActionInput): ComputerActionEntry {
+  const merged = withInheritedDefaults(entry, outer);
+  if (merged.action === "type" || merged.action === "wait") delete merged.modifiers;
   return merged;
 }
