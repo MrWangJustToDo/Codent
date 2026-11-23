@@ -118,6 +118,16 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
   let flushInFlight = false;
   /** Consecutive failed writes; the retry timer is re-armed only up to a small cap. */
   let consecutiveFailures = 0;
+  /**
+   * One-time filesystem probes, cached after the first success.
+   *
+   * Each flush used to issue `mkdir` → `exists` → `stat` → `appendFile`: four calls, and on a remote
+   * CoreEnv four HTTP round trips every flush interval (250ms) of pure logging overhead. The
+   * directory and the active file only disappear through our own rotation (handled below) or another
+   * process's sweep, and any failure clears both flags so the next attempt re-probes.
+   */
+  let dirReady = false;
+  let fileEnsured = false;
 
   /**
    * Surface a persistence failure to the owning session, throttled.
@@ -261,9 +271,15 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
     const lines = buffer;
     buffer = [];
     try {
-      await envFs.mkdir(dir);
-      if (!(await envFs.exists(filePath))) {
-        await envFs.writeFile(filePath, "");
+      if (!dirReady) {
+        await envFs.mkdir(dir);
+        dirReady = true;
+      }
+      if (!fileEnsured) {
+        if (!(await envFs.exists(filePath))) {
+          await envFs.writeFile(filePath, "");
+        }
+        fileEnsured = true;
       }
       const content = lines.join("\n") + "\n";
       const contentBytes = utf8ByteLength(content);
@@ -287,6 +303,10 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
       await appendFile(filePath, content);
       consecutiveFailures = 0;
     } catch (error) {
+      // Re-probe on the next attempt: the failure may be a swept directory, a rotated file, or a
+      // dropped remote connection, and the cache must not outlive any of them.
+      dirReady = false;
+      fileEnsured = false;
       // Non-fatal, but not silent: put the batch back at the HEAD so the next flush retries in
       // order, and say why. A failed append used to vanish with no trace at all.
       // A failed append may have written a prefix of the batch (ENOSPC/EIO mid-write), and the

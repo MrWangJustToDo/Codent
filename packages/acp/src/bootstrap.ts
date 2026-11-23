@@ -75,11 +75,15 @@ export interface LocalAcpBootstrap {
   host: AgentSessionHost;
   defaults: AcpAgentDefaults;
   rootPath: string;
-  /** The runtime's model read (the ONE `loadModels` result) — the host projects it. Absent on the
-   *  explicit-flags path (`--model …`) and on the `.env` fallback, which is what makes the ACP model
-   *  selector disappear there: a selector offering exactly one value would be a fake choice. The list
-   *  is process-wide (one config file), while the *current* model is per-session — see
-   *  `session/session-config-options.ts`. */
+  /**
+   * The runtime's model read (the ONE `loadModels` result) — the host projects it.
+   *
+   * Present on every path that resolved a model, and every plane yields a read: `models.json` its
+   * entries, while the flags and `.env` planes yield a SINGLE-entry read (that connection is the
+   * only one reachable). The list is
+   * process-wide (one config file), while the *current* model is per-session — see
+   * `session/session-config-options.ts`.
+   */
   models?: ModelCatalogRead;
   /** The entry the resolved default model came from — seeds a new session's recorded entry. */
   modelsDefaultEntryIndex?: number;
@@ -139,8 +143,8 @@ export async function bootstrapLocalAcp(
   // core) wins per field, and the workspace file's `global.toolConfig` fills the gaps. Keeping the
   // raw `global` block here lets the shared merge helper read it at the end of this function.
   let fileToolGlobal: { toolConfig?: { provider?: string; [key: string]: unknown } } | undefined;
-  // Built only on the `models.json` path: the flags path deliberately skips that file, and the
-  // `.env` fallback has no list at all — so neither can offer a choice.
+  // The flags path deliberately skips `models.json`, and both it and the `.env` plane resolve ONE
+  // connection — so neither can offer a choice, and both record a single-entry catalog below.
   /** The one model CATALOG every plane produces; carried by the runtime and projected by the host. */
   let models: ModelCatalogRead | undefined;
   /** The entry that plane's DEFAULT model came from — a seed for a new session, not a selection. */
@@ -189,15 +193,36 @@ export async function bootstrapLocalAcp(
     baseURL = fromProvider.connection.baseURL;
     apiKey = fromProvider.connection.apiKey;
     modelInfo = fromProvider.modelInfo;
-  } else if (options.model?.model?.trim()) {
+  } else if (
+    // ANY explicit model flag isolates this session from models.json — the TUI's `modelExplicit`
+    // rule. Testing only `model` meant `codent acp --api-key sk-XXX` (or `--base-url`, `--style`)
+    // silently fell into the file branch and lost the flag, while the same command in the TUI
+    // honoured it. A flag that cannot take effect is worse than one that errors.
+    options.model?.model?.trim() ||
+    options.model?.style ||
+    options.model?.baseURL ||
+    options.model?.apiKey
+  ) {
     // Explicit CLI override: the flags are authoritative and the on-disk models.json is
     // skipped — same isolation as the TUI's `--model` startup.
-    const { connection } = await resolveModelConfig({
-      model: options.model.model,
-      style: options.model.style,
-      baseURL: options.model.baseURL,
-      apiKey: options.model.apiKey,
+    //
+    // A flag OVERRIDES the environment, it does not replace it: `--api-key` alone keeps `MODEL` from
+    // `.env`. `resolveModelConfig` reads no environment, so the merge happens through the ONE
+    // resolver that already encodes that precedence — otherwise a flags-only call resolved an empty
+    // model and the process died on "requires a model" even though `.env` named one.
+    const envConnection = resolveModelConnectionFromEnv(process.env, {
+      model: options.model?.model,
+      style: options.model?.style,
+      baseURL: options.model?.baseURL,
+      apiKey: options.model?.apiKey,
     });
+    const { connection, modelInfo: resolvedInfo } = await resolveModelConfig({
+      model: envConnection.model,
+      style: envConnection.style,
+      baseURL: envConnection.baseURL,
+      apiKey: envConnection.apiKey,
+    });
+    modelInfo = resolvedInfo;
     provider = createDirectModelProvider({
       model: connection.model,
       style: connection.style,

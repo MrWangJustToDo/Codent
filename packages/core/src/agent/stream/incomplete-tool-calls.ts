@@ -210,6 +210,15 @@ interface CancelToolCallOptions {
   /** Drop the host-facing display payload, which describes the output being replaced. */
   clearDisplay?: boolean;
   /**
+   * Replace the display payload with the one that belongs to the settled output.
+   *
+   * Applied AFTER the spread (so it wins over `clearDisplay`), because the payload is a function of
+   * the output: clearing it is the safe default for the shared cancel marker, but a caller that
+   * already knows the settled output has a payload for it — dropping that one left the row describing
+   * the output it no longer had (`display.summary` wins over the host's own formatter).
+   */
+  displayFor?: (part: ToolCallPart) => unknown;
+  /**
    * Called once per call this pass settles, with the part as it was found.
    *
    * A caller that must REPORT the settle (the `tool:settle` timeline row) cannot re-derive its
@@ -253,11 +262,12 @@ function applyToolCallCancellation(
       // while the tool-result content is consumed by the model wire. Without it here, a
       // cancelled call was indistinguishable from a tool that failed mid-flight, so
       // `getInlineSummary` could not tell the user the run was cut short.
+      const display = options.displayFor?.(part);
       parts[i] = {
         ...part,
         state: options.state,
         output: synthetic,
-        ...(options.clearDisplay ? { display: undefined } : {}),
+        ...(display !== undefined ? { display } : options.clearDisplay ? { display: undefined } : {}),
       };
 
       // The MODEL wire is built from the paired `tool-result`'s content, not from the call part's
@@ -412,7 +422,7 @@ export function settleInterruptedRunToolCalls(
     (part) => isUnsettledToolCall(part) && !(preservePendingAskUser && isAnswerableAskUser(part, isClientTool)),
     message,
     interruptedToolOutput,
-    onSettled
+    { onSettled }
   );
 }
 
@@ -436,7 +446,7 @@ export function settleTruncatedToolCalls(
     (part) => isTruncatedToolCall(part, options.requiresArguments),
     message,
     truncatedToolOutput,
-    options.onSettled
+    { onSettled: options.onSettled }
   );
 }
 
@@ -691,12 +701,17 @@ export function settleToolCallsAs(
   shouldSettle: (part: ToolCallPart) => boolean,
   reason: string,
   outputFor: (part: ToolCallPart, message: string) => unknown,
-  onSettled?: (part: ToolCallPart) => void
+  options: {
+    onSettled?: (part: ToolCallPart) => void;
+    /** Display payload for the settled output, when the caller has one (see `displayFor` above). */
+    displayFor?: (part: ToolCallPart) => unknown;
+  } = {}
 ): UIMessage[] {
   return applyToolCallCancellation(messages, shouldSettle, reason, {
     state: "complete",
     clearDisplay: true,
     outputFor,
-    ...(onSettled ? { onSettled } : {}),
+    ...(options.onSettled ? { onSettled: options.onSettled } : {}),
+    ...(options.displayFor ? { displayFor: options.displayFor } : {}),
   });
 }

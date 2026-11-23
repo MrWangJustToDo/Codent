@@ -321,10 +321,10 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
    * as "not found" would deny the deletion of a session the caller is currently holding.
    */
   async deleteSession(sessionId: string): Promise<boolean> {
-    // `sessionId` here is the DISK id, while `manager.getAgent` is keyed by AGENT id — so this
-    // lookup always misses. It is kept only as a cheap exact-hit probe; the lookup that actually
-    // resolves a disk id to its owning agent is `sessionOwningAgent` below.
-    const live = this.manager.getAgent(sessionId) ?? this.sessionOwningAgent(sessionId);
+    // `sessionId` here is the DISK id; agents are keyed by their own id, so resolve through the
+    // ownership-by-session lookup (`manager.getAgent(sessionId)` always missed — it was kept as a
+    // "cheap probe" and only obscured that fact).
+    const live = this.sessionOwningAgent(sessionId);
     // Ownership is per WORKSPACE, not per manager. Another live runtime in this process (a second
     // key / host over the same root) can hold the id; deleting it would tombstone the file and make
     // every later save in that agent a silent no-op while its transcript still looked alive.

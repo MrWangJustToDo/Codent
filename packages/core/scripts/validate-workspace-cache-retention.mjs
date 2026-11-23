@@ -34,6 +34,8 @@ import {
   TOOL_OUTPUT_CACHE_DIR,
   TOOL_OUTPUT_MAX_AGE_MS,
   TOOL_OUTPUT_ORPHAN_GRACE_MS,
+  MEDIA_DIR,
+  MEDIA_MAX_AGE_MS,
   WORKSPACE_CACHE_RETENTION,
   resetAgentLogSweep,
   resetWorkspaceCacheSweeps,
@@ -79,9 +81,25 @@ const staleAge = (maxAgeMs) => maxAgeMs + 60_000;
     "job record age comes from the table"
   );
 
-  const suffixes = Object.values(WORKSPACE_CACHE_RETENTION).map((spec) => spec.suffix);
+  // Relationship, not identity: `media.dir === MEDIA_DIR` restates the construction and can never
+  // fail. What matters is that media is the LONGEST horizon (losing an attachment is user-visible,
+  // unlike a spill) and that its directory is the media module's, never `.agents/cache`.
+  assert.ok(WORKSPACE_CACHE_RETENTION.media.maxAgeMs > TOOL_OUTPUT_MAX_AGE_MS, "media outlives every cache artifact");
+  assert.equal(WORKSPACE_CACHE_RETENTION.media.dir.includes("/cache"), false, "media is not a cache directory");
+
+  // Media is the one kind whose files do not share a suffix (`<sha256>.<ext>`), so it carries an
+  // explicit matcher. The assertion is that each artifact still has its OWN test: a `.log` written
+  // into `.agents/media` must never be treated as a media file, and vice versa.
+  const suffixed = Object.entries(WORKSPACE_CACHE_RETENTION).filter(([, spec]) => spec.suffix !== "");
+  const suffixes = suffixed.map(([, spec]) => spec.suffix);
   assert.equal(new Set(suffixes).size, suffixes.length, "each artifact owns a distinct suffix (the isolation guard)");
-  assert.deepEqual([...suffixes].sort(), [".json", ".log", ".txt"], "the expected artifact kinds");
+  assert.deepEqual([...suffixes].sort(), [".json", ".log", ".txt"], "the expected suffixed artifact kinds");
+  assert.ok(WORKSPACE_CACHE_RETENTION.media.match, "media carries its content-addressed matcher");
+  const mediaMatch = WORKSPACE_CACHE_RETENTION.media.match;
+  assert.equal(mediaMatch(`${"a".repeat(64)}.png`), true, "a content-addressed media file matches");
+  assert.equal(mediaMatch(`${"a".repeat(64)}.png.part`), false, "a trailing segment does not");
+  assert.equal(mediaMatch("not-a-hash.png"), false, "a non-hash name does not");
+  assert.equal(mediaMatch(`${"a".repeat(64)}.log`), true, "any extension of a real hash is media");
 
   // A record must outlive its log: the log is the bulky artifact, the record is what still answers
   // "what happened" after the log is gone.
@@ -107,11 +125,15 @@ const staleAge = (maxAgeMs) => maxAgeMs + 60_000;
     await writeAged(`${COMMAND_JOB_CACHE_DIR}/job_fresh.log`, 0),
     await writeAged(`${COMMAND_JOB_CACHE_DIR}/job_stale.json`, staleAge(MAX_JOB_RECORD_AGE_MS)),
     await writeAged(`${COMMAND_JOB_CACHE_DIR}/job_fresh.json`, 0),
+    // Media is content-addressed (`<sha256>.<ext>`), so a stale attachment is reclaimed by the same
+    // pass. Without this row `.agents/media` was the one workspace artifact that never shrank.
+    await writeAged(`${MEDIA_DIR}/${"b".repeat(64)}.png`, staleAge(MEDIA_MAX_AGE_MS)),
+    await writeAged(`${MEDIA_DIR}/${"c".repeat(64)}.png`, 0),
   ];
 
   const result = await sweepWorkspaceCaches(env, { force: true });
-  assert.equal(result.removed, 3, `one call removes one stale file per kind, got ${JSON.stringify(result.byKind)}`);
-  assert.deepEqual(result.byKind, { toolOutput: 1, jobLog: 1, jobRecord: 1 }, "each kind was swept");
+  assert.equal(result.removed, 4, `one call removes one stale file per kind, got ${JSON.stringify(result.byKind)}`);
+  assert.deepEqual(result.byKind, { toolOutput: 1, jobLog: 1, jobRecord: 1, media: 1 }, "each kind was swept");
 
   const present = async (rel) =>
     fs.promises
@@ -124,7 +146,9 @@ const staleAge = (maxAgeMs) => maxAgeMs + 60_000;
   assert.equal(await present(fixtures[3]), true, "fresh job log kept");
   assert.equal(await present(fixtures[4]), false, "stale job record removed");
   assert.equal(await present(fixtures[5]), true, "fresh job record kept");
-  console.log("one sweep expires all three kinds — ok");
+  assert.equal(await present(fixtures[6]), false, "stale media removed");
+  assert.equal(await present(fixtures[7]), true, "fresh media kept");
+  console.log("one sweep expires all four kinds — ok");
 }
 
 // ---------------------------------------------------------------------------
@@ -160,6 +184,8 @@ const staleAge = (maxAgeMs) => maxAgeMs + 60_000;
   resetWorkspaceCacheSweeps();
   const strayLog = await writeAged(`${TOOL_OUTPUT_CACHE_DIR}/not-a-spill.log`, staleAge(TOOL_OUTPUT_MAX_AGE_MS));
   const strayTxt = await writeAged(`${COMMAND_JOB_CACHE_DIR}/not-a-job.txt`, staleAge(MAX_JOB_LOG_AGE_MS));
+  // Media's test is a name shape, so a plain file that happens to be old must survive it.
+  const strayMedia = await writeAged(`${MEDIA_DIR}/not-a-hash.png`, staleAge(MEDIA_MAX_AGE_MS));
 
   await sweepWorkspaceCaches(env, { force: true });
   const present = async (rel) =>
@@ -169,6 +195,7 @@ const staleAge = (maxAgeMs) => maxAgeMs + 60_000;
       .catch(() => false);
   assert.equal(await present(strayLog), true, "a .log inside the spill directory is not a spill");
   assert.equal(await present(strayTxt), true, "a .txt inside the job directory is not a job artifact");
+  assert.equal(await present(strayMedia), true, "a non-hash file in the media directory is not a media asset");
   console.log("suffix isolation holds across shared directories — ok");
 }
 

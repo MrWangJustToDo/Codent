@@ -1,4 +1,4 @@
-import { calculateCost, promptTokensOf, totalTokensOf, type TokenUsage } from "../../runtime-types/token-usage.js";
+import { calculateCost, promptTokensOf, type TokenUsage } from "../../runtime-types/token-usage.js";
 
 import type { AgentEventBus } from "../../agent/agent-event-bus";
 import type { ModelCapability, ModelPricing } from "../../models/types.js";
@@ -227,7 +227,13 @@ export class UsageTracker {
       cacheWriteTokens: (this.total.cacheWriteTokens ?? 0) + (usage.cacheWriteTokens ?? 0),
       reasoningTokens: (this.total.reasoningTokens ?? 0) + (usage.reasoningTokens ?? 0),
     };
-    this.total.totalTokens = totalTokensOf(this.total);
+    // Derived from the exact per-sample billed prompt, NOT `totalTokensOf(this.total)`.
+    //
+    // `promptTokensOf` decides inclusive-vs-exclusive per SAMPLE; applying it to a sum of mixed
+    // samples can only agree when every sample used one convention, and a gateway may switch
+    // mid-session. When it guesses wrong it over-counts (`cache > input` on an aggregate whose
+    // samples were mostly inclusive), and this number is persisted as `SessionData.usage.totalTokens`.
+    this.total.totalTokens = this.billedInputTotal + this.total.outputTokens;
 
     if (!pricing) return 0;
     const callCost = calculateCost(usage, pricing);

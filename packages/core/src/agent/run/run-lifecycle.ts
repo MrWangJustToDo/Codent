@@ -184,7 +184,7 @@ export function finalizeManagedAgentRun(
   }
   const cause = host.run.getAbortReason?.();
   host.emitEvent("agent:stop", {
-    reason,
+    outcome: reason,
     ...(cause ? { cause } : {}),
   });
   // Clear the run scope in a LATER task, not now.
@@ -248,7 +248,7 @@ export function abortManagedAgentRun(
   // (the compaction lease) wrote the verdict, so `alreadySettled` here describes the abort itself
   // rather than the turn that was running before it.
   const hadRun = options.hadLiveRun ?? (!alreadySettled && isActiveStatus(host.getStatus()));
-  if (hadRun) host.emitEvent("agent:abort", { reason: effectiveReason });
+  if (hadRun) host.emitEvent("agent:abort", { cause: effectiveReason });
   host.run.abort(effectiveReason);
   // The status flip normally already happened in the abort listener above (it fires
   // synchronously inside `run.abort()`). This remainder covers the no-controller path: an

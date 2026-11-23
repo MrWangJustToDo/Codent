@@ -1,3 +1,4 @@
+import { isExtensionDeniedOutput } from "../../../../runtime-types/tool-denial.js";
 import { isBareToolErrorResult } from "../../../../runtime-types/tool-error.js";
 import { TRUNCATED_TOOL_CALL_SUMMARY, isInterruptedToolOutput } from "../../../../runtime-types/tool-truncation.js";
 import { BUILTIN_TOOL_NAMES } from "../../catalog/tool-names.js";
@@ -35,6 +36,13 @@ export function getInlineSummary(part: ToolCallPart, toolName: string): string |
   // task tool's own `aborted`. Checked BEFORE the state guard because a truncation cancel
   // settles the part as `error` (the guard would bail) and a cancelled run_command would
   // otherwise render as a clean finish with an `(error)` body.
+  // A refusal (plan mode / an extension) is not a result to summarize — and it must be checked
+  // BEFORE the cancel predicate. `formatToolOutput` and `computeToolDisplay` already short-circuit it
+  // here too, but `isCancelledToolCall` also matches an `error` text containing "aborted", so a
+  // refusal whose reason mentions an abort rendered as "cancelled" in the header while the body said
+  // "Denied: …". The explicit marker wins over the text heuristic.
+  if (isExtensionDeniedOutput(output)) return "denied";
+
   if (isCancelledToolCall(part)) return "cancelled";
 
   // A truncated call is not a user cancellation and has no result to summarize: name the

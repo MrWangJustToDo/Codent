@@ -22,6 +22,7 @@
  */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import { UsageStore, UsageTracker, promptTokensOf, totalTokensOf, registerCoreEnv } from "../dist/dev.mjs";
 import { formatToolOutput } from "../dist/index.mjs";
@@ -282,6 +283,52 @@ registerCoreEnv({
     record.totalTokens,
     "and the aggregated day total must carry it through, since the heatmap reads this"
   );
+}
+
+// ============================================================================
+// 3b. An UNPRICED call is not a free one
+// ============================================================================
+//
+// `costUsd: 0` is both "no pricing metadata" and "this model is free" (a local one). The total then
+// read as "this is what it cost" while being systematically low, with no way to tell which calls were
+// unknown. `priced: false` is the missing fact; a record without it keeps its old meaning.
+{
+  const store = new UsageStore();
+  const usage = { inputTokens: 10, outputTokens: 5, totalTokens: 15 };
+  await store.append({ agentId: "agent_unpriced", model: "no-pricing-model", usage, costUsd: 0, priced: false });
+  await store.append({ agentId: "agent_unpriced", model: "no-pricing-model", usage, costUsd: 0.5 });
+
+  const history = await store.readHistory(1);
+  const model = history.models.find((entry) => entry.model === "no-pricing-model");
+  assert.ok(model, "the model bucket exists");
+  assert.equal(model.calls, 2);
+  assert.equal(model.unpricedCalls, 1, "the call without pricing metadata is counted");
+  assert.equal(model.costUsd, 0.5, "…and contributes no cost, while the priced one does");
+
+  const day = history.daily.find((entry) => entry.unpricedCalls > 0);
+  assert.ok(day, "the day bucket carries the unpriced count too");
+}
+
+// ============================================================================
+// 3c. The PRODUCERS report whether pricing existed
+// ============================================================================
+//
+// The store can only carry `priced: false` if the recorder tells it: `costUsd: 0` is also a real
+// price (a local model), so "no pricing metadata" is not derivable from the number. Neither producer
+// is covered by the aggregate test above, and dropping the flag silently restores the
+// "everything cost $0.00, trust me" reading — so the two wiring points are pinned here.
+{
+  const lifecycleSrc = readFileSync(
+    new URL("../src/managers/middleware/lifecycle-middleware.ts", import.meta.url),
+    "utf8"
+  );
+  assert.match(
+    lifecycleSrc,
+    /priced: pricing != null/,
+    "the per-call recorder forwards whether the model had pricing metadata"
+  );
+  const sideSrc = readFileSync(new URL("../src/models/adapter/side-text-query.ts", import.meta.url), "utf8");
+  assert.match(sideSrc, /priced: false/, "a side query against an unpriced model says so");
 }
 
 // ============================================================================

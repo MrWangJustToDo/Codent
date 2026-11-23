@@ -13,7 +13,7 @@
 
 import type { AgentStatus } from "./agent-status.js";
 
-export type LifecyclePhase = "created" | "bootstrapping" | "ready" | "busy" | "draining" | "destroyed";
+export type LifecyclePhase = "ready" | "busy" | "destroyed";
 export type RunPhase = "idle" | "preparing" | "streaming" | "tooling" | "compacting" | "finalizing";
 export type WaitKind = "none" | "approval" | "question";
 /** How the last run ended. `none` = no result yet (a fresh run clears it). */
@@ -27,7 +27,6 @@ export interface AgentState {
   wait: WaitKind;
   outcome: RunOutcome;
   stream: StreamPhase;
-  errorMessage?: string;
   /** Run phase to restore when a compaction lease ends. */
   resumeRun?: RunPhase;
   /**
@@ -62,7 +61,7 @@ export type AgentTransitionEvent =
 export type AgentStateEventType = AgentTransitionEvent["type"];
 
 export const INITIAL_AGENT_STATE: AgentState = {
-  lifecycle: "created",
+  lifecycle: "ready",
   run: "idle",
   wait: "none",
   outcome: "none",
@@ -145,7 +144,7 @@ class IllegalTransition extends Error {}
  * `settle` / `stream-end` also arrive from RECONCILE paths (`clearUnbackedWait`,
  * `forceDetachedTerminal`, `reconcileFromUIMessages`), which pick `completed` from "is there an error
  * string?" rather than from the axes. Letting that overwrite an `error`/`aborted` outcome produced a
- * `completed` status carrying a stale `errorMessage` — one run, two conclusions, and the failure
+ * `completed` status for a run that had failed — one run, two conclusions, and the failure
  * unrecoverable. A fault may still be REPORTED over an abort (`aborted` → `error`); every other
  * combination keeps the verdict already recorded, and the rest of the event (clearing the wait,
  * leaving the phase) still applies, so reconcile keeps its escape hatch.
@@ -200,6 +199,13 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
       // A chunk is the only stream signal: it promotes from `preparing` (or `idle`, for a retry
       // that resumes mid-stream) instead of rejecting. `stream-start` used to exist for this and
       // was never dispatched, so it was removed rather than left as a misleading edge.
+      //
+      // A compaction owns the run phase. `prepare` / `pause` / `compaction-start` all reject it and
+      // `settle` / `stream-end` / `fail` / `interrupt` all preserve it, so a chunk that promoted
+      // `compacting` → `streaming` would steal the lease and the controller's
+      // `run === "compacting"` restore guard would never fire. The rule belongs here, in the table,
+      // not only in the caller's sticky check.
+      if (state.run === "compacting") return state;
       if (event.stream === "tooling") {
         return { ...state, lifecycle: "busy", run: "tooling", stream: "none" };
       }
@@ -216,7 +222,6 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
           ...state,
           outcome: coerceSettledOutcome(state, event.result),
           stream: "none",
-          ...(event.error !== undefined ? { errorMessage: event.error } : {}),
         };
       }
       return {
@@ -229,7 +234,6 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
         run: "finalizing",
         outcome: coerceSettledOutcome(state, event.result),
         stream: "none",
-        ...(event.error !== undefined ? { errorMessage: event.error } : {}),
       };
 
     case "settle":
@@ -254,7 +258,6 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
           outcome: coerceSettledOutcome(state, event.result),
           stream: "none",
           ...(event.clearWait ? { wait: "none" } : {}),
-          ...(event.error !== undefined ? { errorMessage: event.error } : {}),
         };
       }
       return {
@@ -264,7 +267,6 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
         outcome: coerceSettledOutcome(state, event.result),
         stream: "none",
         ...(event.clearWait ? { wait: "none" } : {}),
-        ...(event.error !== undefined ? { errorMessage: event.error } : {}),
       };
 
     case "fail":
@@ -277,7 +279,6 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
           ...state,
           outcome: "error",
           stream: "none",
-          errorMessage: event.error,
           ...(state.wait === "approval" ? { wait: "none" as const } : {}),
         };
       }
@@ -290,7 +291,6 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
         ...(state.wait === "approval" ? { wait: "none" as const } : {}),
         outcome: "error",
         stream: "none",
-        errorMessage: event.error,
         // All three lease-phase fields clear together: leaving `resumeStream` behind lets a later
         // `compaction-start` restore a stream from a dead run. (`interrupt` deliberately does NOT
         // clear them — it may land while a lease still owns the phase; see its own branch.)
@@ -349,7 +349,6 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
           outcome: coerceSettledOutcome(state, "aborted"),
           stream: "none",
           ...(state.wait === "approval" ? { wait: "none" as const } : {}),
-          ...(event.error !== undefined ? { errorMessage: event.error } : {}),
         };
       }
       return {
@@ -362,7 +361,6 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
         ...(state.wait === "approval" ? { wait: "none" as const } : {}),
         outcome: "aborted",
         stream: "none",
-        ...(event.error !== undefined ? { errorMessage: event.error } : {}),
         resumeRun: undefined,
         resumeOutcome: undefined,
         // All three lease-phase fields clear together: `compaction-start` overwrites this, but any
@@ -443,7 +441,7 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
  * member, and the four derived sets (`TERMINAL` / `ACTIVE` / `BUSY` / `STICKY`) plus host
  * snapshots keep reading it. Writers go through `transition()`.
  */
-export function deriveAgentState(status: AgentStatus, errorMessage = ""): AgentState {
+export function deriveAgentState(status: AgentStatus): AgentState {
   const base = { lifecycle: "ready" as LifecyclePhase, run: "idle" as RunPhase, wait: "none" as WaitKind };
   switch (status) {
     case "running":
@@ -461,7 +459,7 @@ export function deriveAgentState(status: AgentStatus, errorMessage = ""): AgentS
     case "completed":
       return { ...base, outcome: "completed", stream: "none" };
     case "error":
-      return { ...base, outcome: "error", stream: "none", ...(errorMessage ? { errorMessage } : {}) };
+      return { ...base, outcome: "error", stream: "none" };
     case "aborted":
       return { ...base, outcome: "aborted", stream: "none" };
     case "idle":

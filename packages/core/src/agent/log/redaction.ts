@@ -68,9 +68,19 @@ const MAX_LOG_DATA_ARRAY = 50;
 const MAX_LOG_DATA_KEYS = 50;
 const MAX_LOG_DATA_STRING = 4_000;
 const MAX_LOG_DATA_CHARS = 64_000;
+/**
+ * Total values visited, across the whole walk.
+ *
+ * The character budget alone bounded only STRINGS: a 50-key × 8-deep object of numbers/booleans has
+ * no strings to charge and could recurse 50^8 times — on `AgentLog.log`'s synchronous path, so a host
+ * writing one nested `data` object could stall the agent. Nodes are the axis that bounds the walk
+ * itself; characters still bound its output size.
+ */
+const MAX_LOG_DATA_NODES = 2_000;
 
 interface LogDataBudget {
   remaining: number;
+  nodes: number;
 }
 
 /**
@@ -85,10 +95,11 @@ export function redactLogValue(
   value: unknown,
   depth = 0,
   ancestors = new WeakSet<object>(),
-  budget: LogDataBudget = { remaining: MAX_LOG_DATA_CHARS }
+  budget: LogDataBudget = { remaining: MAX_LOG_DATA_CHARS, nodes: MAX_LOG_DATA_NODES }
 ): unknown {
   if (depth > MAX_LOG_DATA_DEPTH) return "[redacted-depth]";
-  if (budget.remaining <= 0) return "[redacted-budget]";
+  if (budget.remaining <= 0 || budget.nodes <= 0) return "[redacted-budget]";
+  budget.nodes -= 1;
   if (typeof value === "string") {
     const text = truncateText(redactSecrets(value), MAX_LOG_DATA_STRING);
     budget.remaining -= text.length;

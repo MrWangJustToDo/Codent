@@ -42,7 +42,7 @@ export interface LifecycleMiddlewareDeps {
   onThinking?: (info: { iteration: number; model?: string }) => void;
   emitEvent?: EmitAgentTelemetryFn;
   /** Global usage-history hook: record each model iteration's tokens + cost. */
-  recordUsage?: (input: { model?: string; usage: TokenUsage; costUsd: number }) => void;
+  recordUsage?: (input: { model?: string; usage: TokenUsage; costUsd: number; priced: boolean }) => void;
   /** Effective agent-loop budget for this run (surfaced as the iteration ceiling). */
   maxIterations?: number;
   /** Called at the start of each model iteration with 1-based progress. */
@@ -103,7 +103,6 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
   let messageStarted = false;
   let messageId = "";
   let messageFirstOutput = false;
-  let messageText = "";
   let messageToolCalls = 0;
 
   return defineMiddleware("observe", {
@@ -129,14 +128,13 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
       turnClosed = false;
       messageStarted = false;
       messageId = "";
-      messageText = "";
       messageToolCalls = 0;
       // Per-user-turn identity for `firstOutput` (a retried attempt keeps the same run id).
       if (token !== runToken) {
         runToken = token;
         runFirstOutput = false;
       }
-      deps.emitEvent?.("turn:start", { index, max: deps.maxIterations ?? 0 });
+      deps.emitEvent?.("turn:start", { turnIndex: index, chatMaxIterations: deps.maxIterations ?? 0 });
       turnOpen = true;
     },
     onStart: (ctx) => {
@@ -169,7 +167,7 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
         // The turn this request is about to run: `onIteration` fires after `onStart` (upstream
         // runs `runOnStart` once per chat, before its first iteration), so the counter still holds
         // the previous turn's value here. `llm:response` reports the index the turn actually got.
-        iteration: turnsInRun + 1,
+        turnIndex: turnsInRun + 1,
         messagesCount: ctx.messages.length,
         toolsCount: ctx.toolNames?.length ?? 0,
       });
@@ -212,9 +210,6 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
           });
         }
       }
-      if (chunk.type === "TEXT_MESSAGE_CONTENT" && chunk.delta) {
-        messageText += chunk.delta;
-      }
       if (chunk.type === "TOOL_CALL_START") {
         turnToolCalls += 1;
         messageToolCalls += 1;
@@ -230,13 +225,12 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
         turnClosed = true;
         turnOpen = false;
         const finishReason = (chunk as { finishReason?: string }).finishReason ?? null;
-        deps.emitEvent?.("turn:end", { index: turnIndex, finishReason, toolCalls: turnToolCalls });
+        deps.emitEvent?.("turn:end", { turnIndex, finishReason, toolCalls: turnToolCalls });
         if (messageStarted) {
           deps.emitEvent?.("message:end", {
             role: "assistant",
             messageId,
             firstOutput: messageFirstOutput,
-            text: messageText,
             toolCalls: messageToolCalls,
             finishReason,
           });
@@ -256,7 +250,8 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
       // AG-UI SpecTokenUsage[] entries carry a provider; keep the extractor as
       // the preferred source (future-proof) and fall back to the model prefix.
       lastProvider = extractTanStackProvider(usage) ?? providerFromModel(ctx?.model) ?? lastProvider;
-      deps.usage.updateWindowUsage(parsed, deps.getPricing());
+      const pricing = deps.getPricing();
+      deps.usage.updateWindowUsage(parsed, pricing);
       // onUsage fires once per model iteration (each RUN_FINISHED). Record this
       // round's wall-clock (since RUN_STARTED) + output tokens independently so
       // multi-iteration runs accumulate an accurate aggregate tok/s. Falls back
@@ -266,7 +261,13 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
       lastRoundElapsedMs = roundElapsed;
       lastReasoningTokens = deps.usage.getLastCallReasoningTokens();
       lastCostUsd = deps.usage.getLastCallCostUsd();
-      deps.recordUsage?.({ model: ctx.model ?? lastModel, usage: parsed, costUsd: lastCostUsd });
+      // `priced` is the fact `costUsd` cannot carry: 0 is also a real price (a local model).
+      deps.recordUsage?.({
+        model: ctx.model ?? lastModel,
+        usage: parsed,
+        costUsd: lastCostUsd,
+        priced: pricing != null,
+      });
     },
     onFinish: (_ctx, info) => {
       // Rounds are already recorded per-iteration in onUsage; nothing to add
@@ -277,10 +278,10 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
       deps.emitEvent?.("llm:response", {
         model: lastModel,
         provider: lastProvider,
-        iteration: lastIteration,
+        turnIndex: lastIteration,
         // How many model calls this ONE chat covered. 1 for a tool-phase pump, N for a worker's
         // single-chat loop — without it a 50-iteration subagent looked like one call.
-        iterations: chatIterations,
+        chatIterations,
         finishReason: info.finishReason ?? undefined,
         inputTokens: lastRoundUsage.inputTokens,
         outputTokens: lastRoundUsage.outputTokens,

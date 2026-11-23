@@ -20,6 +20,12 @@ export { PendingMessageQueue } from "../agent/queue/pending-message-queue.js";
 export { SessionStore } from "../agent/persistence/session-store.js";
 export { autoCompact } from "../agent/compaction/auto-compact.js";
 export { applyCompactionResult, findOrphanedToolCut } from "../agent/compaction/apply-compaction-result.js";
+export {
+  boundedMergeInput,
+  truncateMergeInput,
+  truncatedSummaryNote,
+  unusableSummaryReason,
+} from "../agent/compaction/auto-compact.js";
 export { compactionAbortError, isCompactionCancel } from "../agent/compaction/abort-classification.js";
 export { CONTEXT_OVERFLOW_CODES, isPromptTooLongError, reactiveCompact } from "../agent/compaction/reactive-compact.js";
 export {
@@ -94,6 +100,7 @@ export {
   SUBAGENT_PARENT_RUN_NOTICE,
   SUBAGENT_PARENT_STOP_NOTICE,
   SUBAGENT_RUN_RESTART_REASONS,
+  SUBAGENT_SESSION_END_REASONS,
   SUBAGENT_STOP_NOTICES,
 } from "../agent/subagent/subagent-stop-reason.js";
 export {
@@ -161,6 +168,7 @@ export {
   resolveAutoCompactTrigger,
   resolveKeepPolicy,
   serializeConversation,
+  TEXT_BLOCK_MAX_CHARS,
   STILL_IN_CONTEXT_RULES,
   TURN_PREFIX_INSTRUCTION,
   UPDATE_COMPACTION_PROMPT,
@@ -193,7 +201,10 @@ export {
   splitMessagesByTokenBudget,
 } from "../agent/compaction/summarization-budget.js";
 export { measureSerializedConversationChars } from "../agent/compaction/serialize-conversation.js";
-export { estimateTokens } from "../agent/compaction/token-estimator.js";
+export { estimateMessageTokens, estimateTokens } from "../agent/compaction/token-estimator.js";
+export { summarizeGitStatus } from "../agent/turn-context/env-context.js";
+export { buildSkillsIndexContent, SKILL_INDEX_MAX_BYTES, SKILL_INDEX_MAX_LINES } from "../agent/skills/extension.js";
+export { DEFAULT_MAX_SESSION_MEMORY_BYTES } from "../agent/memory/types.js";
 export {
   ToolApprovalTable,
   approvalsToResumeMap,
@@ -327,6 +338,11 @@ export {
   isTruncatedToolOutput,
 } from "../runtime-types/tool-truncation.js";
 export {
+  DENIED_TOOL_MESSAGE,
+  formatExtensionDeniedOutput,
+  isExtensionDeniedOutput,
+} from "../runtime-types/tool-denial.js";
+export {
   DEFAULT_MODEL_STREAM_STALL_MS,
   MODEL_STREAM_STALL_MESSAGE,
   TRUNCATED_MODEL_STREAM_MESSAGE,
@@ -382,7 +398,10 @@ export type { BackgroundWorkCompletion } from "../agent/jobs/background-work.js"
 export { SESSION_END_CANCELLED_MESSAGE } from "../agent/jobs/background-work.js";
 export { SubagentRuns, subagentRuns } from "../agent/subagent/subagent-runs.js";
 export {
+  buildTaskOutput,
   failedTaskOutput,
+  interruptedTaskOutput,
+  isRestoreInterruptedTaskOutput,
   formatTaskModelText,
   isRunningTaskOutput,
   runningTaskOutput,
@@ -400,6 +419,7 @@ export {
   COMMAND_JOB_CACHE_DIR,
   MAX_JOB_LOG_AGE_MS,
   MAX_JOB_RECORD_AGE_MS,
+  MEDIA_MAX_AGE_MS,
   WORKSPACE_CACHE_RETENTION,
   resetWorkspaceCacheSweeps,
   sweepWorkspaceCaches,

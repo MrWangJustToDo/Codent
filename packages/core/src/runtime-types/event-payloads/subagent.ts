@@ -5,27 +5,29 @@
  * readable and no single file sits at the line ceiling.
  */
 
+import type { QueuedSubagentTask } from "../session-payloads.js";
+
 export type SubagentEventPayloads = {
   /**
-   * The pre-fork queue: `task` calls admitted a few at a time, the rest waiting for a slot.
+   * The pre-fork queue changed: `task` calls admitted a few at a time, the rest waiting for a slot.
    *
-   * A SNAPSHOT, not a delta — every emission carries the whole queue, so a receiver replaces its
-   * set and a dropped, duplicated or re-ordered event cannot desync it. (Ordered by admission,
-   * which is the order the rows would start in.) Without it a waiting task was invisible: it has
-   * no subagent yet, so it appears in neither `subagents` nor `agent:tool-start`.
+   * A SNAPSHOT, not a delta — every emission carries the whole queue, so a receiver replaces its set
+   * and a dropped, duplicated or re-ordered event cannot desync it. Ordered by admission, which is
+   * the order the rows would start in.
+   *
+   * An EVENT, not the retained source: a late subscriber reads the queue from the retained
+   * `subagents` snapshot (`queued`), which is the channel that describes child work. Retaining this
+   * one on `lifecycle` (an append-only channel) both made a snapshot look like a lifecycle fact and
+   * consumed that channel's single retained slot.
    *
    * Deliberately no occupancy counts. A waiting entry exists *because* the cap is full, so `n/m`
    * carried no information — and it could be actively wrong: the cap is re-read per admission, so
    * lowering it mid-run makes `active > max` ("4/2 running"), and raising it does not promote until
-   * a run ends. The only non-derivable number would be the cap itself, and nothing needs it yet.
+   * a run ends.
    */
   "subagent:queue": {
     /** Waiting tasks, in admission order. Empty (or absent) means nothing is waiting. */
-    queued?: Array<{
-      toolCallId: string;
-      /** The task's own label, when known — what the row shows while it waits. */
-      description?: string;
-    }>;
+    queued?: QueuedSubagentTask[];
   };
   "subagent:created": {
     subagentId?: string;
@@ -66,7 +68,11 @@ export type SubagentEventPayloads = {
     /** Iteration budget the count was measured against (structured log data field). */
     maxIterations?: number;
     durationMs?: number;
-    usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
+    /**
+     * Tokens the child spent. Flat on purpose: the log's `data` keeps scalars and summarizes objects
+     * to a preview, so a nested `usage` was a second representation nobody could query — and its
+     * `totalTokens` used a different formula (see `reportedRunTokens`).
+     */
     inputTokens?: number;
     outputTokens?: number;
     totalTokens?: number;
@@ -90,7 +96,7 @@ export type SubagentEventPayloads = {
     iterations?: number;
     maxIterations?: number;
     durationMs?: number;
-    usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
+    /** Same flat shape as `subagent:completed` — see the note there. */
     inputTokens?: number;
     outputTokens?: number;
     totalTokens?: number;

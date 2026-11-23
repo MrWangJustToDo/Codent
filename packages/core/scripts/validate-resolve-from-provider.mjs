@@ -108,6 +108,16 @@ const direct = await resolveModelConfigFromProvider({
 assert.equal(direct.connection.model, "gpt-test");
 assert.equal(direct.connection.baseURL, "https://api.openai.com/v1");
 assert.equal(direct.connection.apiKey, "sk-local");
+
+// An EMPTY override is "not set", not "set to nothing". `AppConfig` carries these fields as strings a
+// host may leave empty, and `??` kept the empty one: the provider's gateway was replaced by "" and
+// `resolveModelConnection` then filled in `https://api.openai.com/v1` with an empty key — the provider
+// was bypassed by the defaults. The server's create route already treats "" as absent; this is the
+// same rule one layer down.
+const blankOverrides = await resolveModelConfigFromProvider({ baseURL: "", apiKey: "", model: "  " });
+assert.equal(blankOverrides.connection.model, "local-model", "a blank model keeps the provider's");
+assert.equal(blankOverrides.connection.baseURL, "http://localhost:11434/v1", "a blank baseURL keeps the provider's");
+assert.equal(blankOverrides.connection.apiKey, "local-key", "a blank key keeps the provider's");
 assert.equal(direct.providerMode, "direct");
 
 clearModelProvider();

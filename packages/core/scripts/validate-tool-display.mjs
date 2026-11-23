@@ -47,6 +47,37 @@ for (const [name, output] of [
   );
 }
 
+// A REFUSAL is not a result. Plan mode and an extension answer with a denied marker
+// (`{ success, cancelled, denied, error }`), which carries none of a tool's fields — so without the
+// dedicated branch the header fell through to the success text and a plan-blocked `write_file` read
+// "updated" on any host that prints this line.
+for (const name of ["write_file", "edit_file", "run_command"]) {
+  const denied = { success: false, cancelled: false, denied: true, error: `Plan mode blocks ${name}` };
+  assert.equal(
+    core.getInlineSummary(
+      { type: "tool-call", id: "d", name, arguments: "{}", state: "complete", output: denied },
+      name
+    ),
+    "denied",
+    `${name} refused by policy must read as denied, not as a completed ${name}`
+  );
+  // The cancel predicate also matches an `error` text mentioning an abort, so a refusal whose reason
+  // says "aborted" used to render header "cancelled" + body "Denied: …". The explicit marker wins.
+  const abortish = { success: false, cancelled: false, denied: true, error: `Plan mode aborted ${name}` };
+  assert.equal(
+    core.getInlineSummary(
+      { type: "tool-call", id: "d2", name, arguments: "{}", state: "complete", output: abortish },
+      name
+    ),
+    "denied",
+    `${name}: a denial is not a cancellation, even when its reason says "aborted"`
+  );
+
+  const denialBody = core.formatToolOutput(denied, name);
+  assert.match(denialBody, /^Denied: /, `${name}: the body is the refusal, not a ${name} result`);
+  assert.ok(!/updated|applied|Exit code/.test(denialBody), `${name}: no success text leaks through`);
+}
+
 // A `todo` payload without `stats` (any non-error malformed shape) must not throw in a render.
 assert.doesNotThrow(() => core.formatToolOutput({ source: "plan" }, "todo"));
 assert.equal(core.formatToolOutput({ source: "plan" }, "todo"), "Updated plan todos");
@@ -271,6 +302,8 @@ console.log("validate-tool-display: durability ok");
 const blockOwners = [
   "ask_user",
   "complete_plan",
+  // A screenshot is the row's content, exactly like `todo`'s structured result.
+  "computer_screenshot",
   "get_command_output",
   "kill_command",
   "run_command",

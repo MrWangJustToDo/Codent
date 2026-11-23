@@ -11,7 +11,7 @@ export {
   isParkedStatus,
   isStickyStatus,
   isTerminalStatus,
-  resolveFinishStatus,
+  isWakeableStatus,
 } from "../runtime-types/agent-status.js";
 export { createAgentEventBus, AGENT_EVENT_META } from "../agent/agent-event-bus/index.js";
 export type { AgentEvent, AgentEventBus, AgentEventType } from "../agent/agent-event-bus/index.js";

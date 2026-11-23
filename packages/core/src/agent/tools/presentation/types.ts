@@ -45,8 +45,6 @@ export interface ToolPresentation {
    * {@link ToolPresentation.keepRow} to own the row.
    */
   text?: (output: unknown) => string | undefined;
-  /** Declarative label source (input field name) for hosts that cannot call `label`. */
-  labelKey?: string;
 }
 
 export type ToolPresentationResolver = (name: string) => ToolPresentation | undefined;
@@ -62,7 +60,6 @@ export interface ToolPresentationInfo {
   hasText?: boolean;
   /** A header-summary renderer exists for this tool. */
   hasSummary?: boolean;
-  labelKey?: string;
   /**
    * Whether the LIVE registration under this name is the tool the agent was seeded with
    * (`"builtin"`) or one an extension registered, including a shadow of a built-in name

@@ -107,8 +107,82 @@ export class ModelFacet {
       return this.effectivePersistedModel(false);
     }
 
-    this.host.setModel({ model: selection.model, ...(style ? { modelStyle: style } : {}) }, { emitChange: false });
-    return { changed: true, model: selection.model, ...(style ? { modelStyle: style } : {}) };
+    // Adopt the connection of the entry that ADVERTISES this model, not the bootstrap one.
+    //
+    // `selectableModelIds` is the union across entries, so a persisted model can belong to entry B
+    // while the live config still holds entry A's baseURL/key: the id was in the catalog, so
+    // `selectModel` accepted it, and the request then went to A with a model A never advertised
+    // (404, or worse, silently served by a gateway under A's pricing). The TUI relinks the session
+    // model after a `/models` pick; a host without that path (ACP) had nothing to repair it.
+    // Skipped under a remote provider: there the server owns the connection.
+    const adopted = this.connectionOfAdvertisingEntry(selection.model, style);
+    // The adopted entry's style wins: a persisted style belongs to the model it was saved with, but
+    // the connection that serves that model has its own (a gateway's style is not a preference).
+    const finalStyle = adopted?.style ?? style;
+    this.host.setModel(
+      {
+        model: selection.model,
+        ...(finalStyle ? { modelStyle: finalStyle } : {}),
+        ...(adopted
+          ? {
+              modelBaseURL: adopted.baseURL,
+              ...(adopted.apiKey !== undefined ? { modelApiKey: adopted.apiKey } : {}),
+            }
+          : {}),
+      },
+      { emitChange: false }
+    );
+    if (adopted) {
+      this.host.emitDiagnostic("model", "Adopted the connection of the entry that advertises the resumed model", {
+        level: "info",
+        data: {
+          model: selection.model,
+          baseURL: adopted.baseURL,
+          style: adopted.style,
+          ...(adopted.apiKey === "" ? { apiKeyCleared: true } : {}),
+        },
+      });
+    }
+    // Report the style that was actually WRITTEN. Returning the requested one made the caller (the
+    // restore path) "correct" the session record back to a style the adopted connection does not use,
+    // so every later resume re-applied the adoption and rewrote the same wrong value.
+    return { changed: true, model: selection.model, ...(finalStyle ? { modelStyle: finalStyle } : {}) };
+  }
+
+  /**
+   * The catalog entry that advertises `model` with a DIFFERENT connection than the live config.
+   *
+   * `undefined` means "nothing to change": the model is unknown to the catalog, the current entry
+   * already advertises it, the entry is not a direct connection, or the provider is remote (which
+   * owns the connection itself).
+   */
+  private connectionOfAdvertisingEntry(
+    model: string,
+    persistedStyle?: ModelStyle
+  ): { style: ModelStyle; baseURL: string; apiKey?: string; sameHost: boolean } | undefined {
+    if (this.host.config.providerMode === "remote") return undefined;
+    const entries = this.host.runtime?.models?.entries ?? [];
+    const advertisers = entries.filter((entry) => entry.type === "direct" && entry.models.includes(model));
+    if (advertisers.length === 0) return undefined;
+    const alreadyServed = advertisers.some(
+      (entry) => entry.baseURL === this.host.config.modelBaseURL && entry.style === this.host.config.modelStyle
+    );
+    if (alreadyServed) return undefined;
+    // Several entries can advertise one id (two gateways, or the same model under two styles). The
+    // persisted style is the only per-session fact that tells them apart, so prefer the advertiser
+    // that matches it — otherwise file order would silently override a style the user chose.
+    const entry = advertisers.find((candidate) => candidate.style === persistedStyle) ?? advertisers[0]!;
+    const sameHost = entry.baseURL === this.host.config.modelBaseURL;
+    // A key belongs to the HOST it authenticates. Adopting an entry that carries none while the
+    // live config still holds another host's key sent that secret to the new host; on a different
+    // host the key is cleared instead (`""` = no auth, which is what a keyless entry means).
+    const apiKey = entry.apiKey !== undefined ? entry.apiKey : sameHost ? undefined : "";
+    return {
+      style: entry.style,
+      baseURL: entry.baseURL,
+      ...(apiKey !== undefined ? { apiKey } : {}),
+      sameHost,
+    };
   }
 
   /**

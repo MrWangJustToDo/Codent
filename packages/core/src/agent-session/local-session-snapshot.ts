@@ -1,4 +1,5 @@
 import { readExtensionSummary } from "../agent/extension/extension-summary.js";
+import { peekTaskPreforkCoordinator } from "../agent/subagent/subagent-runs.js";
 import { buildSubagentSummaries } from "../agent/subagent/subagent-summaries.js";
 import { describeToolPresentations } from "../agent/tools/presentation/describe.js";
 /**
@@ -60,5 +61,6 @@ export function readLocalAgentSessionSnapshot(
     iteration: managed.readIteration(),
     jobs: managed.readJobs(),
     subagents: buildSubagentSummaries(managed, manager),
+    subagentQueue: peekTaskPreforkCoordinator(managed)?.queueSnapshot() ?? [],
   };
 }

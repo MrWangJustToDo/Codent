@@ -134,9 +134,25 @@ for (const expected of ["write_file", "edit_file", "delete_file", "code_rewrite"
   );
 
   // Tools that stay available: reading, exploration, and the shell under the command allowlist.
-  for (const name of ["read_file", "glob", "grep", "tree", "list_file", "task", "run_command", "ask_user"]) {
+  for (const name of [
+    "read_file",
+    "glob",
+    "grep",
+    "tree",
+    "list_file",
+    "task",
+    "run_command",
+    "ask_user",
+    // Read-only capture: the screen is not the workspace, so a plan may look at it. Without the
+    // declaration it fell into "no descriptor found" and was withheld.
+    "computer_screenshot",
+  ]) {
     assert.equal(isPlanModeForbiddenTool(name), false, `${name} must remain available while planning`);
   }
+
+  // …and the half that CLICKS is withheld, so the pair is decided by the declaration rather than by
+  // a name list that happens to contain one of them.
+  assert.equal(isPlanModeForbiddenTool("computer"), true, "computer (click/type) edits the machine and is withheld");
 
   // An extension tool that declares nothing has unknown effects. Plan mode is a safety boundary:
   // fail closed instead of letting a third-party write tool run during planning.

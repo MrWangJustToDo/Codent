@@ -176,7 +176,7 @@ function projectChannelEvent(channel: AgentSessionChannel, event: AgentEvent): A
       // consumer, `RemoteSessionClient`, has a `case "jobs"` that could therefore never run.
       return { channel, payload: event.payload as ChannelPayload<"jobs">, ts };
     case "subagents":
-      // Shape already matches `{ subagents }`, as with `jobs` above.
+      // Shape already matches `{ subagents, queued }`, as with `jobs` above.
       return { channel, payload: event.payload as ChannelPayload<"subagents">, ts };
     case "lifecycle":
       // The lifecycle channel carries the typed AgentEvent envelope itself (minus the raw

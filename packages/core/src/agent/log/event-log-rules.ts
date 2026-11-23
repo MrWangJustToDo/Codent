@@ -98,6 +98,16 @@ export interface EventLogRule {
    * the emit site — because an emitter must always emit and the policy decides what is recorded.
    */
   suppress?: (event: AgentEvent) => boolean;
+  /**
+   * Structured `data` for the entry, when the generic payload summary is the wrong shape.
+   *
+   * `summarizePayload` encodes every object/array as `<key>Bytes` + a 200-char `<key>Preview`. That is
+   * the right default for opaque provider bodies, but for a payload whose arrays are already NAMED in
+   * the message it duplicates the same information at ~1.5-2KB per row. This hook lets the policy
+   * decide what a row records, the same way it decides level/category/suppression. Values must stay
+   * log-safe (scalars or short strings) — the seam bounds nothing but the message.
+   */
+  data?: (event: AgentEvent) => Record<string, unknown>;
 }
 
 /**
@@ -189,7 +199,13 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
       // of the adopted identity — including a fallback the catalog forced.
       const model =
         typeof d.model === "string" ? `, model ${d.model}${d.modelFallback === true ? " (fallback)" : ""}` : "";
-      return `Session restored: ${d.messageCount ?? "?"} messages, ${d.tokenEstimate ?? "?"} tokens${model}${missing}`;
+      const effort = typeof d.reasoningEffort === "string" && d.reasoningEffort ? `, effort ${d.reasoningEffort}` : "";
+      // Mode is part of the adopted identity, and the suppression above is exactly why it has to be
+      // written here: `autoMode: true` means approvals are answered without prompting, which is a
+      // safety-relevant fact a `/resume` audit must not have to infer.
+      const plan = typeof d.planPhase === "string" && d.planPhase !== "off" ? `, plan ${d.planPhase}` : "";
+      const auto = d.autoMode === true ? ", auto mode" : "";
+      return `Session restored: ${d.messageCount ?? "?"} messages, ${d.tokenEstimate ?? "?"} tokens${model}${effort}${plan}${auto}${missing}`;
     },
   },
   // The departure record, written to the session being left. Paired with `session:restore`, which
@@ -364,7 +380,7 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
     formatMessage: (event) => {
       const d = p(event);
       const cause = typeof d.cause === "string" ? `, ${d.cause}` : "";
-      return `Agent stop (${d.reason ?? "unknown"}${cause})`;
+      return `Agent stop (${d.outcome ?? "unknown"}${cause})`;
     },
   },
   "agent:status": SPECIALIZED_EVENT_LOG,
@@ -418,7 +434,9 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
   "agent:abort": {
     level: "warn",
     category: "agent",
-    formatMessage: (event) => `Agent aborted (${p(event).reason ?? "unknown"})`,
+    // The payload field is `cause` (renamed from `reason`, which now belongs to `agent:stop`
+    // meaning the OUTCOME). Reading the old name rendered every abort as "unknown".
+    formatMessage: (event) => `Agent aborted (${p(event).cause ?? "unknown"})`,
   },
   "agent:retry": {
     level: "warn",
@@ -445,8 +463,10 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
     category: "llm",
     formatMessage: (event) => {
       const d = p(event);
-      const iter = d.iteration != null ? ` [iter ${d.iteration}]` : "";
-      return `LLM request: ${d.model ?? "?"}${iter} (${d.messagesCount ?? "?"} msgs, ${d.toolsCount ?? 0} tools)`;
+      // `turnIndex` is the RUN-scoped turn (the same value `turn:start.turnIndex` carries), not the
+      // per-`chat()` model-call counter that `llm:response.chatIterations` reports.
+      const turn = d.turnIndex != null ? ` [turn ${d.turnIndex}]` : "";
+      return `LLM request: ${d.model ?? "?"}${turn} (${d.messagesCount ?? "?"} msgs, ${d.toolsCount ?? 0} tools)`;
     },
   },
   "llm:response": {
@@ -455,7 +475,7 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
     formatMessage: (event) => {
       const d = p(event);
       const fr = d.finishReason ?? "?";
-      const iter = d.iteration != null ? ` [iter ${d.iteration}]` : "";
+      const turn = d.turnIndex != null ? ` [turn ${d.turnIndex}]` : "";
       const inT = d.inputTokens ?? "?";
       const outT = d.outputTokens ?? "?";
       const cache = d.cacheReadTokens ? ` (cache +${d.cacheReadTokens})` : "";
@@ -463,9 +483,12 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
       const cost = typeof d.costUsd === "number" && d.costUsd > 0 ? ` $${d.costUsd.toFixed(4)}` : "";
       const firstToken = typeof d.firstTokenMs === "number" ? `, first token ${d.firstTokenMs}ms` : "";
       const round = typeof d.roundElapsedMs === "number" ? `, round ${d.roundElapsedMs}ms` : "";
-      const calls = typeof d.iterations === "number" && d.iterations > 1 ? ` (${d.iterations} model calls)` : "";
+      const calls = typeof d.chatIterations === "number" ? ` (${d.chatIterations} model calls)` : "";
       const ms = d.durationMs ?? "?";
-      return `LLM response: ${fr}${iter}${calls}  ${inT}→${outT} tokens${cache}${reasoning}${cost}  ${ms}ms${firstToken}${round}`;
+      // Tokens and cost belong to the LAST model call; `durationMs` covers the whole `chat()` (which
+      // is one call for the main loop but N for a delegated run). One row carrying both scales read
+      // as "$0.0123 (50 model calls)", i.e. as the total — so each side says which it is.
+      return `LLM response: ${fr}${turn}  last call ${inT}→${outT} tokens${cache}${reasoning}${cost}${firstToken}${round}${calls}  chat ${ms}ms`;
     },
   },
 
@@ -527,6 +550,20 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
   "tool:phase": {
     level: "debug",
     category: "tool",
+    // Scalars only: the ref arrays are named in the message above, and summarizing them again was the
+    // single largest per-row cost in a debug session (this row is emitted on every pump).
+    data: (event) => {
+      const d = p(event);
+      return {
+        phase: d.phase,
+        pendingCount: d.pendingCount,
+        executedCount: d.executedCount,
+        heldCount: d.heldCount,
+        approvedCount: d.approvedCount,
+        needsApprovalCount: d.needsApprovalCount,
+        needsClientCount: d.needsClientCount,
+      };
+    },
     formatMessage: (event) => {
       const d = p(event);
       const phase = d.phase != null ? ` ${d.phase}` : "";
@@ -548,6 +585,16 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
   "tool:settle": {
     level: "info",
     category: "tool",
+    // Same rule as `tool:phase`: the message names the refs, the counts are the machine summary.
+    data: (event) => {
+      const d = p(event);
+      return {
+        cause: d.cause,
+        includeInFlight: d.includeInFlight,
+        count: d.count,
+        truncatedCount: d.truncatedCount,
+      };
+    },
     formatMessage: (event) => {
       const d = p(event);
       const calls = toolRefNames(d.calls);

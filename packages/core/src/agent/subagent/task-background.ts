@@ -39,6 +39,7 @@ import {
   failedTaskOutput,
   formatTaskModelText,
   interruptedTaskOutput,
+  isRestoreInterruptedTaskOutput,
   isRunningTaskOutput,
 } from "./task-output.js";
 
@@ -46,6 +47,7 @@ import type { SubagentRuns } from "./subagent-runs.js";
 import type { SubagentResult } from "./types.js";
 import type { ResolvedCoreEnv } from "../../env";
 import type { ManagedAgent } from "../../runtime-types/hosts.js";
+import type { RestoredTaskSettlement } from "../../runtime-types/session-host.js";
 import type { BackgroundWorkTerminalStatus } from "../jobs/background-work.js";
 import type { ToolDisplayPayload } from "../tools/presentation/types.js";
 import type { UIMessage } from "@tanstack/ai";
@@ -304,7 +306,12 @@ export function reconcileSettledTaskParts(managed: TaskBackgroundHost): void {
   if (managed.isSessionSwitching?.()) return;
   for (const run of runs.settledBackground()) {
     const part = findToolCallPart(channel.getMessages(), run.toolCallId);
-    if (!part || !isRunningTaskOutput(part.output)) continue;
+    if (!part) continue;
+    // Two shapes are ours to replace: the running handle, and the cancel marker a RESTORE wrote for a
+    // session that ended. Widening to the marker is what makes a same-session resume repairable — the
+    // marker is `completed`, so the old guard (`isRunningTaskOutput`) could never match it again and a
+    // finished task stayed "cancelled because the session ended" for the rest of the session.
+    if (!isRunningTaskOutput(part.output) && !isRestoreInterruptedTaskOutput(part.output)) continue;
     channel.addToolResult(run.toolCallId, run.output);
     if (run.display) channel.attachToolDisplay(run.toolCallId, run.display);
   }
@@ -325,12 +332,21 @@ export function reconcileSettledTaskParts(managed: TaskBackgroundHost): void {
  */
 export function cancelInterruptedBackgroundTasks(
   messages: UIMessage[],
-  reason: string = SESSION_END_CANCELLED_MESSAGE
+  reason: string = SESSION_END_CANCELLED_MESSAGE,
+  settled: ReadonlyMap<string, RestoredTaskSettlement> = new Map()
 ): UIMessage[] {
   return settleToolCallsAs(
     messages,
     (part) => part.name === BUILTIN_TOOL_NAMES.task && isRunningTaskOutput(part.output),
     reason,
-    (_part, message) => interruptedTaskOutput(message)
+    // A row that already settled WINS over the marker: the task finished, we just never got its
+    // result onto the part (a sibling batch's write-back can overwrite it). Only a genuinely
+    // unfinished task gets the "session ended" text.
+    (part, message) => settled.get(part.id)?.output ?? interruptedTaskOutput(message),
+    // The display must be the SETTLED output's payload, not the one attached for the running handle
+    // (`display.summary` wins over the host's formatter, so the row would keep saying "running").
+    // Passed as a replacement rather than written in `onSettled`: that callback runs BEFORE the new
+    // part object is built, so a write there was copied away by the `display: undefined` spread.
+    { displayFor: (part) => settled.get(part.id)?.display }
   );
 }

@@ -7,6 +7,7 @@
  * Run: pnpm --filter @codent/core run validate:reactive-compact
  */
 
+import { convertMessagesToModelMessages } from "@tanstack/ai";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -24,6 +25,7 @@ import {
   AgentUIChannel,
   UsageTracker,
   CompactionService,
+  getModelVisibleMessages,
 } from "../dist/dev.mjs";
 
 // ---------------------------------------------------------------------------
@@ -65,6 +67,15 @@ import {
     1,
     "exactly one reset in the lifecycle — a second one restores the per-phase bug"
   );
+}
+
+// A reactive pass that produced NO checkpoint must not consume the run's only retry:
+// `reactiveCompact` returns `[]` when there is no safe cut, so nothing was compacted — charging the
+// attempt made a later, compactable overflow hit `reactive-max-retries`.
+{
+  const facetSrc = readFileSync(new URL("../src/managers/compact-facet.ts", import.meta.url), "utf8");
+  const emptyBranch = facetSrc.slice(facetSrc.indexOf("if (!applied) {"), facetSrc.indexOf("if (!applied) {") + 400);
+  assert.match(emptyBranch, /refundReactiveCompactRetry\(\)/, "an unappliable reactive result refunds the retry");
 }
 
 // ============================================================================
@@ -122,6 +133,20 @@ for (const message of [
   "request too large",
 ]) {
   assert.equal(isPromptTooLongError(new Error(message)), true, `original prose entry must still match: ${message}`);
+}
+
+// `too large` must be about the PROMPT. It used to match any oversized value, so a rejected
+// `max_tokens` (or an image error) was read as an overflow: the run spent a paid emergency compaction
+// and its only reactive retry, then failed again with the original error.
+for (const message of ["prompt is too large for this model", "input too large", "request too large"]) {
+  assert.equal(isPromptTooLongError(new Error(message)), true, `…but the prompt context still matches: ${message}`);
+}
+for (const message of ["max_tokens 999999 is too large", "image too large", "temperature too large"]) {
+  assert.equal(
+    isPromptTooLongError(new Error(message)),
+    false,
+    `an oversized PARAMETER is not an overflow: ${message}`
+  );
 }
 
 // --- negatives: an unrelated failure, and a code that only looks like one --------
@@ -470,6 +495,57 @@ function oversizedWire() {
     JSON.stringify(appended[0]).includes("reactive compaction performed"),
     "the appended checkpoint must carry the compaction summary text"
   );
+
+  // --- the recorded anchor is the tail this pass KEPT ---------------------------------
+  //
+  // The projection re-derives the cut from `metadata.compaction.keepRecentTokens`. Recording the
+  // configured budget while the cut had DEGRADED (the budget walk returned 0, so the pass kept only
+  // the latest boundary) made the next projection re-derive 0 and put the whole wire back — longer
+  // than before the emergency compaction, overflowing again on the retry that had just been paid for.
+  {
+    compaction.resetReactiveCompactRetries();
+    const smallWire = [
+      { role: "user", content: "old task" },
+      { role: "assistant", content: "old answer" },
+      { role: "user", content: "current question" },
+    ];
+    // The channel holds the conversation the projection re-derives from — the reactive apply only
+    // APPENDS the summary, the kept tail is whatever the anchor reproduces out of these messages.
+    const degradeChannel = new AgentUIChannel({
+      initialMessages: smallWire.map((message, index) => ({
+        id: `dm-${index}`,
+        role: message.role,
+        parts: [{ type: "text", content: message.content }],
+      })),
+    });
+    const degradeHost = {
+      ...host,
+      getUI: () => degradeChannel,
+      getMessagesForLLM: () => smallWire,
+      compactionConfig: { keepRecentTokens: 1_000 },
+    };
+    assert.equal(
+      await handleManagedReactiveCompact(degradeHost, new Error("prompt_too_long"), manager),
+      true,
+      "the degraded cut still compacts"
+    );
+    const checkpoint = degradeChannel.getMessages().at(-1);
+    const anchor = checkpoint?.metadata?.compaction?.keepRecentTokens;
+    assert.ok(typeof anchor === "number" && anchor > 0, "the checkpoint records an anchor");
+    assert.ok(anchor < 1_000, `the anchor is the tail that was kept, not the configured budget (got ${anchor})`);
+    // …and the projection reproduces that cut, instead of keeping the whole wire.
+    const projected = getModelVisibleMessages(convertMessagesToModelMessages(degradeChannel.getMessages()), {
+      keepRecentTokens: anchor,
+    });
+    // Exact, not merely "shorter": the anchor is summed per message the way the walk sums, so the
+    // projection keeps precisely the tail the emergency cut chose (summary + one message). With the
+    // budget as the anchor the walk never reaches it and the projection keeps all of `smallWire`.
+    assert.equal(
+      projected.length,
+      2,
+      `the projection reproduces the kept tail (got ${projected.length} of ${smallWire.length + 1})`
+    );
+  }
 
   const complete = events.find((e) => e.type === "compaction:reactive-complete");
   assert.ok(

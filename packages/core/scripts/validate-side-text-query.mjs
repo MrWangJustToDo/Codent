@@ -520,6 +520,14 @@ const PERSON_RAW = '{"name":"Ada","age":36}';
   assert.deepEqual(maxTokensOption("anthropic", 20), { max_tokens: 20 });
   assert.deepEqual(maxTokensOption("openai", 20), { max_completion_tokens: 20 });
 
+  // `0` is not a cap. models.dev omits `limit.output` for a real share of its entries, and a 0 that
+  // reaches the body is `max_tokens: 0` — every provider rejects it, so a metadata gap used to make
+  // the model unusable instead of merely uncapped.
+  assert.deepEqual(maxTokensOption("anthropic", 0), {}, "a zero cap is not forwarded");
+  assert.deepEqual(maxTokensOption("openai", 0), {});
+  assert.deepEqual(maxTokensOption("openai", Number.NaN), {}, "nor a non-finite one");
+  assert.deepEqual(maxTokensOption("openai", undefined), {});
+
   /** Records the options the port actually handed to the adapter. */
   const capturing = (modelStyle, reasoning = false) => {
     const seen = [];

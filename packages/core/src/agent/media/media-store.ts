@@ -16,6 +16,7 @@
  */
 
 import { buildDataUrl, stripDataUrlPrefix } from "../../utils/data-url.js";
+import { sweepWorkspaceCaches } from "../tools/shared/cache/workspace-cache.js";
 
 import { MEDIA_DIR, isMediaHash, mimeToExtension } from "./types.js";
 
@@ -93,6 +94,10 @@ export class MediaStore {
       await env.fs.mkdir(MEDIA_DIR).catch(() => {});
       await env.fs.writeFile(filePath, bytes);
     }
+    // Any cache activity bounds every cache: this is the only trigger that guarantees the media
+    // sweep runs in a workspace that never spills tool output or starts a background job. Guarded
+    // once per root per process, so the cost is one walk on the first save and nothing after.
+    void sweepWorkspaceCaches(env);
 
     return { hash, mimeType, filename, size, sourceType };
   }

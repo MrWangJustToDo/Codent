@@ -11,6 +11,8 @@ import {
   buildSegmentedConversationText,
   buildSummarizationUserPrompt,
   STILL_IN_CONTEXT_RULES,
+  TEXT_BLOCK_MAX_CHARS,
+  serializeConversation,
 } from "../dist/dev.mjs";
 
 const messages = [
@@ -70,5 +72,30 @@ assert.doesNotMatch(prevBlock, /compact-1\.md/);
 // Cut index must stay relative to input messages for applyCompactionResult.
 const cutIndex = llmCutIndex; // no previous summary offset
 assert.equal(cutIndex, 2);
+
+// --- long prose is bounded, not just tool results -------------------------------------------
+//
+// Tool results were capped while user/assistant text was not, and `splitMessagesByTokenBudget` never
+// splits a single message. One 300 KB paste therefore became a batch of its own: the summarizer
+// request itself hit `prompt_too_long`, compaction could not compact exactly when it was needed, and
+// the reactive retry spent its only attempt on the same request.
+{
+  const huge = "x".repeat(300_000);
+  const serialized = serializeConversation([
+    { role: "user", content: huge },
+    { role: "assistant", content: huge },
+    { role: "tool", toolCallId: "tc1", content: huge },
+  ]);
+  assert.ok(
+    serialized.length < TEXT_BLOCK_MAX_CHARS * 3 + 2_000,
+    `every block is bounded (got ${serialized.length} chars)`
+  );
+  assert.match(serialized, /chars truncated/, "…and says so");
+  assert.ok(serialized.includes("[User]:"), "the labels survive the cut");
+
+  // A normal message is untouched, so nothing was tightened for the common case.
+  const normal = serializeConversation([{ role: "user", content: "short request" }]);
+  assert.equal(normal, "[User]: short request");
+}
 
 console.log("summarization-segments validation passed");

@@ -127,7 +127,7 @@ export interface UseAgentChatReturn {
    */
   saveError: string;
   /**
-   * Persistence is owned by core (user-message / pump-complete / force).
+   * Persistence is owned by core (user message, pump completion, force-submit, client tool result).
    * Kept as a no-op for command-context compatibility.
    */
   saveSessionFromChat: () => void;

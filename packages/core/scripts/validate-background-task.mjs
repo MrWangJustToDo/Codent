@@ -45,6 +45,8 @@ import {
   formatNotifications,
   formatTaskModelText,
   getToolMetadata,
+  interruptedTaskOutput,
+  isRestoreInterruptedTaskOutput,
   isRunningTaskOutput,
   reconcileSettledTaskParts,
   registerCoreEnv,
@@ -589,16 +591,21 @@ const runs = subagentRuns(managed);
     spawn: async () => settled(longOutput),
   });
   await drain();
+  // The report we already HAVE is not discarded because the spill file could not be written: ending
+  // the row as `failed` told the model a successful delegation had died. It degrades to the uncached
+  // text (every other tool does), with a note that there is no path to advertise.
   assert.equal(
     rowOf("tc-cache-throw")?.status,
-    "failed",
-    "a result that cannot be recorded still ends the row (no unhandled rejection, no stuck footer)"
+    "exited",
+    "an unwritable cache ends the row as a completed run, not a failure"
   );
-  assert.match(
-    (await victimWork.pending()).find((entry) => entry.id === "tc-cache-throw")?.body ?? "",
-    /could not be recorded/,
-    "and says why, instead of claiming a summary is on its way"
-  );
+  const cacheFailedBody = (await victimWork.pending()).find((entry) => entry.id === "tc-cache-throw")?.body ?? "";
+  assert.match(cacheFailedBody, /line of the report/, "the report the child produced reaches the notification");
+  assert.match(cacheFailedBody, /output cache unavailable/, "…with the reason there is no cached path");
+  // …but bounded: this path is only reached because the report exceeded the cache threshold, and with
+  // no file there is nothing to read the rest from. Sending it whole would spend the context budget
+  // the cache exists to protect.
+  assert.match(cacheFailedBody, /chars omitted — the full report was not stored/, "the inline fallback is bounded");
   assert.equal(victimRuns.prefork.isDetached("tc-cache-throw"), false, "the seat is released on the error path too");
   await victimWork.markDelivered(await victimWork.pending());
 
@@ -996,6 +1003,133 @@ const runs = subagentRuns(managed);
     .flatMap((message) => message.parts)
     .find((part) => part.type === "tool-call" && part.id === liveId);
   assert.equal(livePart?.output?.status, "running", "a live run keeps its handle");
+
+  manager.destroyAgent(owner.id);
+}
+
+// ============================================================================
+// 12b. A SETTLED background task is not re-recorded as "cancelled by the session end"
+// ============================================================================
+//
+// The restore writes the cancel marker onto every `status: "running"` task part. A SAME-session
+// resume keeps the background ledger, so a task that finished (but whose result a sibling batch's
+// write-back clobbered) still has its real output there. Writing the marker over it used to be
+// permanent: the repair pass only recognised a running handle, so nothing could ever correct it.
+{
+  const owner = await manager.createManagedAgent({ name: "background-restore-replay", model: "test-model" });
+  owner.ensureSessionData();
+  const sessionId = owner.getSessionData()?.id;
+  assert.ok(sessionId, "the owner has a session id (the ledger snapshots it)");
+
+  const chat = owner.initChat(manager);
+  chat.enqueueRunOnce = async () => {};
+  const channel = owner.getUI();
+  const toolCallId = "tc-restore-replay";
+  chat.setMessages([
+    { id: "u-r1", role: "user", parts: [{ type: "text", content: "explore in the background" }] },
+    {
+      id: "a-r1",
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-call",
+          id: toolCallId,
+          name: "task",
+          state: "complete",
+          arguments: JSON.stringify({ prompt: "explore", run_in_background: true }),
+          output: runningTaskOutput(),
+        },
+      ],
+    },
+  ]);
+
+  startBackgroundTask({
+    managed: owner,
+    coreEnv: owner.getCoreEnv(),
+    toolCallId,
+    label: "explore",
+    input: { prompt: "explore" },
+    spawn: async () => ({
+      subagentId: "sub_replay",
+      output: "the parser lives in src/agent",
+      truncated: false,
+      iterations: 2,
+      maxIterations: 20,
+      durationMs: 5,
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, billedInputTokens: 1 },
+      reachedLimit: false,
+      incomplete: false,
+      aborted: false,
+    }),
+  });
+  await drain();
+
+  // The restore's view: the part is back on the handle (the batched write rolled it back), while the
+  // ledger still knows the result.
+  channel.addToolResult(toolCallId, runningTaskOutput());
+  const settled = owner.getSettledBackgroundTasks(sessionId);
+  assert.equal(settled.size, 1, "the ledger still holds the settled row for this session");
+
+  const partOf = (messages) =>
+    messages.flatMap((message) => message.parts).find((part) => part.type === "tool-call" && part.id === toolCallId);
+
+  // The marker predicate and the marker FACTORY must agree by construction. `RESTORE_INTERRUPTED_TASK_KEYS`
+  // is a hand-kept list; adding a field to `runningTaskOutput()` (which the marker spreads) silently
+  // makes the predicate false, and the "session ended" row becomes unrepairable again. Tying the two
+  // here is what catches that drift.
+  {
+    const marker = interruptedTaskOutput("Cancelled because the session ended.");
+    assert.equal(isRestoreInterruptedTaskOutput(marker), true, "the marker restore writes is recognized");
+    assert.equal(
+      isRestoreInterruptedTaskOutput({ ...marker, extra: 1 }),
+      false,
+      "a shape with a key outside the running handle is not the marker"
+    );
+    assert.equal(
+      isRestoreInterruptedTaskOutput(failedTaskOutput("boom")),
+      false,
+      "a real failure result is not the marker"
+    );
+  }
+
+  const repaired = cancelInterruptedBackgroundTasks(
+    channel.getMessages(),
+    "Cancelled because the session ended.",
+    settled
+  );
+  assert.equal(partOf(repaired)?.output?.summary, "the parser lives in src/agent", "the real result is replayed");
+  assert.notEqual(partOf(repaired)?.output?.aborted, true, "…and the task is not recorded as cancelled");
+
+  // The DISPLAY travels with the output, and it is the settled one. `settleToolCallsAs` clears the
+  // payload by default (the shared cancel marker has no display), which is right for every other
+  // tool — but this pass writes a REAL output, so the row must not keep describing the running
+  // handle it just replaced (`display.summary` wins over the host's own formatter).
+  const settledDisplay = settled.get(toolCallId)?.display;
+  assert.ok(settledDisplay, "the ledger row carries the display rendered for the settled output");
+  assert.deepEqual(
+    partOf(repaired)?.display,
+    settledDisplay,
+    "the settled display is restored onto the repaired part, not cleared"
+  );
+
+  // Without a row (or for another session) the marker is written: the previous behaviour stands.
+  assert.equal(owner.getSettledBackgroundTasks("another-session").size, 0, "rows are scoped to their session");
+  const marked = cancelInterruptedBackgroundTasks(
+    channel.getMessages(),
+    "Cancelled because the session ended.",
+    new Map()
+  );
+  assert.equal(partOf(marked)?.output?.aborted, true, "no row ⇒ the cancel marker");
+
+  // The repair pass also corrects the MARKER now, not only a running handle — that is what makes the
+  // same-session case recoverable after the fact.
+  chat.setMessages(marked);
+  reconcileSettledTaskParts(owner);
+  assert.equal(
+    partOf(channel.getMessages())?.output?.summary,
+    "the parser lives in src/agent",
+    "the repair pass replaces the marker with the settled result"
+  );
 
   manager.destroyAgent(owner.id);
 }

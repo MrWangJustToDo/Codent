@@ -99,6 +99,14 @@ export interface SessionSidecarPort {
   /** Drop extension lifecycle notices that describe the conversation being left. */
   clearExtensionSessionNotices?(): void;
   destroyChildAgents(reason: string): void;
+  /**
+   * Wait for the teardowns `destroyChildAgents` started.
+   *
+   * `destroyAgent` is synchronous but its teardown is not (extension deactivate, MCP/LSP shutdown,
+   * log flush), so a switch that did not await it carried the leaving session's `subagent:destroyed`
+   * rows and shutdown diagnostics into the new transcript. Optional for structural hosts.
+   */
+  settleChildTeardowns?(): Promise<void>;
   clearTaskRuns(): void;
   /** Drop per-call `tool:before:*` outcomes from the conversation being left. */
   clearToolBeforeHooks?(): void;

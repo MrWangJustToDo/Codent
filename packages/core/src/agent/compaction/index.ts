@@ -72,6 +72,8 @@ export {
   CONVERSATION_SUMMARY_END,
   CONVERSATION_SUMMARY_START,
   createCompactionSummaryUIMessage,
+  readCompactionAnchor,
+  type CompactionAnchor,
   findLatestSummaryIndex,
   formatCompactionSummaryContent,
   getModelVisibleMessages,
@@ -103,12 +105,19 @@ export {
   autoCompact,
   createCompactedMessages,
   buildSummarizationUserPrompt,
+  boundedMergeInput,
+  truncateMergeInput,
+  truncatedSummaryNote,
   findCutPointByBudget,
   extractExistingSummary,
   type BudgetedCutPointResult,
   type SummarizeOptions,
 } from "./auto-compact.js";
-export { buildSegmentedConversationText, serializeConversation } from "./serialize-conversation.js";
+export {
+  buildSegmentedConversationText,
+  serializeConversation,
+  TEXT_BLOCK_MAX_CHARS,
+} from "./serialize-conversation.js";
 export {
   applyCompactionResult,
   applyReactiveCompactionResult,

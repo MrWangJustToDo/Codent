@@ -318,7 +318,12 @@ export function buildAgentRunner(
     emitEvent("session:diagnostic", { area: "middleware", message })
   );
 
-  const maxOutputTokens = config.maxTokens ?? deps.getModelInfo()?.defaultMaxTokens;
+  // `> 0`, not `??`: a `0` from older metadata (or a host that built ModelInfo itself) is a missing
+  // cap, and forwarding it sends `max_completion_tokens: 0`.
+  const metadataMaxTokens = deps.getModelInfo()?.defaultMaxTokens;
+  const maxOutputTokens =
+    config.maxTokens ??
+    (typeof metadataMaxTokens === "number" && metadataMaxTokens > 0 ? metadataMaxTokens : undefined);
 
   return new AgentRunner({
     adapter: textAdapter.adapter,

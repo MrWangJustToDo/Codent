@@ -344,7 +344,6 @@ with the message — so declare display here rather than in the host.
 | \`keepRow\` | Never fold this row (structured / interactive results). |
 | \`detailed\` | Render a detailed result block in full display. |
 | \`clientSide\` | The host supplies the result. |
-| \`labelKey\` | Declarative label source for hosts that cannot call \`label\`. |
 
 Every function must be **pure** — a function of the stored output (or parsed input) only.
 The rendered value is persisted with the session and replayed on restore, so a timestamp,

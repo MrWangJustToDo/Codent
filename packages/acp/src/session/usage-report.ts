@@ -81,14 +81,22 @@ export function formatUsageReport(usage: UsageChangeSnapshot, history: UsageHist
     const activeDays = history.daily.filter((day) => day.totalTokens > 0).length;
     const totalTokens = history.daily.reduce((sum, day) => sum + day.totalTokens, 0);
     const totalCost = history.daily.reduce((sum, day) => sum + day.costUsd, 0);
+    // A model with no pricing metadata is not a free one: `costUsd: 0` is also a real price. Without
+    // this the headless report presented the sum as the complete cost (the TUI says "+ unpriced").
+    const unpricedCalls = history.daily.reduce((sum, day) => sum + (day.unpricedCalls ?? 0), 0);
     lines.push("");
     if (history.daily.length === 0) {
       lines.push(`Global activity (${history.weeks}w): no history yet`);
     } else {
       lines.push(
-        `Global activity (${history.weeks}w): ${formatTokens(totalTokens)} tokens · ${formatMoney(totalCost)} · ` +
-          `${activeDays} active days`
+        `Global activity (${history.weeks}w): ${formatTokens(totalTokens)} tokens · ${formatMoney(totalCost)}` +
+          `${unpricedCalls > 0 ? " + unpriced" : ""} · ${activeDays} active days`
       );
+      if (unpricedCalls > 0) {
+        lines.push(
+          `  ${unpricedCalls} call${unpricedCalls === 1 ? "" : "s"} had no pricing metadata — their cost is not in the total`
+        );
+      }
       if (history.models.length > 1) {
         const byModel = history.models
           .slice(0, 5)

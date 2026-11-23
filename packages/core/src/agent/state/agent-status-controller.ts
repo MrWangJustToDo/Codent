@@ -168,7 +168,7 @@ export class AgentStatusController {
   private dispatch(event: AgentTransitionEvent): AgentStatus {
     if (this.deps.transition) return this.deps.transition(event);
     if (!this.deps.setStatus) return this.deps.getStatus();
-    const next = transition(deriveAgentState(this.deps.getStatus(), this.deps.getError?.() ?? ""), event, {
+    const next = transition(deriveAgentState(this.deps.getStatus()), event, {
       strict: false,
     });
     const status = projectAgentStatus(next);

@@ -103,39 +103,70 @@ export function isInterceptorTimedOut(event: object): boolean {
 }
 
 /**
- * Drop every rewrite an interceptor may have written before it failed.
- *
- * `modifiedArgs` is top-level, but `ToolAfterPayload.modifiedResult` lives INSIDE `payload`
- * (`agent/extension/types.ts`) — clearing only the top level left a half-executed `tool:after`
- * rewrite readable by the caller.
- *
- * A handler that throws (or one that timed out mid-work) produced NO verdict, so a half-written
- * rewrite must never reach the caller. One definition, called by the bus's failure branches AND by
- * the extension wrapper: the wrapper contains its own throw (so the bus never sees it), which is
- * exactly how a partially-written `tool:after` rewrite used to reach the model as a final result.
+ * The rewrite fields one interceptor may touch. `modifiedArgs` / `modifiedResult` are top-level,
+ * but `ToolAfterPayload.modifiedResult` lives INSIDE `payload` (`agent/extension/types.ts`) —
+ * handling only the top level left a half-executed `tool:after` rewrite readable by the caller.
  */
-export function clearInterceptorRewrite(event: object): void {
+interface InterceptorRewrite {
+  modifiedArgs?: unknown;
+  modifiedResult?: unknown;
+  payloadResult?: unknown;
+}
+
+function readInterceptorRewrite(event: object): InterceptorRewrite {
+  const mutable = event as {
+    modifiedArgs?: unknown;
+    modifiedResult?: unknown;
+    payload?: { modifiedResult?: unknown };
+  };
+  let payloadResult: unknown;
+  try {
+    const payload = mutable.payload;
+    payloadResult = payload && typeof payload === "object" ? payload.modifiedResult : undefined;
+  } catch {
+    payloadResult = undefined;
+  }
+  return { modifiedArgs: mutable.modifiedArgs, modifiedResult: mutable.modifiedResult, payloadResult };
+}
+
+function writeInterceptorRewrite(event: object, value: InterceptorRewrite): void {
   const mutable = event as {
     modifiedArgs?: unknown;
     modifiedResult?: unknown;
     payload?: { modifiedResult?: unknown };
   };
   try {
-    mutable.modifiedArgs = undefined;
+    mutable.modifiedArgs = value.modifiedArgs;
   } catch {
     // Best-effort cleanup: a frozen/foreign event must not turn containment into a throw.
   }
   try {
-    mutable.modifiedResult = undefined;
+    mutable.modifiedResult = value.modifiedResult;
   } catch {
     // See above.
   }
   try {
     const payload = mutable.payload;
-    if (payload && typeof payload === "object") payload.modifiedResult = undefined;
+    if (payload && typeof payload === "object") payload.modifiedResult = value.payloadResult;
   } catch {
     // See above.
   }
+}
+
+/**
+ * Capture the rewrites as they are BEFORE one handler runs, returning a rollback.
+ *
+ * This is the correct failure semantics: a handler that throws may only undo ITS OWN partial
+ * writes. Clearing instead rolled back a PREVIOUS interceptor's legitimate rewrite — on
+ * `tool:after` a later handler that timed out (or threw) silently reverted an earlier extension's
+ * result shaping, with no diagnostic.
+ *
+ * One definition, shared by the bus's failure branches and the extension wrapper: the wrapper
+ * contains its own throw (so the bus never sees it), and both layers must roll back the same way.
+ */
+export function snapshotInterceptorRewrite(event: object): () => void {
+  const before = readInterceptorRewrite(event);
+  return () => writeInterceptorRewrite(event, before);
 }
 
 // ============================================================================
@@ -461,18 +492,24 @@ export class DefaultAgentEventBus implements AgentEventBus {
           // interceptors ran, so a `tool:before` deny that would have been the next handler is not
           // evidence of approval. Without this the tool executed (fail OPEN) while the per-handler
           // timeout path failed closed — two timeout paths, two opposite answers.
+          //
+          // No rewrite is dropped here: this iteration's handler never ran, so nothing it wrote can
+          // be half-applied, and clearing would revert a rewrite an EARLIER interceptor legitimately
+          // produced (the wrapper's snapshot/rollback rule).
           timedOutEvents.add(event);
           const mutable = event as {
             skip?: boolean;
             skipDefault?: boolean;
             handlerError?: boolean;
           };
-          clearInterceptorRewrite(event);
           mutable.skip = true;
           mutable.handlerError = true;
           break outer;
         }
         let result: unknown;
+        // Snapshot BEFORE the call: a failure may only undo THIS handler's partial writes, never a
+        // previous interceptor's rewrite (see `snapshotInterceptorRewrite`).
+        const rollback = snapshotInterceptorRewrite(event);
         try {
           // `registration.handler(event)` is evaluated EAGERLY: deferring it behind
           // `Promise.resolve().then(...)` put it on a microtask, so a fire-and-forget emitter
@@ -493,8 +530,9 @@ export class DefaultAgentEventBus implements AgentEventBus {
           );
           // A timed-out handler consumed the remaining budget and CANNOT be trusted to have
           // finished its work: a half-executed interceptor may have written `modifiedArgs` /
-          // `modifiedResult` before hanging, and those are read by the caller. Drop the rewrites and
-          // fail CLOSED (`skip`) — a handler that could not complete is not evidence of approval.
+          // `modifiedResult` before hanging, and those are read by the caller. Roll back to the
+          // snapshot (its own writes only) and fail CLOSED (`skip`) — a handler that could not
+          // complete is not evidence of approval.
           if (isCallbackTimeoutError(error)) {
             timedOutEvents.add(event);
             const mutable = event as {
@@ -502,16 +540,16 @@ export class DefaultAgentEventBus implements AgentEventBus {
               skipDefault?: boolean;
               handlerError?: boolean;
             };
-            clearInterceptorRewrite(event);
+            rollback();
             mutable.skip = true;
             mutable.handlerError = true;
             break outer;
           }
           // Any other throw: the handler that threw produced no verdict. Mark the event so a
           // fail-closed gate can deny, and keep going — one broken extension must not fail every
-          // call it touches. A half-written rewrite is equally untrustworthy here (the timeout path
-          // clears it for the same reason), so drop it rather than let the caller apply it.
-          clearInterceptorRewrite(event);
+          // call it touches. A half-written rewrite is equally untrustworthy here, so roll it back
+          // — again only THIS handler's writes.
+          rollback();
           (event as { handlerError?: boolean }).handlerError = true;
           continue;
         }

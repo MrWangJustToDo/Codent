@@ -429,5 +429,18 @@ async function settleApprovalsIfAutoApproved(
   // `authorizeToolCall` (which may await the command analyzer) and then enqueues the pump without
   // awaiting it. A caller that resolves before the decisions are durable made a remote client see
   // "auto enabled" with the old approval still pending.
-  await chat.authorizeAndResume().catch(() => undefined);
+  //
+  // A failure here is reported, not swallowed: the mode change SUCCEEDS (so the command still returns
+  // ok — failing it would tell the host auto is off, which is false), but the run stays parked on a
+  // question nobody answered. That was previously indistinguishable from "there was nothing to
+  // answer": auto on, approval still pending, pump not resumed, and no event or log row at all.
+  try {
+    await chat.authorizeAndResume();
+  } catch (error) {
+    managed.emitDiagnostic("session", "Auto mode could not answer the pending approval(s); they are still pending", {
+      level: "warn",
+      error: errorMessage(error),
+      data: { pendingApprovals: managed.getL1State().pendingApprovalCount ?? 0 },
+    });
+  }
 }

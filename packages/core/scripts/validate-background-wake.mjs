@@ -372,10 +372,10 @@ function makeCapturingAdapter() {
   bus.on("llm:request", (event) => {
     // During the model call the run scope is set — the finalizer clears it just before the summary,
     // so this is the moment to observe it.
-    observed.requests.push({ runId: scoped.run.getCurrentRunId(), iteration: event.payload.iteration });
+    observed.requests.push({ runId: scoped.run.getCurrentRunId(), turnIndex: event.payload.turnIndex });
   });
   bus.on("llm:response", (event) => {
-    observed.responses.push({ iteration: event.payload.iteration });
+    observed.responses.push({ turnIndex: event.payload.turnIndex });
   });
   bus.on("turn:summary", () => {
     observed.summaries.push(1);
@@ -415,8 +415,8 @@ function makeCapturingAdapter() {
   // The index is the run-scoped model turn, and the request must agree with its response: the
   // request used to log `ctx.iteration` (always 0 at `onStart`) while the response logged the
   // counter, so one model call reported two different turns.
-  assert.equal(observed.requests[0]?.iteration, 1, "the first request of the run is turn 1");
-  assert.equal(observed.responses[0]?.iteration, 1, "…and its response reports the same turn");
+  assert.equal(observed.requests[0]?.turnIndex, 1, "the first request of the run is turn 1");
+  assert.equal(observed.responses[0]?.turnIndex, 1, "…and its response reports the same turn");
   assert.equal(observed.wakes.length, 1, "the wake emits one run:wake row");
   assert.equal(
     observed.wakes[0],

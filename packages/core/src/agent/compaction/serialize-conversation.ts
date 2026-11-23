@@ -12,7 +12,7 @@
  */
 
 import { extractTextFromContent } from "../../utils/message-content.js";
-import { truncateText } from "../../utils/text-truncation.js";
+import { sliceAtCodePoint, truncateText } from "../../utils/text-truncation.js";
 
 import { serializeToolMessageContent } from "./message-utils.js";
 import { estimateCharUnits } from "./token-estimator.js";
@@ -26,13 +26,34 @@ export const TOOL_RESULT_MAX_CHARS = 2000;
 /** Maximum characters for a single tool-call argument string in serialized output */
 export const TOOL_ARGS_MAX_CHARS = 200;
 
+/**
+ * Maximum characters for one user/assistant text block in serialized output.
+ *
+ * Tool results were already capped; prose was not, and `splitMessagesByTokenBudget` never splits a
+ * single message — so one 300 KB paste (or a very long answer) became a batch of its own and the
+ * summarizer request itself hit `prompt_too_long`. Compaction then could not compact exactly when it
+ * was needed most, and the reactive retry burned its only attempt on the same request.
+ *
+ * The cost is real and accepted: the summary of a 300 KB paste is written from its first 8 KB, while
+ * the transcript keeps the whole thing (compaction is additive, never destructive). Removing the cap
+ * trades that loss for a summarizer request that cannot succeed at all.
+ */
+export const TEXT_BLOCK_MAX_CHARS = 8_000;
+
+function truncateTextBlock(text: string): string {
+  if (text.length <= TEXT_BLOCK_MAX_CHARS) return text;
+  const kept = sliceAtCodePoint(text, TEXT_BLOCK_MAX_CHARS);
+  return kept + `\n[... ${text.length - kept.length} chars truncated]`;
+}
+
 function truncateToolArgs(args: string): string {
   return truncateText(args, TOOL_ARGS_MAX_CHARS);
 }
 
 function truncateToolResult(text: string): string {
   if (text.length <= TOOL_RESULT_MAX_CHARS) return text;
-  return text.slice(0, TOOL_RESULT_MAX_CHARS) + `\n[... ${text.length - TOOL_RESULT_MAX_CHARS} chars truncated]`;
+  const kept = sliceAtCodePoint(text, TOOL_RESULT_MAX_CHARS);
+  return kept + `\n[... ${text.length - kept.length} chars truncated]`;
 }
 
 /**
@@ -53,13 +74,13 @@ export function serializedMessageChars(
   messageIndex: number
 ): number {
   if (message.role === "user") {
-    const text = extractTextFromContent(message.content);
+    const text = truncateTextBlock(extractTextFromContent(message.content));
     return text ? estimateCharUnits(`[User]: ${text}`) : 0;
   }
 
   if (message.role === "assistant") {
     let chars = 0;
-    const text = extractTextFromContent(message.content);
+    const text = truncateTextBlock(extractTextFromContent(message.content));
     if (text) chars += estimateCharUnits(`[Assistant]: ${text}`);
     if (message.toolCalls && message.toolCalls.length > 0) {
       const toolCalls = message.toolCalls.map((tc) => {
@@ -109,13 +130,13 @@ export function serializeConversation(messages: ModelMessage[]): string {
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i]!;
     if (msg.role === "user") {
-      const text = extractTextFromContent(msg.content);
+      const text = truncateTextBlock(extractTextFromContent(msg.content));
       if (text) parts.push(`[User]: ${text}`);
       continue;
     }
 
     if (msg.role === "assistant") {
-      const text = extractTextFromContent(msg.content);
+      const text = truncateTextBlock(extractTextFromContent(msg.content));
       if (text) parts.push(`[Assistant]: ${text}`);
 
       if (msg.toolCalls && msg.toolCalls.length > 0) {

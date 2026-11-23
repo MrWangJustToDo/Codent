@@ -12,7 +12,6 @@ export function describePresentation(name: string, present: ToolPresentation | u
     clientSide: present?.clientSide,
     hasText: present?.text !== undefined,
     hasSummary: present?.summary !== undefined,
-    labelKey: present?.labelKey,
   };
 }
 
@@ -23,7 +22,6 @@ export function presentationFromInfo(info: ToolPresentationInfo): ToolPresentati
   if (info.keepRow) present.keepRow = true;
   if (info.detailed) present.detailed = true;
   if (info.clientSide) present.clientSide = true;
-  if (info.labelKey) present.labelKey = info.labelKey;
   if (info.hasText) present.text = () => undefined;
   // `hasSummary` was exported by `describePresentation` and then dropped here, so a remote host's
   // descriptor always said "no summary" and the two sides disagreed about the same tool. The stub

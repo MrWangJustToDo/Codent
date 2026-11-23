@@ -18,7 +18,14 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { registerCoreEnv, SkillRegistry, createSkillsExtension } from "../dist/dev.mjs";
+import {
+  SKILL_INDEX_MAX_BYTES,
+  SKILL_INDEX_MAX_LINES,
+  buildSkillsIndexContent,
+  registerCoreEnv,
+  SkillRegistry,
+  createSkillsExtension,
+} from "../dist/dev.mjs";
 
 import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
 
@@ -143,6 +150,67 @@ assert.ok(index.includes(first.name), `turn-context index lists ${first.name}`);
 // A lazy tool only pays off if the model can still find it — the index is the one
 // surface that is always present, so it must advertise the discovery route.
 assert.ok(index.includes("__lazy__tool__discovery__"), "turn-context index names the discovery tool for list_skills");
+
+// The index is injected into EVERY turn and admitted by content hash, so it is bounded: 300 skills
+// used to be ~36 KB of prompt that stayed for the whole session, and one third-party SKILL.md with a
+// 20 KB description added 20 KB per turn on its own.
+{
+  const many = Array.from({ length: 300 }, (_, i) => ({
+    name: `skill-${i}`,
+    description: "d".repeat(400),
+    source: "project",
+  }));
+  const bounded = buildSkillsIndexContent(many);
+  assert.ok(
+    Buffer.byteLength(bounded) <= SKILL_INDEX_MAX_BYTES,
+    `the index respects its byte budget (got ${Buffer.byteLength(bounded)})`
+  );
+  assert.ok(bounded.split("\n").length <= SKILL_INDEX_MAX_LINES + 8, "…and its line budget");
+  assert.match(bounded, /\+\d+ more \(list_skills shows the rest\)/, "the omitted tail is named, with the route to it");
+
+  // A fixture that is bounded by BYTES rather than lines: long names + a full-length description make
+  // one line ~270 bytes, so the byte budget binds before the 50-line cap. This is what exercises the
+  // footer/closing-tag reserve — without it the block emitted "12 KB" plus the footer.
+  const byteBound = buildSkillsIndexContent(
+    Array.from({ length: 80 }, (_, i) => ({
+      name: `skill-${i}-${"n".repeat(90)}`,
+      description: "d".repeat(160),
+      source: "project",
+    }))
+  );
+  assert.ok(
+    Buffer.byteLength(byteBound) <= SKILL_INDEX_MAX_BYTES,
+    `the byte budget includes the footer (got ${Buffer.byteLength(byteBound)})`
+  );
+  const byteBoundLines = byteBound.split("\n").filter((line) => line.startsWith("- skill-")).length;
+  assert.ok(
+    byteBoundLines < SKILL_INDEX_MAX_LINES,
+    `this fixture is byte-bound (${byteBoundLines} of ${SKILL_INDEX_MAX_LINES} lines)`
+  );
+  // …and the budget holds for EVERY line width, not just the ones with slack to spare. The footer
+  // ("… +N more" + `</skills>`) is appended after admission, so it must be reserved up front: a line
+  // that lands within ~60 bytes of the budget pushed the block over it. Sweeping the width walks the
+  // remaining slack across the whole footer window (each extra name byte shifts it by 40), which is
+  // what makes this deterministic instead of luck-of-the-fixture.
+  for (let nameLen = 100; nameLen <= 140; nameLen += 1) {
+    const swept = buildSkillsIndexContent(
+      Array.from({ length: 40 }, (_, i) => ({
+        name: `s-${i}-${"n".repeat(nameLen)}`,
+        description: "d".repeat(160),
+        source: "p",
+      }))
+    );
+    assert.ok(
+      Buffer.byteLength(swept) <= SKILL_INDEX_MAX_BYTES,
+      `the byte budget holds at name length ${nameLen} (got ${Buffer.byteLength(swept)})`
+    );
+  }
+
+  const huge = buildSkillsIndexContent([{ name: "huge", description: "x".repeat(20_000), source: "project" }]);
+  assert.ok(Buffer.byteLength(huge) < 1_000, "a single enormous description is truncated, not injected whole");
+
+  assert.equal(buildSkillsIndexContent([]), "<skills>No skills are currently available.</skills>");
+}
 
 // list_skills executes and returns summaries.
 const listTool = registeredTools.find((t) => t.name === "list_skills");

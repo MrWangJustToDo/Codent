@@ -193,12 +193,21 @@ export function deriveSubagentRunStats(
   // This comparison is `iterationCount >= max` in the engine's own units
   // (`maxIterations(max) => ({iterationCount}) => iterationCount < max`), which is
   // why `iterations` above has to be that same count and not a tool-batch tally.
+  //
+  // A run that FAILED is not a run that exhausted its budget. The heuristic reads the LAST
+  // `RUN_FINISHED`, which a multi-iteration run leaves on its previous tool phase when a later
+  // iteration dies mid-stream (stall, no terminal): `finishReason: "tool_calls"` then describes a
+  // finished phase, not this run's end. Reporting `reachedLimit: true` for it tells the parent model
+  // "the budget cut you off, retry with a narrower prompt" when the truth is "retry the same thing".
+  // The engine's own `loopStopped` stays authoritative even on a failure (it is stamped per run).
+  const failedRun = input.status === "error";
   const hitStepBudget =
     input.maxIterations > 0 &&
     !input.aborted &&
     (input.loopStopped !== undefined
       ? input.loopStopped
-      : finishReason === "tool_calls" || (!calledBeginSummary && toolCalls > 0 && iterations >= input.maxIterations));
+      : !failedRun &&
+        (finishReason === "tool_calls" || (!calledBeginSummary && toolCalls > 0 && iterations >= input.maxIterations)));
   const reachedLimit = hitStepBudget;
 
   const hasSummary = input.output.trim().length > 0 && input.output !== EMPTY_SUMMARY;

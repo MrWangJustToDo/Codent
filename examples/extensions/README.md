@@ -43,7 +43,7 @@ A registered tool declares how it is displayed through a **single `present` fiel
 - **`present.text(result)`** — the result string. In `full` display it renders as the tool's output block; in `compact` display (`/appearance compact`) it renders as **one clamped line** and the row is **kept** instead of being folded into an activity summary. That contract is what keeps an extension tool legible in compact mode, so keep it short and single-line (`demo-echo-tool.mjs`: `echo → hi`).
 - **`present.category`** — `reads` / `edits` / `searches` / `commands` / `tasks` / `other`: the activity bucket the tool is counted in when it *is* folded.
 - **`present.label(input)`** — the short text shown after the count (a filename, a query, a message). Without it, a folded tool is still named in the summary (`ext_echo ×2`) instead of an opaque `N other`.
-- **Optional extras**: `keepRow` (row never folds — interactive/structured results), `detailed`, `clientSide` (the host supplies the result), `summary(output)` (header text) and `labelKey` (declarative label source for hosts that cannot call functions). See `packages/core/src/agent/tools/presentation/types.ts`.
+- **Optional extras**: `keepRow` (row never folds — interactive/structured results), `detailed`, `clientSide` (the host supplies the result) and `summary(output)` (header text). See `packages/core/src/agent/tools/presentation/types.ts`.
 
 Every `present` function must be a **pure function** of the stored result (or the parsed input): the rendered value is persisted with the session and replayed on restore.
 

@@ -22,34 +22,41 @@ export type AgentEventPayloads = {
   /**
    * One model turn began.
    *
-   * `index` is the **run-scoped** model turn (1-based, counted per model call across every
+   * `turnIndex` is the **run-scoped** model turn (1-based, counted per model call across every
    * tool-phase chat of the turn) — the same number `llm:request` / `llm:response` carry, so a
    * consumer can pair those with it. It is NOT `agent:iteration`.current, which restarts at 1 for
    * every `chat()`; the two scales are deliberately different and must not be paired.
    *
-   * `max` is the per-`chat()` `maxIterations` budget (0 when unbudgeted), i.e. the ceiling on the
-   * engine that is running this turn — NOT the denominator of `index`. After a few tool phases a
-   * run legitimately reports `{ index: 7, max: 50 }` because each phase gets a fresh budget.
+   * `chatMaxIterations` is the per-`chat()` `maxIterations` budget (0 when unbudgeted), i.e. the
+   * ceiling on the engine that is running this turn — NOT the denominator of `turnIndex`. After a few
+   * tool phases a run legitimately reports `{ turnIndex: 7, chatMaxIterations: 50 }` because each
+   * phase gets a fresh budget.
    */
-  "turn:start": { index: number; max: number };
+  "turn:start": { turnIndex: number; chatMaxIterations: number };
   /**
    * One model turn finished (a model request plus the tool calls it issued).
    *
-   * Completes the `index` its own `turn:start` opened (run-scoped). An aborted turn is not reported
-   * as finished.
+   * Completes the `turnIndex` its own `turn:start` opened (run-scoped). An aborted turn is not
+   * reported as finished.
    */
-  "turn:end": { index: number; finishReason: string | null; toolCalls: number };
+  "turn:end": { turnIndex: number; finishReason: string | null; toolCalls: number };
   /**
    * An assistant message began streaming. `firstOutput` marks the run's first assistant output — the
    * general fact behind "did the model actually answer?".
    */
   "message:start": { role: "assistant"; messageId: string; firstOutput: boolean };
-  /** An assistant message was finalized (assistant text and tool-call count, not the part tree). */
+  /**
+   * An assistant message was finalized: its id, tool-call count and finish reason — NOT its text.
+   *
+   * The full assistant text used to ride this payload, so every turn copied the whole answer into an
+   * event every wildcard subscriber receives (the log bridge, `observeAny`, the process guard) and
+   * nothing in the repo read it. A consumer that wants the content reads the transcript
+   * (`ctx.getMessages()`), which is the one owner of it.
+   */
   "message:end": {
     role: "assistant";
     messageId: string;
     firstOutput: boolean;
-    text: string;
     toolCalls: number;
     finishReason: string | null;
   };
@@ -68,7 +75,8 @@ export type AgentEventPayloads = {
     output?: unknown;
   };
   "agent:abort": {
-    reason?: string;
+    /** The abort reason that reached the run (same value as `agent:stop.cause`). */
+    cause?: string;
   };
   "agent:retry": {
     attempt?: number;
@@ -90,7 +98,8 @@ export type AgentEventPayloads = {
     stack?: string;
   };
   "agent:stop": {
-    reason?: string;
+    /** How the run ended. Historically named `reason`, which read like a cause (see `cause`). */
+    outcome?: string;
     /**
      * Why the turn stopped: the abort reason that reached the run (`user-cancelled`,
      * `session-switch`, `session-new`, `agentDestroyed`, …). Absent on a normal finish.
@@ -198,15 +207,16 @@ export type AgentEventPayloads = {
     /** Provider id reported by the adapter usage (sticky across iterations). */
     provider?: string;
     /**
-     * 1-based model-call index within the current user turn.
+     * 1-based RUN-scoped turn index — the same value `turn:start.turnIndex` carries.
      *
      * Counted per model call (`onIteration`), the only hook that fires for a pump's one-call chat
      * AND for a worker's multi-iteration chat alike. `llm:request` announces the turn it is about
-     * to run; `llm:response` reports the index that turn actually got. A restart-style retry
-     * (429 / capability strip / reactive compact) is another model call and takes the next index —
-     * `agent:retry` is the event that marks it.
+     * to run; `llm:response` reports the turn that call actually got. This is NOT the per-`chat()`
+     * model-call counter (`llm:response.chatIterations`) — the two scales differ and must not be
+     * paired. A restart-style retry (429 / capability strip / reactive compact) is another model
+     * call and takes the next turn index — `agent:retry` is the event that marks it.
      */
-    iteration?: number;
+    turnIndex?: number;
     messagesCount?: number;
     toolsCount?: number;
   };
@@ -214,7 +224,7 @@ export type AgentEventPayloads = {
     model?: string;
     /** Provider id reported by the adapter usage. */
     provider?: string;
-    iteration?: number;
+    turnIndex?: number;
     /**
      * Model calls this ONE chat covered.
      *
@@ -222,7 +232,7 @@ export type AgentEventPayloads = {
      * `chat()` (N). Without it the worker's single row read as one call and its per-round cost was
      * invisible.
      */
-    iterations?: number;
+    chatIterations?: number;
     finishReason?: string;
     inputTokens?: number;
     outputTokens?: number;

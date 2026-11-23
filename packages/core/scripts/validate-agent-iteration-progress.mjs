@@ -115,22 +115,26 @@ assert.equal(DEFAULT_AGENT_SESSION_CHANNELS.includes("iteration"), true);
   await mw.onFinish?.(undefined, { finishReason: "stop" });
   const first = events.filter((e) => e.type === "llm:request" || e.type === "llm:response");
   assert.deepEqual(
-    first.map((e) => [e.type, e.data.iteration]),
+    first.map((e) => [e.type, e.data.turnIndex]),
     [
       ["llm:request", 1],
       ["llm:response", 1],
     ],
     "one model call reports the SAME turn in request and response"
   );
-  assert.equal(events.find((e) => e.type === "turn:start").data.index, 1, "turn:start carries the run-scoped index");
+  assert.equal(
+    events.find((e) => e.type === "turn:start").data.turnIndex,
+    1,
+    "turn:start carries the run-scoped index"
+  );
 
   // Chat 2 — the next tool-phase pump continues the run.
   events.length = 0;
   await mw.onStart?.({ model: "m", messages: [], iteration: 0 });
   await mw.onIteration?.({}, { iteration: 0, messageId: "m2" });
   await mw.onFinish?.(undefined, { finishReason: "stop" });
-  assert.equal(events.find((e) => e.type === "llm:request").data.iteration, 2, "the second chat is turn 2");
-  assert.equal(events.find((e) => e.type === "llm:response").data.iteration, 2);
+  assert.equal(events.find((e) => e.type === "llm:request").data.turnIndex, 2, "the second chat is turn 2");
+  assert.equal(events.find((e) => e.type === "llm:response").data.turnIndex, 2);
 
   // A worker keeps ONE chat for many iterations: the request announces the first, the response the
   // last, and `turn:start` counts each — while `agent:iteration` progress keeps the engine's own
@@ -149,10 +153,10 @@ assert.equal(DEFAULT_AGENT_SESSION_CHANNELS.includes("iteration"), true);
   await worker.onIteration?.({}, { iteration: 0, messageId: "w1" });
   await worker.onIteration?.({}, { iteration: 1, messageId: "w2" });
   await worker.onFinish?.(undefined, { finishReason: "stop" });
-  assert.equal(events.find((e) => e.type === "llm:request").data.iteration, 1, "the chat starts at turn 1");
-  assert.equal(events.find((e) => e.type === "llm:response").data.iteration, 2, "…and covers turns 1-2");
+  assert.equal(events.find((e) => e.type === "llm:request").data.turnIndex, 1, "the chat starts at turn 1");
+  assert.equal(events.find((e) => e.type === "llm:response").data.turnIndex, 2, "…and covers turns 1-2");
   assert.deepEqual(
-    events.filter((e) => e.type === "turn:start").map((e) => e.data.index),
+    events.filter((e) => e.type === "turn:start").map((e) => e.data.turnIndex),
     [1, 2],
     "each model turn inside the chat is numbered"
   );
@@ -182,12 +186,12 @@ assert.equal(DEFAULT_AGENT_SESSION_CHANNELS.includes("iteration"), true);
   await early.onStart?.({ model: "m", messages: [], iteration: 0 });
   await early.onFinish?.(undefined, { finishReason: "error" });
   assert.deepEqual(
-    events.filter((e) => e.type === "llm:request").map((e) => e.data.iteration),
+    events.filter((e) => e.type === "llm:request").map((e) => e.data.turnIndex),
     [1, 2],
     "each chat announces its own turn"
   );
   assert.deepEqual(
-    events.filter((e) => e.type === "llm:response").map((e) => e.data.iteration),
+    events.filter((e) => e.type === "llm:response").map((e) => e.data.turnIndex),
     [1, 2],
     "…and a chat that never iterated reports the turn it announced, not the previous one"
   );
@@ -209,7 +213,7 @@ assert.equal(DEFAULT_AGENT_SESSION_CHANNELS.includes("iteration"), true);
   await resettable.onStart?.({ model: "m", messages: [], iteration: 0 });
   await resettable.onIteration?.({}, { iteration: 0, messageId: "r2" });
   assert.equal(
-    events.find((e) => e.type === "llm:request").data.iteration,
+    events.find((e) => e.type === "llm:request").data.turnIndex,
     1,
     "a new run token restarts the turn numbering"
   );
@@ -243,7 +247,7 @@ assert.equal(DEFAULT_AGENT_SESSION_CHANNELS.includes("iteration"), true);
   await mw.onIteration?.({}, { iteration: 0, messageId: "m" });
   await mw.onChunk?.({}, { type: "RUN_FINISHED", finishReason: "stop" });
   assert.deepEqual(
-    events.filter((e) => e.type === "turn:start" || e.type === "turn:end").map((e) => [e.type, e.data.index]),
+    events.filter((e) => e.type === "turn:start" || e.type === "turn:end").map((e) => [e.type, e.data.turnIndex]),
     [
       ["turn:start", 1],
       ["turn:end", 1],

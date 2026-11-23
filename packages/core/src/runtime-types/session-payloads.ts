@@ -84,7 +84,7 @@ export interface AgentL1State {
  * (TanStack middleware `onIteration`, 0-based on the wire → 1-based here).
  *
  * Not the run-scoped turn index: a chat pump starts a new `chat()` — and therefore a fresh counter
- * and budget — for every tool phase, so this reads `1/max` on each of them while `turn:start.index`
+ * and budget — for every tool phase, so this reads `1/max` on each of them while `turn:start.turnIndex`
  * keeps counting the user turn (2, 3, …). The two scales are not interchangeable.
  */
 export interface AgentIterationState {
@@ -195,6 +195,18 @@ export interface SessionJobSummary {
 /** Background jobs started by this agent (mirrors the retained `jobs` channel). */
 export interface SessionJobsSnapshot {
   jobs: SessionJobSummary[];
+}
+
+/**
+ * One `task` call waiting for a concurrency slot.
+ *
+ * A waiting task has no subagent yet, so it is not a row: it appears only in the `subagents`
+ * snapshot's `queued` list (and in the `subagent:queue` event an extension may observe).
+ */
+export interface QueuedSubagentTask {
+  toolCallId: string;
+  /** The task's own label, when known — what the row shows while it waits. */
+  description?: string;
 }
 
 /**

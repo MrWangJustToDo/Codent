@@ -147,13 +147,21 @@ export function createExtensionUiBridge(options: ExtensionUiBridgeOptions): Exte
           }
         };
         const unsub = ui.subscribe(type, contained);
-        registrations?.unsubObservers.push(unsub);
+        const list = registrations?.unsubObservers;
+        list?.push(unsub);
         // Lease-checked like every other disposer the context hands out: a revoked context must not
         // keep acting on the runner (the closure only removes its own subscription, so this is about
         // refusing the action, not about protecting a newer registration).
         return () => {
           if (isLive && !isLive()) return;
           unsub();
+          // A self-retired subscription is no longer an artifact. Leaving it in the ledger made
+          // `hasLiveArtifacts()` true forever, so the "already disabled" fast path never ran and
+          // every disable did a full teardown round. Same rule as `createObserverSurface`.
+          if (list) {
+            const index = list.indexOf(unsub);
+            if (index >= 0) list.splice(index, 1);
+          }
         };
       },
       render: (surface, key, payload) => {

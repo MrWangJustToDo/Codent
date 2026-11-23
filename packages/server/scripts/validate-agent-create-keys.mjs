@@ -42,14 +42,29 @@ const ROUTE_ALIASES = new Map([
   ["modelApiKey", "apiKey"],
 ]);
 
-/** Interface member keys at exactly one indent level (nested object types are deeper). */
+/**
+ * Interface member keys at exactly one indent level (nested object types are deeper), PLUS the keys
+ * the interface derives from `ManagedAgentConfig`.
+ *
+ * The contract used to be 29 hand-written members, so reading the body WAS reading the contract.
+ * It is now `Omit<Pick<ManagedAgentConfig, …>, "maxIterations"> & { four host-only fields }`, and the
+ * forwarded half lives in the `ForwardedSessionOption` union — reading only the body measured 4 of
+ * ~30 keys, i.e. this guard would pass while the body's schema missed everything else.
+ */
 function contractKeys(source) {
-  const start = source.indexOf("export interface AgentSessionCreateOptions {");
+  const start = source.indexOf("export interface AgentSessionCreateOptions");
   assert.ok(start >= 0, "AgentSessionCreateOptions not found — did the contract move?");
   const end = source.indexOf("\n}", start);
   assert.ok(end > start, "unterminated AgentSessionCreateOptions");
   const body = source.slice(start, end);
-  return new Set([...body.matchAll(/^\s{2}([A-Za-z_$][\w$]*)\??:/gm)].map((match) => match[1]));
+  const keys = new Set([...body.matchAll(/^\s{2}([A-Za-z_$][\w$]*)\??:/gm)].map((match) => match[1]));
+
+  const pickStart = source.indexOf("type ForwardedSessionOption = Pick<");
+  assert.ok(pickStart >= 0, "the forwarded option union was not found — did the contract move?");
+  const pickEnd = source.indexOf(">;", pickStart);
+  assert.ok(pickEnd > pickStart, "unterminated ForwardedSessionOption");
+  for (const match of source.slice(pickStart, pickEnd).matchAll(/"([A-Za-z_$][\w$]*)"/g)) keys.add(match[1]);
+  return keys;
 }
 
 /** Keys of a `z.object({ … })` body at one indent level. */

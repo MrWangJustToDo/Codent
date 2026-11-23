@@ -31,12 +31,34 @@ export function findLatestSummaryIndex(messages: ModelMessage[]): number {
   return -1;
 }
 
+/**
+ * The keep budget recorded on a checkpoint.
+ *
+ * `metadata` (not the text) because it must survive persistence and the channel → wire conversion
+ * without the model ever reading it: `uiMessageToModelMessages` copies `metadata` onto the
+ * `ModelMessage` (`messages.js`), and no provider adapter forwards it. `metadata.compaction` is a
+ * namespace of ours; TanStack owns only `metadata.tanstack`.
+ */
+export interface CompactionAnchor {
+  keepRecentTokens: number;
+}
+
+/** The anchor a checkpoint carries, if it has one (old checkpoints do not). */
+export function readCompactionAnchor(
+  message: { metadata?: Record<string, unknown> } | undefined
+): CompactionAnchor | undefined {
+  const anchor = message?.metadata?.compaction as { keepRecentTokens?: unknown } | undefined;
+  const value = anchor?.keepRecentTokens;
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? { keepRecentTokens: value } : undefined;
+}
+
 /** Build a UIMessage checkpoint for appending onto the channel. */
-export function createCompactionSummaryUIMessage(summary: string, id?: string): UIMessage {
+export function createCompactionSummaryUIMessage(summary: string, id?: string, anchor?: CompactionAnchor): UIMessage {
   return {
     id: id ?? generateId("compact"),
     role: "user",
     parts: [{ type: "text", content: formatCompactionSummaryContent(summary) }],
+    ...(anchor ? { metadata: { compaction: { keepRecentTokens: anchor.keepRecentTokens } } } : {}),
   };
 }
 
@@ -66,7 +88,15 @@ export function getModelVisibleMessages(
   const after = messages.slice(summaryIdx + 1);
   // Deterministic over the frozen pre-summary slice: same content + policy
   // always yields the same kept window (see design notes in keep-policy.ts).
-  const keptStart = findCutPointByBudget(before, keepRecentTokens ?? 0).cutIndex;
+  //
+  // The CHECKPOINT's own budget wins. Everything before it is frozen (the channel only appends, and
+  // a new checkpoint lands at the tail), so re-walking with the recorded number reproduces the cut
+  // this summary was made with. Re-deriving from the CURRENT policy is what let a `/models` switch
+  // to a larger window (or a late models.dev read) move the boundary left and re-include messages the
+  // summary had already replaced. A checkpoint written before this field existed carries none, and
+  // the caller's policy is used — the pre-fix behaviour, unchanged for those sessions.
+  const anchor = readCompactionAnchor(summary) ?? (keepRecentTokens !== undefined ? { keepRecentTokens } : undefined);
+  const keptStart = findCutPointByBudget(before, anchor?.keepRecentTokens ?? 0).cutIndex;
   // The latest summary is an incremental update of every older one, and older summaries are
   // structural (they do not consume the keep budget — see `findCutPointByBudget`). Keeping them in
   // the kept slice therefore accumulated one stale checkpoint per compaction: a long session's

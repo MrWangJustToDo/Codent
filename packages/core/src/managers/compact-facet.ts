@@ -10,8 +10,12 @@ import { autoCompact } from "../agent/compaction/auto-compact.js";
 import { isCompactionSummaryUIMessage } from "../agent/compaction/compaction-summary.js";
 import { keepPolicyProjectionOptions, resolveKeepPolicy } from "../agent/compaction/keep-policy.js";
 import { getModelVisibleMessages } from "../agent/compaction/message-chain-projection.js";
-import { isPromptTooLongError, reactiveCompact } from "../agent/compaction/reactive-compact.js";
-import { estimateTokens } from "../agent/compaction/token-estimator.js";
+import {
+  isPromptTooLongError,
+  reactiveCompact,
+  resolveReactiveKeepTokens,
+} from "../agent/compaction/reactive-compact.js";
+import { estimateMessageTokens, estimateTokens } from "../agent/compaction/token-estimator.js";
 import { toError } from "../utils/errors.js";
 
 import type { AgentManager } from "./agent-manager.js";
@@ -90,11 +94,12 @@ export async function handleManagedReactiveCompact(
     // override alone silently dropped the user's `keepRecentTokens` on the reactive path — the
     // one place an overflowing window most needs it.
     const compactionConfig = host.compactionConfig ?? host.getCompaction().getConfig() ?? null;
-    const compactedMessages = await reactiveCompact(llmMessages, host.id, manager, {
+    const reactiveConfig = {
       ...(compactionConfig?.keepRecentTokens != null ? { keepRecentTokens: compactionConfig.keepRecentTokens } : {}),
       ...(host.getContextWindow() && host.getContextWindow()! > 0 ? { contextWindow: host.getContextWindow() } : {}),
       ...(abortSignal ? { abortSignal } : {}),
-    });
+    };
+    const compactedMessages = await reactiveCompact(llmMessages, host.id, manager, reactiveConfig);
 
     // A manual/auto compaction or a session switch can claim status while the reactive
     // summarizer is finishing. Its checkpoint must not land in the new transcript.
@@ -103,8 +108,26 @@ export async function handleManagedReactiveCompact(
     // Capture window fill before apply (usage is reset by applyReactiveCompactionResult).
     const tokensBefore = host.usage.getContextFillTokens();
 
+    // The tail this pass ACTUALLY kept. `reactiveCompact` returns summary + tail, and the projection
+    // re-derives the cut from this number — so it cannot be the budget when the cut degraded: the
+    // emergency path falls back to "keep only the latest boundary" when the budget walk returns 0,
+    // and recording the (larger) budget made the next projection re-derive 0 and put EVERYTHING back
+    // on the wire — longer than before the compaction, and overflowing again on the retry.
+    const keptTail = compactedMessages.slice(1);
+    // Summed PER MESSAGE, exactly as `findCutPointByBudget` walks: `estimateTokens` adds a
+    // per-message overhead the walk does not, which made the anchor overshoot by one message.
+    const tailTokens =
+      keptTail.length > 0
+        ? Math.max(
+            1,
+            keptTail.reduce((sum, message) => sum + estimateMessageTokens(message), 0)
+          )
+        : Number.POSITIVE_INFINITY;
     const applied = applyReactiveCompactionResult(host.getCoreEnv(), canon, channel, host.usage, compactedMessages, {
-      ...keepPolicyProjectionOptions(resolveKeepPolicy(compactionConfig ?? {}, host.getContextWindow())),
+      // Never larger than the tail: equal on the normal path (the walk overshoots the budget slightly),
+      // smaller only when the cut degraded. The emergency path resolves its own budget and ignores a
+      // configured `keepRecentTokens`, so this is about the tail, not the policy.
+      keepRecentTokens: Math.min(resolveReactiveKeepTokens(reactiveConfig), tailTokens),
       onCacheCleanupError: (err) => {
         // A cache-cleanup failure is not a failed compaction: emitting `compaction:reactive-error`
         // here rendered as "Reactive compact failed" even though the summary had been applied.
@@ -114,8 +137,15 @@ export async function handleManagedReactiveCompact(
 
     // An empty/unappliable result is NOT a compaction: do not append a checkpoint, do not reset
     // the window, and do not report `completed` (the retry budget/status must see the truth).
+    //
+    // The retry is REFUNDED: `reactiveCompact` returns `[]` when there is no safe cut (one oversized
+    // user turn, or a wire whose only boundary is 0), so nothing was compacted and the attempt cost
+    // the run nothing but a completion. Keeping the charge meant a later overflow that COULD be
+    // compacted hit `reactive-max-retries` — the same rule `begin()` already follows when it refunds
+    // a rejected lease.
     if (!applied) {
       host.compactions.release(lease);
+      host.getCompaction().refundReactiveCompactRetry();
       return false;
     }
 

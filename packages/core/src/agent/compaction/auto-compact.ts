@@ -17,6 +17,8 @@
 
 import { errorMessage } from "../../utils/errors.js";
 import { generateId } from "../../utils/generate-id.js";
+import { extractTextFromContent } from "../../utils/message-content.js";
+import { sliceAtCodePoint, truncateText } from "../../utils/text-truncation.js";
 import { runSubagent } from "../subagent/run-subagent.js";
 import { EMPTY_SUMMARY } from "../subagent/subagent-output.js";
 import { isContextModelMessage } from "../turn-context/turn-context-message.js";
@@ -111,6 +113,15 @@ export interface SummarizeOptions {
    */
   streamEpoch?: string;
   /**
+   * Treat the input as ALREADY-FORMATTED summary text rather than conversation history.
+   *
+   * The merge pass composes one message out of the segment summaries. Serializing that as history
+   * applies `TEXT_BLOCK_MAX_CHARS` to it, which silently dropped every partial past the first 8000
+   * characters while the split decision (same serializer) still saw a request that "fit". Raw mode
+   * sends the text as written; the caller is responsible for keeping it inside the budget.
+   */
+  rawText?: boolean;
+  /**
    * Custom instruction prompt replacing `buildCompactionPrompt`. Used
    * internally for the split-turn prefix summary.
    */
@@ -128,9 +139,10 @@ export interface SummarizeOptions {
  * Exported for validation scripts.
  */
 export function buildSummarizationUserPrompt(toCompress: ModelMessage[], options?: SummarizeOptions): string {
-  const { focus, todos, existingSummary, stillInContext, asTurnPrefix, instruction } = options ?? {};
-  const conversationText =
-    asTurnPrefix && !stillInContext?.length
+  const { focus, todos, existingSummary, stillInContext, asTurnPrefix, instruction, rawText } = options ?? {};
+  const conversationText = rawText
+    ? buildSegmentedRawText(toCompress, stillInContext)
+    : asTurnPrefix && !stillInContext?.length
       ? `<turn_prefix>\n${serializeConversation(toCompress)}\n</turn_prefix>`
       : buildSegmentedConversationText(toCompress, stillInContext);
   const instructionPrompt =
@@ -142,6 +154,21 @@ export function buildSummarizationUserPrompt(toCompress: ModelMessage[], options
       hasStillInContext: Boolean(stillInContext?.length),
     });
   return `${conversationText}\n\n${instructionPrompt}`;
+}
+
+/**
+ * Segment text for content that is already a summary (see {@link SummarizeOptions.rawText}).
+ *
+ * Only `<still_in_context>` is serialized: that IS conversation history, and it keeps its per-block
+ * cap. The to-compress half is the caller-built summary text, sent verbatim.
+ */
+function buildSegmentedRawText(toCompress: ModelMessage[], stillInContext?: ModelMessage[]): string {
+  const parts: string[] = [];
+  const raw = toCompress.map((message) => extractTextFromContent(message.content)).join("\n\n");
+  if (raw) parts.push(`<to_compress>\n${raw}\n</to_compress>`);
+  if (stillInContext?.length)
+    parts.push(`<still_in_context>\n${serializeConversation(stillInContext)}\n</still_in_context>`);
+  return parts.join("\n\n");
 }
 
 /**
@@ -239,8 +266,14 @@ export async function summarizeConversation(
     );
   }
 
-  const mergedInput = partialSummaries.map((summary, index) => `## Segment ${index + 1}\n\n${summary}`).join("\n\n");
-  return summarizeConversationBatch([{ role: "user", content: mergedInput }], parentAgentId, manager, {
+  // Merge the partials in as many passes as the summarizer's own input budget needs.
+  //
+  // The merge used to be ONE request built from every partial summary. Each partial can be up to
+  // `SUMMARY_OUTPUT_CAP` (32k) tokens, so a history that needed 4+ segments produced a merge prompt
+  // larger than the window: the summarizer failed with `RUN_ERROR`, compaction gave up, and the
+  // expensive partials were discarded. Halving is enough to converge — each pass either fits or is
+  // split again — and it costs one extra completion per extra level, never more than log2(N).
+  const mergeOptions: SummarizeOptions = {
     focus: instruction
       ? undefined
       : (focus ?? "Merge the segment summaries into one cohesive continuation prompt for the next agent"),
@@ -249,10 +282,40 @@ export async function summarizeConversation(
     stillInContext,
     asTurnPrefix,
     instruction,
-    streamLabel: "Merging segment summaries",
     streamEpoch,
     ...(options?.abortSignal ? { abortSignal: options.abortSignal } : {}),
-  });
+  };
+  // Room for the merge request, in the same units the budget is expressed in. Measured on the RAW
+  // text: `measureSerializedTokens` serializes (and truncates text blocks at `TEXT_BLOCK_MAX_CHARS`),
+  // so it reported every merge as fitting and the truncation then dropped all but the first 8000
+  // characters — the partials were paid for and thrown away, leaving a checkpoint that covered only
+  // the first segment.
+  const mergeMaxChars = Math.max(1, compressBudget) * SUMMARIZATION_CHARS_PER_TOKEN;
+  const mergeSummaries = async (summaries: string[], depth = 0): Promise<string> => {
+    // Split only while a split can make PROGRESS. Two summaries have no smaller split, and
+    // `mergeSummaries([left, right])` would re-enter with the same count and — whenever the
+    // summarizer's output is still larger than half the budget — the same over-budget input. The
+    // previous `summaries.length > 1` condition looped there forever, paying two completions per
+    // pass. With three or more, halving strictly shrinks each side, so the recursion is bounded by
+    // log2(N) and the leaf case is always the bounded merge below.
+    if (summaries.length > 2 && mergeInputText(summaries).length > mergeMaxChars) {
+      const middle = Math.ceil(summaries.length / 2);
+      const left = await mergeSummaries(summaries.slice(0, middle), depth + 1);
+      const right = await mergeSummaries(summaries.slice(middle), depth + 1);
+      return mergeSummaries([left, right], depth + 1);
+    }
+    return summarizeConversationBatch(
+      [{ role: "user", content: boundedMergeInput(summaries, mergeMaxChars) }],
+      parentAgentId,
+      manager,
+      {
+        ...mergeOptions,
+        rawText: true,
+        streamLabel: depth === 0 ? "Merging segment summaries" : `Merging segment summaries (pass ${depth + 1})`,
+      }
+    );
+  };
+  return mergeSummaries(partialSummaries);
 }
 
 async function summarizeConversationBatch(
@@ -296,6 +359,13 @@ async function summarizeConversationBatch(
     throw compactionAbortError();
   }
 
+  // An incomplete / budget-cut / truncated run also carries PARTIAL text. Installing it replaces the
+  // whole pre-cut history with a fragment, and that is permanent: the channel is append-only and the
+  // transcript is never rewritten. A failed compaction is recoverable (the next model call retries);
+  // a checkpoint built from half a summary is not.
+  const unfit = unusableSummaryReason(result);
+  if (unfit) throw new Error(`Compaction subagent returned an unfit summary (${unfit})`);
+
   const output = result.output?.trim() ?? "";
   if (!output || output === EMPTY_SUMMARY) {
     throw new Error(
@@ -304,7 +374,77 @@ async function summarizeConversationBatch(
     );
   }
 
-  return output;
+  // A report cut by the OUTPUT CAP is installed WITH the note: rejecting it made compaction fail
+  // deterministically for this history (same input, same cap, same cut) — paying a summarizer on
+  // every model call and never compacting, which is worse than a summary missing its tail.
+  return result.truncated ? `${output}\n\n${truncatedSummaryNote(result.usage.totalTokens)}` : output;
+}
+
+/** The merge request body, before bounding — one labelled section per partial summary. */
+function mergeInputText(summaries: string[]): string {
+  return summaries.map((summary, index) => `## Segment ${index + 1}\n\n${summary}`).join("\n\n");
+}
+
+/**
+ * Bound a merge request to `maxChars` **plus the omission marker**, with the marker naming the loss
+ * (exported for validation).
+ *
+ * The bound is applied to the RAW text the request will carry. It used to be applied by the serializer
+ * (`measureSerializedTokens` → `TEXT_BLOCK_MAX_CHARS`), which silently cut the request to 8000
+ * characters while the split decision measured the same truncated string — so the partials were paid
+ * for and discarded. Splitting is the caller's job; this is what remains when one summary alone is
+ * bigger than the budget and cannot be subdivided.
+ */
+export function truncateMergeInput(text: string, maxChars: number): string {
+  const sliced = sliceAtCodePoint(text, maxChars);
+  return sliced.length === text.length ? text : `${sliced}\n[... ${text.length - sliced.length} chars truncated]`;
+}
+
+/**
+ * The merge request body for a set of summaries that does not fit, cut so EVERY summary survives.
+ *
+ * Cutting the joined text at the bound kept only the head — with two summaries the second one starts
+ * past the bound and disappeared entirely, which the model reads as "that part of the conversation
+ * never happened". An equal share per summary degrades to "the end of each segment is missing"
+ * instead, and the marker names the loss.
+ */
+export function boundedMergeInput(summaries: string[], maxChars: number): string {
+  const full = mergeInputText(summaries);
+  if (full.length <= maxChars) return full;
+  // `truncateText` reserves its own `...` inside `share`; the slack covers the `## Segment N`
+  // labels and separators `mergeInputText` adds.
+  const share = Math.max(1, Math.floor(maxChars / Math.max(1, summaries.length)) - 32);
+  const bounded = mergeInputText(summaries.map((summary) => truncateText(summary, share)));
+  return bounded.length <= maxChars ? bounded : truncateMergeInput(bounded, maxChars);
+}
+
+/**
+ * The note appended to a summary whose own report was cut by `maxOutputLength`.
+ *
+ * Exported so the wording can be asserted: this is the ONLY thing that tells a future reader the
+ * checkpoint's tail is missing (the checkpoint is otherwise the sole record of what was cut).
+ */
+export function truncatedSummaryNote(usageTokens: number): string {
+  return `[Summary truncated at the output cap (${usageTokens} tokens); later details were not recorded.]`;
+}
+
+/**
+ * Why a summarizer result may NOT become a checkpoint, or `undefined` when it may.
+ *
+ * Exported as a predicate so the rule can be asserted without spawning a summarizer. These two flags
+ * mean the MODEL stopped before finishing its report, so there is no verdict to install — and a
+ * retry may produce a different one.
+ *
+ * `truncated` is deliberately NOT here: it means our own `maxOutputLength` cut a report that DID
+ * finish. That is a length fact, not a missing verdict, and treating it as a failure made compaction
+ * fail deterministically on every model call for that history (same input, same cap, same cut) while
+ * paying a summarizer each time. The caller installs the text with {@link truncatedSummaryNote}.
+ */
+export function unusableSummaryReason(result: { incomplete?: boolean; reachedLimit?: boolean }): string | undefined {
+  const flags = [result.incomplete ? "incomplete" : undefined, result.reachedLimit ? "reachedLimit" : undefined].filter(
+    (flag): flag is string => flag !== undefined
+  );
+  return flags.length > 0 ? flags.join(", ") : undefined;
 }
 
 /**
@@ -502,6 +642,8 @@ export async function autoCompact(
       type: "auto",
       summary: summaryWithFileOps,
       cutIndex,
+      // The projection must reproduce THIS cut, not a later policy's.
+      keepRecentTokens: policy.keepRecentTokens,
     };
   } catch (error) {
     // User cancel: leave the conversation untouched and report that explicitly. It is NOT a

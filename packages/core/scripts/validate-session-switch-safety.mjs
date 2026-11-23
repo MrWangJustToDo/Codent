@@ -328,6 +328,8 @@ assert.equal(
   let taskRunsCleared = false;
   let childAgentsDestroyed = false;
   let persistDrains = 0;
+  /** Reported input the switch had to drop (counts only). */
+  const droppedReports = [];
   const newTarget = { id: "ses_new", name: "New Session", uiMessages: [], model: "m", modelStyle: "openai" };
   const newSessionLifecycle = new SessionLifecycleService(
     runtime({
@@ -349,7 +351,10 @@ assert.equal(
       },
       stopActiveRun: () => {},
       abortManualCompaction: () => {},
+      // The user typed two messages while the run was busy; `/new` ends that run.
+      peekQueuedInput: () => ({ steer: [{ text: "queued one" }], followUp: [{ text: "queued two" }] }),
       clearQueuedInput: () => {},
+      warn: (message, data) => droppedReports.push({ message, data }),
       cascadeAbortToChildren: () => {},
       discardPreforkRuns: () => {},
       streamHub: { endAllCommands: () => {}, clearAll: () => {} },
@@ -381,6 +386,8 @@ assert.equal(
         clearTranscript: () => {
           transcriptCleared = true;
         },
+        // Only the failure path calls this (a switch that never commits puts the queue back).
+        restoreQueuedMessages: () => {},
       }),
       setSessionData: (data) => {
         adopted = data;
@@ -398,6 +405,14 @@ assert.equal(
     "a new session destroys the previous conversation's subagents (not just aborts them)"
   );
   assert.equal(taskRunsCleared, true, "the previous conversation's task records are dropped");
+  // The queue was cleared by the unload half and the switch COMMITTED, so it is gone for good. The
+  // host had already been told `ok` for those sends, so the loss has to be reported — silently
+  // vanishing input is indistinguishable from "the agent ignored me".
+  assert.deepEqual(
+    droppedReports,
+    [{ message: "Queued messages were dropped by the session switch", data: { steer: 1, followUp: 1 } }],
+    "a committed switch reports the queued input it dropped (counts, never content)"
+  );
   assert.equal(released, "ses_old", "the previous session's ownership is released after adoption");
 }
 
@@ -458,6 +473,8 @@ assert.equal(
         clearTranscript: () => {
           transcriptCleared = true;
         },
+        // Only the failure path calls this (a switch that never commits puts the queue back).
+        restoreQueuedMessages: () => {},
       }),
     })
   );

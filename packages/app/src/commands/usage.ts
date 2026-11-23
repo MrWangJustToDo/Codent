@@ -62,19 +62,30 @@ function renderGlobalStats(daily: DailyUsageBucket[], models: ModelUsageTotal[],
 
   const totalTokens = daily.reduce((s, d) => s + d.totalTokens, 0);
   const totalCost = daily.reduce((s, d) => s + d.costUsd, 0);
+  const unpricedCalls = daily.reduce((s, d) => s + (d.unpricedCalls ?? 0), 0);
   const activeDays = daily.filter((d) => d.totalTokens > 0).length;
   const avgPerDay = totalTokens / (weeks * 7);
   lines.push("");
   lines.push(`  ── Global Activity (${weeks}w) ──`);
   lines.push(
-    `  ${fmt(totalTokens)} tokens · ${formatCost(totalCost)} · ${activeDays} active days · avg ${fmt(avgPerDay)}/day`
+    `  ${fmt(totalTokens)} tokens · ${formatCost(totalCost)}${unpricedCalls > 0 ? " + unpriced" : ""} · ${activeDays} active days · avg ${fmt(avgPerDay)}/day`
   );
+  // A model with no pricing metadata used to be indistinguishable from a free one: both showed
+  // `$0.0000`, and the total read as "this is what it cost". Say how many calls are unknown.
+  if (unpricedCalls > 0) {
+    lines.push(
+      `  ${unpricedCalls} call${unpricedCalls === 1 ? "" : "s"} had no pricing metadata — their cost is not in the total`
+    );
+  }
 
   if (models.length > 1) {
     lines.push("");
     lines.push(`  ── By Model ──`);
     for (const m of models) {
-      lines.push(`  ${m.model.padEnd(40)}${fmt(m.totalTokens).padStart(10)} tokens  ${formatCost(m.costUsd)}`);
+      const unpriced = m.unpricedCalls > 0 ? ` (${m.unpricedCalls} unpriced)` : "";
+      lines.push(
+        `  ${m.model.padEnd(40)}${fmt(m.totalTokens).padStart(10)} tokens  ${formatCost(m.costUsd)}${unpriced}`
+      );
     }
   }
   return lines;

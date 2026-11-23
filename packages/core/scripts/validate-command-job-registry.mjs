@@ -554,6 +554,30 @@ console.log("teardown log deletion OK");
 }
 
 {
+  // The crash window: the log already carries the `interrupted` footer while the record still says
+  // `running` (the `killed` record is persisted a moment later). It is the SAME event as the
+  // no-footer case above, so it must not be reported as a command failure.
+  const owner = "ses_interrupted_footer";
+  const first = new CommandJobRegistry(env, { ownerSessionId: owner });
+  await first.ready();
+  const job = first.create("sleep 60", "call_ifooter");
+  first.appendStdout(job.id, "partial\n");
+  await waitForLog(job.logPath, "partial");
+  await waitForFileContent(`${COMMAND_JOB_CACHE_DIR}/${job.id}.json`, '"status":"running"');
+  await env.fs.appendFile(job.logPath, `[exit n/a · interrupted · finished ${new Date().toISOString()}]\n`);
+
+  const resumed = new CommandJobRegistry(env, { ownerSessionId: owner });
+  await resumed.ready();
+  assert.equal(
+    resumed.get(job.id)?.status,
+    "killed",
+    "an interrupted footer is a session-end cancel, not a command failure"
+  );
+  await first.clear();
+  await resumed.clear();
+}
+
+{
   // Records are scoped to the disk session: a fork/`/new` must not inherit another conversation's
   // background jobs.
   const ownerA = new CommandJobRegistry(env, { ownerSessionId: "ses_scope_a" });

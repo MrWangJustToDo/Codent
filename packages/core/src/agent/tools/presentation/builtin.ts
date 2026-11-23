@@ -71,6 +71,13 @@ export const BUILTIN_PRESENTATION: Partial<Record<BuiltinToolName, BuiltinPresen
   kill_command: { category: "commands", detailed: true },
   execute_typescript: { category: "commands" },
 
+  // Computer use. Declared here rather than left to fall through: `isWorkspaceEditingTool` treats an
+  // unknown category as workspace-editing (fail closed), which withheld the screenshot tool from plan
+  // mode even though it is read-only — and left `computer`'s withholding to "no descriptor found"
+  // instead of to a declaration.
+  computer_screenshot: { category: "reads", keepRow: true },
+  computer: { category: "edits" },
+
   // Delegation.
   task: { category: "tasks", detailed: true },
 

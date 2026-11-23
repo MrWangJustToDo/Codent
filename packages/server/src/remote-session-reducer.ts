@@ -246,7 +246,8 @@ export function applyEvent(
     case "jobs":
       return { ...snapshot, jobs: event.payload };
     case "subagents":
-      return { ...snapshot, subagents: event.payload.subagents };
+      // The queue rides this snapshot: a waiting `task` has no row, and it has to survive a remount.
+      return { ...snapshot, subagents: event.payload.subagents, subagentQueue: event.payload.queued ?? [] };
     case "messages":
       // Applied by the SSE loop's delta writer (`upsertMessages` + `setMessages`), which needs the
       // previous transcript to merge a patch. Listed here so the exhaustiveness guard stays honest —

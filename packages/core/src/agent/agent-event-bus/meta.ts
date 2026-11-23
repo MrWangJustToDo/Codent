@@ -114,7 +114,9 @@ export const AGENT_EVENT_META = {
   // Subagents
   // ==========================================================================
   "subagent:created": { mode: "emit", channel: "lifecycle", visibility: "observable" },
-  "subagent:queue": { mode: "emit", channel: "lifecycle", retained: true, visibility: "observable" },
+  // NOT retained: the queue survives a late subscribe through the retained `subagents` snapshot
+  // (see there). `lifecycle` is append-only, and its one retained slot belongs to a lifecycle fact.
+  "subagent:queue": { mode: "emit", channel: "lifecycle", visibility: "observable" },
   "subagent:started": { mode: "emit", channel: "lifecycle", visibility: "observable" },
   "subagent:prefork-discarded": { mode: "emit", channel: "lifecycle", visibility: "observable" },
   "subagent:completed": { mode: "emit", channel: "lifecycle", visibility: "observable" },

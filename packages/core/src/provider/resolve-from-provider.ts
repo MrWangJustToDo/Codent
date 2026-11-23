@@ -49,12 +49,19 @@ export async function resolveModelConfigFromProvider(
 ): Promise<ResolvedModelConfigFromProvider> {
   const providerConn = await (provider ?? getModelProvider()).getConnection();
 
+  // `??` was not enough for the two STRING overrides: `""` is not nullish, so a host that carries
+  // empty connection fields (the documented `AppConfig` shape for "not set") replaced the provider's
+  // gateway with nothing — and `resolveModelConnection` then filled in `https://api.openai.com/v1`
+  // with an empty key. The server's create route already treats `""` as absent
+  // (`clientSuppliedConnection`); this is the same rule one layer down.
+  const baseURL = input.baseURL?.trim();
+  const apiKey = input.apiKey?.trim();
   const merged: ResolveModelConfigInput = {
     ...input,
     model: input.model?.trim() ? input.model : providerConn.model,
     style: input.style ?? asStyle(providerConn.style),
-    baseURL: input.baseURL ?? providerConn.baseURL,
-    apiKey: input.apiKey ?? providerConn.apiKey,
+    baseURL: baseURL ? baseURL : providerConn.baseURL,
+    apiKey: apiKey ? apiKey : providerConn.apiKey,
   };
 
   if (providerConn.mode === "remote") {

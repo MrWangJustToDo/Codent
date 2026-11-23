@@ -39,6 +39,8 @@ export class SessionLifecycleService {
    * completing, or a re-resume of the leaving id can race a late deletion against a fresh restore.
    */
   private pendingBackgroundReset: Promise<void> = Promise.resolve();
+  /** Child-agent teardowns started by the same switch; awaited with the background reset. */
+  private pendingChildTeardowns: Promise<void> = Promise.resolve();
   /**
    * Admitted transitions that have not settled. Counted at ADMISSION (synchronously), not when
    * `runTransition` starts a microtask later: a send/compact arriving in that gap used to see
@@ -216,7 +218,12 @@ export class SessionLifecycleService {
       // `/resume` was already gentler than a successful reload, which is backwards.
       if (!options.sameSession) {
         this.rt.sidecars.destroyChildAgents(reason);
+        // The kill is destructive but asynchronous: awaiting it here is what keeps the leaving
+        // session's child teardown (and its `subagent:destroyed` rows) out of the new transcript.
+        this.pendingChildTeardowns = this.rt.sidecars.settleChildTeardowns?.() ?? Promise.resolve();
         this.rt.sidecars.clearTaskRuns();
+      } else {
+        this.pendingChildTeardowns = Promise.resolve();
       }
       this.rt.sidecars.clearToolBeforeHooks?.();
       this.rt.run.resetRunOutcome?.();
@@ -265,9 +272,29 @@ export class SessionLifecycleService {
     }
   }
 
-  /** Await the background-work reset started by the last transient reset (switch transactions only). */
+  /**
+   * Await the background-work reset and the child-agent teardowns started by the last transient reset
+   * (switch transactions only).
+   *
+   * Both are BOUNDED. `settleTeardowns()` waits on every pending teardown the manager owns, not only
+   * the children this switch destroyed, so an unrelated slow teardown could otherwise hold
+   * `isTransitioning()` open for minutes — the same trap the background reset's bound exists to
+   * close. A residue is reported, never rethrown: the switch has already committed.
+   */
   private async settleTransientReset(): Promise<void> {
     await this.pendingBackgroundReset;
+    await withCallbackTimeout(this.pendingChildTeardowns, "subagent teardown", BACKGROUND_RESET_TIMEOUT_MS).catch(
+      (error: unknown) => {
+        try {
+          const timedOut = isCallbackTimeoutError(error);
+          this.rt.sidecars.warn?.(timedOut ? "Subagent teardown timed out" : "Subagent teardown did not complete", {
+            error: errorMessage(error),
+          });
+        } catch {
+          // A throwing sink must not become the rejection this catch exists to prevent.
+        }
+      }
+    );
   }
 
   /**
@@ -300,8 +327,28 @@ export class SessionLifecycleService {
     }
   }
 
+  /**
+   * Report input the switch had to drop.
+   *
+   * `unloadCurrent` clears the queue (the run it belonged to is over), and only a FAILED switch puts it
+   * back. A committed switch therefore drops it — correct, but previously silent: the host had already
+   * received `ok` for the queued send, so nothing told the user their message went nowhere. Counts
+   * only: queue contents are user input and do not belong in the timeline.
+   */
+  private reportDroppedQueuedInput(queued: QueuedMessagesSnapshot | undefined): void {
+    const steer = queued?.steer.length ?? 0;
+    const followUp = queued?.followUp.length ?? 0;
+    if (steer + followUp === 0) return;
+    this.rt.sidecars.warn?.("Queued messages were dropped by the session switch", { steer, followUp });
+  }
+
   /** The post-commit tail of `/new` (also used by the committed-failure path). */
-  private async settleNewSession(next: SessionData, reason: "session-new", current: SessionData | null): Promise<void> {
+  private async settleNewSession(
+    next: SessionData,
+    reason: "session-new",
+    current: SessionData | null,
+    queued?: QueuedMessagesSnapshot
+  ): Promise<void> {
     const store = this.rt.transcript.getSessionStore();
     await this.settleCommittedTransition([
       // The new session is this runtime's now: lock it so another process cannot resume the id while
@@ -326,6 +373,7 @@ export class SessionLifecycleService {
       ["session new row", () => this.rt.transcript.emitSessionNew(next.id, reason)],
       ["session new state refresh", () => this.rt.transcript.refreshState()],
     ]);
+    this.reportDroppedQueuedInput(queued);
   }
 
   /**
@@ -403,7 +451,7 @@ export class SessionLifecycleService {
       // `setSessionData` can throw AFTER swapping the data (the log-sink bind), so the catch below
       // asks the data for the truth instead of relying on a boolean written after the call.
       this.rt.lease.commit();
-      await this.settleNewSession(next, reason, current);
+      await this.settleNewSession(next, reason, current, queued);
       return next;
     } catch (error) {
       if (this.rt.transcript.getSessionData()?.id === next.id) {
@@ -411,7 +459,7 @@ export class SessionLifecycleService {
         // Finish the remaining steps best-effort and report success — surfacing a failure here
         // would tell the host the new session was not created while the transcript is already on it.
         this.rt.lease.commit();
-        await this.settleNewSession(next, reason, current);
+        await this.settleNewSession(next, reason, current, queued);
         return next;
       } else {
         this.rt.lease.abortClaim();
@@ -508,6 +556,11 @@ export class SessionLifecycleService {
       // "recover" by reloading the leaving transcript from disk.
       throw markRestoreReadFailure(new Error(`Session not found: ${sessionId}`));
     }
+    // The cross-process lock is decidable BEFORE the unload — it is a disk sidecar, not switch
+    // state — so a target another process owns must not cost the user the run on screen. The read
+    // still acquires the lock; this is only the preflight. Optional call: structural hosts (a
+    // validator's fake store) may only implement the methods they exercise.
+    await store?.assertUnlocked?.(sessionId);
     if (!this.rt.lease.claim(sessionId)) {
       throw new Error(`Session "${sessionId}" is already active in another live session and cannot be resumed here.`);
     }
@@ -592,6 +645,8 @@ export class SessionLifecycleService {
       }
       steps.push(["session resume state refresh", () => this.rt.transcript.refreshState()]);
       await this.settleCommittedTransition(steps);
+      // Committed: the queue the unload half cleared belongs to a run that replacement ended.
+      this.reportDroppedQueuedInput(queued);
       return session;
     } catch (error) {
       // No commit ⇒ the leaving session is still the active one. Give the target claim back,

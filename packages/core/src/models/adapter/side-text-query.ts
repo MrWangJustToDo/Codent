@@ -778,6 +778,7 @@ function recordUsage(textAdapter: TextAdapterConfig, usage: TokenUsage | undefin
     model: textAdapter.model,
     usage,
     costUsd: textAdapter.pricing ? calculateCost(usage, textAdapter.pricing) : 0,
+    ...(textAdapter.pricing ? {} : { priced: false }),
   });
 }
 

@@ -21,7 +21,6 @@ import {
   isStickyStatus,
   isTerminalState,
   projectAgentStatus,
-  resolveFinishStatus,
   transition,
 } from "../dist/dev.mjs";
 
@@ -40,26 +39,36 @@ const STATUSES = [
 
 // --- old status ⇄ axes equivalence -----------------------------------------
 for (const status of STATUSES) {
-  for (const error of ["", "boom"]) {
-    const state = deriveAgentState(status, error);
-    assert.equal(projectAgentStatus(state), status, `${status} (error=${JSON.stringify(error)}) round-trips`);
-    const expectedTerminal = status === "error" || status === "aborted";
-    assert.equal(state.outcome === "error" || state.outcome === "aborted", expectedTerminal);
-  }
+  const state = deriveAgentState(status);
+  assert.equal(projectAgentStatus(state), status, `${status} round-trips`);
+  const expectedTerminal = status === "error" || status === "aborted";
+  assert.equal(state.outcome === "error" || state.outcome === "aborted", expectedTerminal);
 }
 
-// `resolveFinishStatus` keeps a terminal/parked/compacting turn and settles the rest.
-for (const status of STATUSES) {
-  const state = deriveAgentState(status, "");
-  const expected =
-    state.outcome === "error" || state.outcome === "aborted" || state.wait !== "none" || state.run === "compacting"
-      ? status
-      : "completed";
-  assert.equal(resolveFinishStatus(status, ""), expected, `resolveFinishStatus(${status})`);
+// The finish rule is the STATE MACHINE's; a second helper (`resolveFinishStatus`) carried a
+// slightly different verdict for the same inputs, which is the "one run, two conclusions" shape the
+// settle coercion exists to prevent.
+const started = transition(deriveAgentState("idle"), { type: "prepare" });
+for (const [verdict, event] of [
+  ["error", { type: "fail", error: "boom" }],
+  ["aborted", { type: "interrupt" }],
+]) {
+  const settled = transition(started, event);
+  assert.equal(projectAgentStatus(settled), verdict);
+  assert.equal(
+    projectAgentStatus(transition(settled, { type: "settle", result: "completed" })),
+    verdict,
+    `a settled ${verdict} run keeps its verdict`
+  );
 }
-assert.equal(resolveFinishStatus("running", "boom"), "error");
-assert.equal(resolveFinishStatus("completed", "boom"), "error", "a settled turn may still record a late fault");
-assert.equal(resolveFinishStatus("waiting", "boom"), "waiting", "a parked run is not failed by a finish");
+assert.equal(
+  projectAgentStatus(
+    transition(transition(started, { type: "compaction-start" }), { type: "settle", result: "completed" })
+  ),
+  "compacting",
+  "a finish must not overwrite the compaction lease"
+);
+assert.equal(projectAgentStatus(transition(started, { type: "settle", result: "completed" })), "completed");
 
 // --- transition matrix: allowed and rejected events -------------------------
 const idle = deriveAgentState("idle");
@@ -104,7 +113,7 @@ assert.equal(projectAgentStatus(transition(idle, { type: "reset" })), "idle");
   state = transition(state, { type: "pause", wait: "question" });
   state = transition(state, { type: "stream-end", result: "error", error: "down" });
   assert.equal(projectAgentStatus(state), "awaiting_user");
-  assert.equal(state.errorMessage, "down");
+  assert.equal(state.outcome, "error", "the verdict, not a mirrored message, is what the axes keep");
 
   state = transition(state, { type: "interrupt" });
   assert.equal(projectAgentStatus(state), "awaiting_user");
@@ -163,7 +172,7 @@ assert.equal(projectAgentStatus(transition(idle, { type: "reset" })), "idle");
   assert.equal(projectAgentStatus(state), "awaiting_user");
   state = transition(state, { type: "resume" });
   assert.equal(projectAgentStatus(state), "error");
-  assert.equal(state.errorMessage, "down", "the failure survives the answered question");
+  assert.equal(state.outcome, "error", "the failure survives the answered question");
 }
 
 // --- Esc while a failed turn is parked on a question keeps the failure ------
@@ -177,7 +186,7 @@ assert.equal(projectAgentStatus(transition(idle, { type: "reset" })), "idle");
   assert.equal(state.outcome, "error", "an abort does not rewrite a failed run's verdict");
   state = transition(state, { type: "resume" });
   assert.equal(projectAgentStatus(state), "error");
-  assert.equal(state.errorMessage, "down");
+  assert.equal(state.outcome, "error", "the verdict, not a mirrored message, is what the axes keep");
 }
 
 // --- `completed` + question is still cancellable; a dead approval wait is cleared ---
@@ -214,6 +223,10 @@ assert.equal(projectAgentStatus(transition(idle, { type: "reset" })), "idle");
   approval = transition(approval, { type: "pause", wait: "approval" });
   approval = transition(approval, { type: "stream-end", result: "error", error: "down" });
   assert.equal(approval.wait, "approval", "stream-end does not clear the gate itself");
+  // The verdict OUTRANKS an approval wait (only `awaiting_user` outranks it). The deleted
+  // `resolveFinishStatus` helper answered "waiting" for this same pair, so this is the assertion that
+  // now pins the surviving rule instead of leaving the divergence to memory.
+  assert.equal(projectAgentStatus(approval), "error", "a verdict outranks an approval wait");
   approval = transition(approval, { type: "interrupt" });
   assert.equal(approval.outcome, "error", "the failure is kept");
   assert.equal(approval.wait, "none", "but an approval gate dies with the run");
@@ -222,14 +235,17 @@ assert.equal(projectAgentStatus(transition(idle, { type: "reset" })), "idle");
 // --- controller sequences match the pure machine ----------------------------
 {
   let state = deriveAgentState("idle");
+  let runError = "";
   const controller = createAgentStatusController({
     getStatus: () => projectAgentStatus(state),
     transition: (event) => {
       state = transition(state, event, { strict: false });
       return projectAgentStatus(state);
     },
-    getError: () => state.errorMessage ?? "",
-    setError: () => {},
+    getError: () => runError,
+    setError: (error) => {
+      runError = error;
+    },
     setPendingApprovalCount: () => {},
     setFinishReason: () => {},
     emitEvent: () => {},
@@ -308,7 +324,7 @@ assert.equal(projectAgentStatus(transition(idle, { type: "reset" })), "idle");
 // so `shouldDeferMidRunQueue` stayed true with no pump left to drain the queue.
 {
   for (const status of ["completed", "error", "aborted"]) {
-    const state = deriveAgentState(status, status === "error" ? "boom" : "");
+    const state = deriveAgentState(status);
     assert.throws(
       () => transition(state, { type: "pause", wait: "approval" }),
       /pause requires a live run/,
@@ -344,6 +360,7 @@ assert.equal(projectAgentStatus(transition(idle, { type: "reset" })), "idle");
 {
   let state = deriveAgentState("idle");
   const rejected = [];
+  let runError = "";
   const controller = createAgentStatusController({
     getStatus: () => projectAgentStatus(state),
     getAgentState: () => state,
@@ -351,8 +368,10 @@ assert.equal(projectAgentStatus(transition(idle, { type: "reset" })), "idle");
       state = transition(state, event, { strict: false, onReject: (reason) => rejected.push(reason) });
       return projectAgentStatus(state);
     },
-    getError: () => state.errorMessage ?? "",
-    setError: () => {},
+    getError: () => runError,
+    setError: (error) => {
+      runError = error;
+    },
     setPendingApprovalCount: () => {},
     setFinishReason: () => {},
     emitEvent: () => {},

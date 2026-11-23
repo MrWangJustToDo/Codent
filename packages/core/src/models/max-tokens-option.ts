@@ -30,6 +30,8 @@ export function maxTokensOption(
   modelStyle: ModelStyle | undefined,
   maxOutputTokens: number | undefined
 ): Record<string, number> {
-  if (maxOutputTokens == null) return {};
+  // A non-positive cap is not a cap: OpenAI/Anthropic reject `max_tokens: 0`, and sending it turns a
+  // metadata gap into an unusable model. Treat it like "not requested".
+  if (maxOutputTokens == null || !(maxOutputTokens > 0)) return {};
   return modelStyle === "anthropic" ? { max_tokens: maxOutputTokens } : { max_completion_tokens: maxOutputTokens };
 }

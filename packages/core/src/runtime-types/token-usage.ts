@@ -106,6 +106,19 @@ export function totalTokensOf(usage: TokenUsage): number {
 }
 
 /**
+ * Tokens a delegated run reports as spent: the billed prompt plus output.
+ *
+ * Prefers the tracker's exact per-sample `billedInputTokens`; {@link totalTokensOf} is the
+ * convention-aware fallback for records written before that value existed. One definition because the
+ * `task` result and the `subagent:*` event used to report two different numbers for one run — the
+ * event used `TokenUsage.totalTokens`, which omits the cached prompt entirely (one real run: 1.95k
+ * reported against 2.70M sent).
+ */
+export function reportedRunTokens(usage: TokenUsage, billedInputTokens?: number): number {
+  return (billedInputTokens ?? promptTokensOf(usage)) + (usage.outputTokens ?? 0);
+}
+
+/**
  * Extract the provider id reported by AG-UI `SpecTokenUsage[]` entries
  * (first non-empty). Single-object usage carries no provider — returns
  * undefined. Lets timeline events attribute usage/cost to a provider.

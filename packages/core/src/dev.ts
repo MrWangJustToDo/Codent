@@ -90,6 +90,8 @@ export { Emitter } from "./utils/emitter.js";
 export { createEmitTelemetryFn } from "./managers/telemetry/emit-agent-telemetry.js";
 export { AGENT_SESSION_CHANNELS, DEFAULT_AGENT_SESSION_CHANNELS } from "./agent-session/types.js";
 export { createLocalAgentSession, sessionForSubagent } from "./agent-session/local-agent-session.js";
+export { readLocalAgentSessionSnapshot } from "./agent-session/local-session-snapshot.js";
+export { findLastToolCallPart, isSettledToolCallPart } from "./agent/stream/message-parts.js";
 export { createLocalAgentSessionHost } from "./agent-session/local-agent-session-host.js";
 export { branchSession, startNewDiskSession } from "./agent-session/session-lifecycle-commands.js";
 export { generateId, resetGeneratedIdsForTesting } from "./utils/generate-id.js";

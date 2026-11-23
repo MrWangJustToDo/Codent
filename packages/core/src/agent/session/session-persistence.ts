@@ -127,7 +127,9 @@ export class SessionPersistence {
         ...(skipped ? { skipped: true } : {}),
         durationMs: Date.now() - startedAt,
       },
-      ...(sessionId ? [{ sessionId }] : [])
+      // Options object, not a spread array: the array form only worked because it was length 0 or
+      // 1, and a second scope field would silently become a positional argument.
+      sessionId ? { sessionId } : undefined
     );
   }
 

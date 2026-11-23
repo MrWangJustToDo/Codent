@@ -51,6 +51,7 @@ export function emptySnapshot(agentId: string): AgentSessionSnapshot {
     iteration: { current: 0, max: 0 },
     jobs: { jobs: [] },
     subagents: [],
+    subagentQueue: [],
   } as unknown as AgentSessionSnapshot;
 }
 

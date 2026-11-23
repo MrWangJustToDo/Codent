@@ -67,7 +67,9 @@ function writeLog(log: AgentLog, rule: EventLogRule, event: AgentEvent, message:
   // later swallowed the first real one.
   if (rule.suppress?.(event)) return;
 
-  const data = summarizePayload(payload);
+  // A rule may own its `data` shape (pump diagnostics: counts instead of the arrays it already
+  // names in the message). The default is still the generic bounded summary.
+  const data = rule.data ? rule.data(event) : summarizePayload(payload);
   // The run identity comes from the envelope, never from seam state: the producer stamps it once and
   // every consumer reads the same value.
   const run = event.runId;

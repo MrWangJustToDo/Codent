@@ -10,16 +10,12 @@
  */
 
 import type { AgentSession, DiskSessionId } from "./types.js";
-import type { CompactionConfigInput } from "../agent/compaction/types.js";
-import type { ExtensionFactory } from "../agent/extension/types.js";
-import type { McpElicitHook, McpServerConfig } from "../agent/mcp";
 import type { SessionMeta } from "../agent/persistence/types.js";
-import type { AgentToolConfig } from "../agent/tools/tool-config.js";
 import type { CoreEnv } from "../env";
-import type { ModelInfo, ModelStyle, ReasoningEffort } from "../models/types.js";
+import type { ManagedAgentConfig } from "../managers/managed-agent.js";
 import type { ModelProvider } from "../provider/model-provider.js";
 import type { AgentStatus } from "../runtime-types/agent-status.js";
-import type { LazyToolsConfig, UIMessage } from "@tanstack/ai";
+import type { UIMessage } from "@tanstack/ai";
 
 // ============================================================================
 // Create options / list entries
@@ -63,52 +59,62 @@ export interface AgentSessionBuiltins {
  */
 
 /**
- * Options for {@link AgentSessionHost.create}.
- * Maps onto ManagedAgentConfig without exposing the manager type to app code.
+ * Fields forwarded verbatim to `ManagedAgentConfig`.
+ *
+ * Derived, not re-declared. The 26 hand-written copies used to restate the config field by field, and
+ * the local host spreads the option object generically — so a field renamed in `ManagedAgentConfig`
+ * compiled clean here and silently stopped being forwarded. Adding a host-reachable option is now one
+ * line in this union, and a removal fails to compile.
  */
-export interface AgentSessionCreateOptions {
-  name: string;
-  model: string;
-  modelStyle?: ModelStyle;
-  modelBaseURL?: string;
-  modelApiKey?: string;
-  modelInfo?: ModelInfo;
-  /** `remote` = a provider server owns the model (never overridden locally). */
-  providerMode?: "direct" | "remote";
-  systemPrompt?: string;
-  /** 1..`MAX_AGENT_ITERATIONS` (checked by `AgentConfigSchema`); omit for `DEFAULT_AGENT_MAX_ITERATIONS`. */
+type ForwardedSessionOption = Pick<
+  ManagedAgentConfig,
+  | "name"
+  | "model"
+  | "modelStyle"
+  | "modelBaseURL"
+  | "modelApiKey"
+  | "modelInfo"
+  | "providerMode"
+  | "systemPrompt"
+  | "maxIterations"
+  | "streamStallTimeoutMs"
+  | "maxConcurrentTasks"
+  | "mcpConfigPath"
+  | "mcpServers"
+  | "extensionDirs"
+  | "extensions"
+  | "toolConfig"
+  | "temperature"
+  | "maxTokens"
+  | "reasoningEffort"
+  | "compaction"
+  | "skillDirs"
+  | "mcpElicit"
+  | "lazyToolsConfig"
+  | "agentDocFilenames"
+  | "agentDocLoadOverride"
+  | "extensionLlm"
+>;
+
+/**
+ * Options for {@link AgentSessionHost.create}.
+ *
+ * Maps onto `ManagedAgentConfig` without exposing the manager type to app code. Field docs live on
+ * that type (one source); the differences from it are:
+ *
+ * - `maxIterations` is optional here even though `AgentConfigSchema` gives it a `.default()` (which
+ *   makes it required on `AgentConfig`) — a host that omits it keeps `DEFAULT_AGENT_MAX_ITERATIONS`
+ *   instead of having to spell the number out.
+ * - `subagentTools` / `setUp` are NOT forwarded: both are function values, and a function cannot
+ *   cross the HTTP create body. They stay `createManagedAgent` seams.
+ * - `toolsetProfile` / `profileId` / `initialSessionId` / `initialSessionReserved` are host/manager
+ *   identity: the local host creates ROOT agents only and mints the session id itself.
+ * - `providerMode` has a non-create effect: it is read on RESUME (`applyPersistedModel`) to decide
+ *   whether to adopt the persisted model/style, and `--remote-provider` relies on `remote` there.
+ */
+export interface AgentSessionCreateOptions extends Omit<ForwardedSessionOption, "maxIterations"> {
+  /** 1..`MAX_AGENT_ITERATIONS`; omit for `DEFAULT_AGENT_MAX_ITERATIONS`. */
   maxIterations?: number;
-  /**
-   * Idle budget (ms) while a tool call waits for its arguments; `0` disables the guard.
-   *
-   * Defaults to `DEFAULT_MODEL_STREAM_STALL_MS` (120 s). It is a model-stream guard, not a tool
-   * timeout: the timer only runs between `TOOL_CALL_START` and `TOOL_CALL_END`, so a long
-   * `run_command` or `task` execution is never counted. Exposed so a host can raise or disable it
-   * without patching core.
-   */
-  streamStallTimeoutMs?: number;
-  /** Max concurrent `task` subagents under this agent (default 4). */
-  maxConcurrentTasks?: number;
-  mcpConfigPath?: string;
-  /**
-   * MCP servers supplied directly by the caller for THIS session, keyed by server name.
-   *
-   * When present (and non-empty) it REPLACES `.agents/mcp.json` rather than merging: the two
-   * sources can name the same server with entirely different `command` / `url`, and silently
-   * picking one is the hardest failure to explain. It also matches the existing "explicit
-   * config isolates the on-disk one" precedent (`--model` / `--base-url` / `--api-key` skip
-   * `.agents/config/models.json`). Omitted ⇒ behavior is unchanged (the file is the source).
-   *
-   * Note the type: `McpServerConfig` is ONE server's union; the map is the plural form.
-   */
-  mcpServers?: Record<string, McpServerConfig>;
-  extensionDirs?: string[];
-  /**
-   * In-process extension factories for this session. Local hosts load these during
-   * bootstrap; a remote-session host cannot serialize functions and rejects them
-   * explicitly rather than silently dropping them.
-   */
-  extensions?: ExtensionFactory[];
   /** Disable individual built-in extensions for this session (omit/`true` = default). */
   builtins?: AgentSessionBuiltins;
   /** Continue the latest on-disk session after the agent is created (bootstrap only). */
@@ -119,52 +125,6 @@ export interface AgentSessionCreateOptions {
    * both paths call {@link ManagedAgent.restoreSession}.
    */
   resumeSessionId?: DiskSessionId;
-  /** Explicit tool secrets / prefs (e.g. Brave websearch key). */
-  toolConfig?: AgentToolConfig;
-  /** Sampling temperature (`0..2`). Omit for the provider default. */
-  temperature?: number;
-  /** Per-response output-token cap. Omit for the provider/model default. */
-  maxTokens?: number;
-  /**
-   * Initial reasoning depth. Omit to use the model metadata's `defaultEffort`.
-   *
-   * Unlike a runtime `effort.set`, this is not checked against the model's advertised levels at
-   * creation; a `setModel` switch drops a level the new model does not offer.
-   */
-  reasoningEffort?: ReasoningEffort;
-  /**
-   * Auto-compaction settings for this agent (root only).
-   *
-   * Omit to derive `{ tokenThreshold: min(contextWindow, 400_000) }` from the model metadata.
-   */
-  compaction?: CompactionConfigInput;
-  /**
-   * Skill directories. When set, EXACTLY these are scanned (the `AGENT_SKILL_DIRS` / home /
-   * project defaults are not added); omit to use those defaults.
-   */
-  skillDirs?: string[];
-  /**
-   * Answers an MCP server's `elicitation/create` request for this session.
-   *
-   * Omit and the MCP client advertises no `elicitation` capability: a server that needs user input
-   * then fails its tool call with the protocol error instead of being left unanswered. Supplying a
-   * hook is therefore the whole opt-in for that capability — core provides no UI.
-   */
-  mcpElicit?: McpElicitHook;
-  /** Lazy-tool catalog detail for top-level `lazy` tools (code mode / discovery). */
-  lazyToolsConfig?: LazyToolsConfig;
-  /** Instruction-file names to probe (default: `CLAUDE.md`, then `AGENTS.md`). */
-  agentDocFilenames?: string[];
-  /** Set `false` to disable instruction-file loading for this agent. */
-  agentDocLoadOverride?: boolean;
-  /**
-   * Budget/cap for extension `ctx.llm` one-shot completions (same meaning as
-   * `ManagedAgentConfig.extensionLlm`): completions per user turn and the default output-token cap.
-   *
-   * No host exposes a flag for it — it is here so an embedder or the HTTP create body can start a
-   * session with a tighter budget than the built-in 20 calls / 4096 tokens.
-   */
-  extensionLlm?: { callsPerRun?: number; maxOutputTokens?: number };
 }
 
 /** Thin catalog row for live agents owned by a Host. */

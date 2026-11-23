@@ -11,6 +11,7 @@
 
 import { extractMemories, consolidateMemories } from "../../agent/memory/memory-extractor.js";
 import { extractUserQuery, findRelevantMemories, formatRelevantMemories } from "../../agent/memory/memory-retrieval.js";
+import { DEFAULT_MAX_SESSION_MEMORY_BYTES } from "../../agent/memory/types.js";
 import { defaultByteLength } from "../../env";
 import { errorMessage } from "../../utils/errors.js";
 
@@ -87,6 +88,18 @@ export class MemoryService implements MemorySelectionPort {
   private alreadySurfaced = new Set<string>();
   /** This turn's selection, committed only once the model actually started responding. */
   private pendingSurfacedFilenames: string[] = [];
+  /** Bytes this turn's selection will add once committed (the body is cleared before the next turn). */
+  private pendingSurfacedBytes = 0;
+  /**
+   * Bytes injected across the whole session.
+   *
+   * `maxSessionBytes` inside the retrieval helper is a per-CALL ceiling: each turn started from zero,
+   * so the "session" budget never bounded anything (8 turns × 20 KB ≈ 160 KB of `<relevant_memories>`
+   * blocks, every one of them still on the wire, while the code believed it had capped 60 KB). The
+   * budget is only meaningful if it accumulates, which is this field — reset with the surfaced set on
+   * a session switch.
+   */
+  private surfacedBytes = 0;
 
   setManager(manager: MemoryManager): void {
     this.manager = manager;
@@ -119,11 +132,14 @@ export class MemoryService implements MemorySelectionPort {
     if (this.pendingSurfacedFilenames.length === 0) return;
     for (const filename of this.pendingSurfacedFilenames) this.alreadySurfaced.add(filename);
     this.pendingSurfacedFilenames = [];
+    this.surfacedBytes += this.pendingSurfacedBytes;
+    this.pendingSurfacedBytes = 0;
   }
 
   /** The turn ended before it produced a message — do not mark its selection as shown. */
   discardPendingSurfaced(): void {
     this.pendingSurfacedFilenames = [];
+    this.pendingSurfacedBytes = 0;
   }
 
   async prefetchRelevantMemories(input: MemoryPrefetchInput): Promise<void> {
@@ -150,12 +166,20 @@ export class MemoryService implements MemorySelectionPort {
     }
 
     try {
+      // The remaining SESSION budget, not the per-call ceiling.
+      const remainingBudget = Math.max(0, DEFAULT_MAX_SESSION_MEMORY_BYTES - this.surfacedBytes);
+      if (remainingBudget === 0) {
+        this.relevantContent = "";
+        this.pendingSurfacedFilenames = [];
+        this.emitEvent?.("memory:prefetch", { status: "skip-budget" });
+        return;
+      }
       const relevant = await findRelevantMemories(
         query,
         manager,
         complete,
         this.alreadySurfaced,
-        {},
+        { maxSessionBytes: remainingBudget },
         manager.getEnv(),
         log
       );
@@ -179,6 +203,9 @@ export class MemoryService implements MemorySelectionPort {
       const content = formatRelevantMemories(relevant);
       this.relevantContent = content;
       this.pendingSurfacedFilenames = relevant.map((memory) => memory.filename);
+      // Counted from the actual injected body (the formatter's wrapper included), so the budget tracks
+      // what the context really grew by.
+      this.pendingSurfacedBytes = manager.getEnv().byteLength(content, "utf-8");
       this.emitEvent?.("memory:prefetch", {
         status: "selected",
         count: relevant.length,
@@ -305,6 +332,9 @@ export class MemoryService implements MemorySelectionPort {
   resetState(): void {
     this.relevantContent = "";
     this.pendingSurfacedFilenames = [];
+    this.pendingSurfacedBytes = 0;
+    // The session budget belongs to the conversation being left.
+    this.surfacedBytes = 0;
     this.alreadySurfaced.clear();
     this.pendingExtraction = null;
   }

@@ -354,4 +354,23 @@ if (errors.length > 0) {
   for (const e of errors) console.error(`  - ${e.name}: ${e.err?.message ?? e.err}`);
   process.exit(1);
 }
+// --- an absent `limit.output` is "unknown", never "zero" ------------------------------------
+//
+// The cap is forwarded as `max_completion_tokens` / `max_tokens`; a 0 there is rejected by every
+// provider, so a metadata gap used to make the model unusable with an error that pointed at
+// `max_tokens` rather than at the missing field.
+{
+  const base = { id: "x", name: "X", modalities: { input: ["text"] } };
+  const withCap = parseModelsDevModel("v", "x", { ...base, limit: { context: 128_000, output: 8_192 } });
+  assert.equal(withCap.defaultMaxTokens, 8_192, "a real cap is carried");
+  for (const limit of [{ context: 128_000 }, { context: 128_000, output: 0 }, undefined]) {
+    const info = parseModelsDevModel("v", "x", { ...base, limit });
+    assert.equal(
+      info.defaultMaxTokens,
+      undefined,
+      `an absent/zero output limit stays unknown (limit=${JSON.stringify(limit)})`
+    );
+  }
+}
+
 console.log("model-capabilities validation passed");

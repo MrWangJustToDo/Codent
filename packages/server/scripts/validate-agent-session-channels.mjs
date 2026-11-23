@@ -403,6 +403,25 @@ assert.equal(postUnsub, countAfterUnsub, "unsubscribed handler must not receive 
   console.log("lifecycle projection: id + unambiguous task fallback + no generation bleed — ok");
 }
 
+// ── the `subagents` snapshot carries the pre-fork queue ──
+//
+// A waiting `task` has no subagent yet, so it is not a row — and it has to survive a remount. It
+// used to be its own RETAINED event on `lifecycle`, which is append-only and has one retained slot;
+// the queue now rides this snapshot, so a remote client must receive it from here.
+{
+  const snapshot = { subagents: [], subagentQueue: [] };
+  const next = applyEventForTests(snapshot, {
+    channel: "subagents",
+    payload: { subagents: [], queued: [{ toolCallId: "t3", description: "third" }] },
+  });
+  assert.deepEqual(
+    next.subagentQueue,
+    [{ toolCallId: "t3", description: "third" }],
+    "the queue leaves the channel payload in the snapshot, where a remount seeds it from"
+  );
+  console.log("subagents snapshot carries the pre-fork queue — ok");
+}
+
 // ── the reducer must cover EVERY channel, and stay exhaustive ──
 //
 // The per-channel assertions above only prove the channels someone thought to test. A new

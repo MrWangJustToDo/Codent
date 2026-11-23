@@ -57,9 +57,6 @@ export class ExtensionRegistryService {
     this.tools = tools instanceof AgentToolService ? tools : new AgentToolService(tools);
   }
 
-  /** Dynamic tools provider (defaults to the agent's tools record). */
-  private managedToolsProvider?: () => ToolsRecord;
-
   // ---------------------------------------------------------------------------
   // Extension runner / loader
   // ---------------------------------------------------------------------------
@@ -122,17 +119,5 @@ export class ExtensionRegistryService {
   /** Unregister a tool previously added by an extension (used when disabling). */
   unregisterExtensionTool(name: string, ctx: ExtensionToolRegistrationContext): void {
     this.removeToolOwner(name, ctx.ownerId, ctx);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Dynamic tools provider
-  // ---------------------------------------------------------------------------
-
-  setManagedToolsProvider(provider: () => ToolsRecord): void {
-    this.managedToolsProvider = provider;
-  }
-
-  getManagedToolsProvider(): (() => ToolsRecord) | undefined {
-    return this.managedToolsProvider;
   }
 }

@@ -45,8 +45,14 @@ export function applyCompactionResult(
     return false;
   }
 
-  const keepRecentTokens = options?.keepRecentTokens ?? deriveKeepRecentTokens(DEFAULT_SUMMARIZATION_CONTEXT_WINDOW);
-  const summaryUI = createCompactionSummaryUIMessage(result.summary);
+  // The anchor travels WITH the checkpoint: the producer's own budget wins over the policy resolved
+  // here, because only the producer knows which tail it actually kept (the reactive path resolves a
+  // different number from the same session).
+  const keepRecentTokens =
+    result.keepRecentTokens ??
+    options?.keepRecentTokens ??
+    deriveKeepRecentTokens(DEFAULT_SUMMARIZATION_CONTEXT_WINDOW);
+  const summaryUI = createCompactionSummaryUIMessage(result.summary, undefined, { keepRecentTokens });
   // Single safe channel-append entry (shared with synthetic injection): dedupes
   // by stable id, appends at the tail, and emits the same channel write path.
   appendChannelMessages(channel, [summaryUI]);

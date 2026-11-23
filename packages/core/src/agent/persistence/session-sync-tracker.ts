@@ -15,10 +15,11 @@ type ToolCallApproval = ToolCallPart["approval"] & { reason?: string };
  * Explicit UIMessage persist triggers (no streaming/status heuristics).
  *
  * - `user-message` — user text entered the channel (send / drained steer|follow-up)
+ * - `client-tool-result` — the host answered a client tool (`ask_user`); not user text
  * - `pump-complete` — chat pump idle (finished, waiting, error, or abort cleanup)
  * - `force` — slash commands (`/new`, etc.)
  */
-export type SessionSaveReason = "user-message" | "pump-complete" | "force";
+export type SessionSaveReason = "user-message" | "client-tool-result" | "pump-complete" | "force";
 
 export interface SessionSyncSnapshot {
   messageCount: number;

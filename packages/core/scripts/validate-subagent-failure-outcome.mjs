@@ -42,6 +42,32 @@ const errored = deriveSubagentRunStats({
 assert.equal(errored.incomplete, true, "an errored run reports incomplete");
 assert.equal(errored.reachedLimit, false, "…without claiming the step budget was the cause");
 
+// The stale-`tool_calls` shape: a multi-iteration run whose LAST `RUN_FINISHED` is the previous tool
+// phase (a later iteration died mid-stream). Reading that as a cutoff told the parent "the budget cut
+// you off, retry narrower" when the right advice was "retry the same thing".
+const staleToolFinish = deriveSubagentRunStats({
+  messages: [],
+  maxIterations: 50,
+  finishReason: "tool_calls",
+  output: "partial narration",
+  aborted: false,
+  status: "error",
+});
+assert.equal(staleToolFinish.reachedLimit, false, "a failed run is not a budget cutoff");
+assert.equal(staleToolFinish.incomplete, true);
+
+// The engine's own verdict still wins on a failure: it is stamped per run, not inherited.
+const loopStoppedOnFailure = deriveSubagentRunStats({
+  messages: [],
+  maxIterations: 50,
+  finishReason: "stop",
+  output: "partial narration",
+  aborted: false,
+  status: "error",
+  loopStopped: true,
+});
+assert.equal(loopStoppedOnFailure.reachedLimit, true, "an explicit loopStopped is authoritative");
+
 // The discriminator: identical output on a run that FINISHED is not incomplete — the status
 // decides, not the text.
 const finished = deriveSubagentRunStats({

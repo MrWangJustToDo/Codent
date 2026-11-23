@@ -10,6 +10,7 @@
  */
 
 import { estimateImageInputTokens } from "../../models/estimate-image-tokens.js";
+import { parseStringifiedMultimodalContent } from "../media/repair-stringified-multimodal.js";
 
 import type { ContentPart, ModelMessage } from "@tanstack/ai";
 
@@ -42,23 +43,33 @@ function getStringLength(value: unknown): number {
 
 export function estimateContentPartChars(part: ContentPart): number {
   switch (part.type) {
-    case "text":
-      return estimateCharUnits(part.content ?? "");
+    case "text": {
+      // These parts arrive as `JSON.parse` output, not as typed `ContentPart`s: the loose check that
+      // admits them (`isContentPartLike`) accepts `text` as well as `content`. Reading only `content`
+      // counted a 100k-character text part as zero when it used the other spelling.
+      const text = typeof part.content === "string" ? part.content : (part as { text?: unknown }).text;
+      return estimateCharUnits(typeof text === "string" ? text : "");
+    }
     case "image":
     case "audio":
     case "video":
-    case "document":
+    case "document": {
       if (part.source.type === "data") {
         // Vision/document input is not billed like raw base64 text. Approximate tokens
         // then convert back to the estimator's char units (tokens * CHARS_PER_TOKEN).
-        const byteLength = Math.floor(part.source.value.length * 0.75);
-        if (part.type === "image") {
+        //
+        // `value` is NOT guaranteed: the loose check admits any `source` object, and this runs inside
+        // the wire projection, so a malformed (or hand-edited) part used to throw a TypeError and fail
+        // the whole model call. An unmeasurable payload falls back to the coarse placeholder below.
+        const value = (part.source as { value?: unknown }).value;
+        if (typeof value === "string") {
+          const byteLength = Math.floor(value.length * 0.75);
+          // Documents/audio/video use the same coarse size brackets as an oversized image.
           return estimateImageInputTokens(byteLength) * CHARS_PER_TOKEN;
         }
-        // Documents/audio/video: coarse size brackets (same as large-image fallback).
-        return estimateImageInputTokens(byteLength) * CHARS_PER_TOKEN;
       }
       return 1000 * CHARS_PER_TOKEN;
+    }
     default:
       return getStringLength(part);
   }
@@ -73,7 +84,22 @@ export function estimateContentPartChars(part: ContentPart): number {
  * non-array `JSON.stringify` fallback, so an object-shaped content contributed 0 chars.
  */
 export function getMessageContentSize(content: ModelMessage["content"]): number {
-  if (typeof content === "string") return estimateCharUnits(content);
+  if (typeof content === "string") {
+    // A tool result that carries media arrives as `JSON.stringify(ContentPart[])` until `tool-compact`
+    // projects it — and compaction runs BEFORE that stage, so the estimator used to count a 300 KB
+    // image's base64 as text: ~100k tokens for one picture. That consumed the whole keep budget (the
+    // cut landed on the image message and everything older was summarized) and blew up
+    // `stillTokens`, splitting one compaction into dozens of paid summarizer calls.
+    //
+    // The parser is a `"[{"` prefix test for prose, so the common case pays nothing.
+    const media = parseStringifiedMultimodalContent(content);
+    if (media) {
+      let size = 0;
+      for (const part of media) size += estimateContentPartChars(part as ContentPart);
+      return size;
+    }
+    return estimateCharUnits(content);
+  }
   if (content === null) return 0;
   if (!Array.isArray(content)) {
     try {

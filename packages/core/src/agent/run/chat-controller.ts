@@ -5,7 +5,7 @@
    the queue drain helpers are the next extracted unit; the `SendMessageOutcome` contract added here
    is what pushed the file over the ceiling. */
 import { TOOL_CANCELLED_MESSAGE } from "../../runtime-types/abort.js";
-import { isParkedStatus, isTerminalStatus } from "../../runtime-types/agent-status.js";
+import { isParkedStatus, isTerminalStatus, isWakeableStatus } from "../../runtime-types/agent-status.js";
 import { toError } from "../../utils/errors.js";
 import { ApprovalDecisionCoordinator } from "../approval/approval-decision-coordinator.js";
 import { assertNotCompactionSummaryInput } from "../compaction";
@@ -26,8 +26,7 @@ import {
   hasValidToolArguments,
   toolSchemaRequiresArguments,
 } from "../stream/incomplete-tool-calls.js";
-import { isSettledToolCallPart, isToolCallPart } from "../stream/message-parts.js";
-import { findToolCallPart } from "../stream/suppress-replayed-tool-chunks.js";
+import { findLastToolCallPart, isSettledToolCallPart, isToolCallPart } from "../stream/message-parts.js";
 import {
   countPendingToolApprovals,
   hasPendingAskUser,
@@ -47,10 +46,10 @@ import { countToolCalls } from "./tool-call-count.js";
 import type { AgentEventBus } from "../agent-event-bus";
 import type { RunToken } from "./run-coordinator.js";
 import type { ToolCallRef } from "../../runtime-types/agent-event-payloads.js";
-import type { AgentStatus } from "../../runtime-types/agent-status.js";
 import type { AgentChatHost } from "../../runtime-types/chat-host.js";
 import type { AgentManager } from "../../runtime-types/hosts.js";
 import type { QueuedMessageContent, QueuedMessagesSnapshot } from "../../runtime-types/session-payloads.js";
+import type { SessionSaveReason } from "../persistence/session-sync-tracker.js";
 import type { ContentPart, UIMessage } from "@tanstack/ai";
 
 const MAX_TOOL_PHASES = 40;
@@ -72,9 +71,6 @@ const TURN_PHASE_BUDGET_MESSAGE =
 
 /** Boundary that ran a settle pass (mirrors the `tool:settle` payload). */
 type ToolSettleCause = "pump-start" | "pre-send" | "turn-end" | "abort" | "stream-error" | "engine";
-
-/** Statuses a background completion may wake (see {@link AgentChatController.wakeForBackgroundCompletion}). */
-const WAKEABLE_STATUSES: ReadonlySet<AgentStatus> = new Set<AgentStatus>(["idle", "completed"]);
 
 /**
  * What happened to a submitted message.
@@ -779,7 +775,9 @@ export class AgentChatController {
     // Explicit allowlist, not "anything that is not parked". A run the user ABORTED or that ended in
     // ERROR is deliberately left alone: they just stopped it (or it failed), and a background job
     // finishing is not a reason to start talking again. `compacting` is excluded by the same set.
-    if (!WAKEABLE_STATUSES.has(this.managed.getStatus())) return false;
+    // Derived predicate, not a local list: a new terminal reason or wait kind must not silently
+    // change what a background job can start (see `isWakeableStatus`).
+    if (!isWakeableStatus(this.managed.getStatus())) return false;
     // `ready` is review — the user is reading the plan. `planning` has no approved plan yet, so a
     // promptless turn there could author one. `executing` / `retro` stay wakeable: that plan was
     // approved, and the mode already auto-approves its tools.
@@ -826,16 +824,26 @@ export class AgentChatController {
     // (channel + disk + model wire) or fabricate one for a tool that is still awaiting approval —
     // `hasDeferredToolExecution` treats `output !== undefined` as settled, so the pump would skip
     // the real execution.
-    const part = findToolCallPart(this.channel.getMessages(), toolCallId);
-    if (!part || !this.classifyClientTool(part.name) || part.output !== undefined) {
+    // The LAST part carrying this id is the live call: provider ids are request-scoped and reused
+    // (`call_0`), so a first-match lookup answered about the oldest one — the second `ask_user` in a
+    // session looked already answered and could never be answered at all.
+    const part = findLastToolCallPart(this.channel.getMessages(), toolCallId);
+    // Settled by STATE, not by `output !== undefined`: an answer of `undefined` still completes the
+    // part, so the old test let the same call be answered repeatedly.
+    const answered = part ? isSettledToolCallPart(part) || part.output !== undefined : false;
+    const missingOutput = output === undefined || output === null;
+    if (!part || !this.classifyClientTool(part.name) || answered || missingOutput) {
+      const why = !part
+        ? `unknown tool call ${toolCallId}`
+        : answered
+          ? `the call is already answered ("${part.name}")`
+          : missingOutput
+            ? `the result for "${part.name}" is empty`
+            : `only client tools accept host results ("${part.name}")`;
       this.managed.emitEvent("session:diagnostic", {
         area: "tool",
         level: "warn",
-        message: part
-          ? part.output !== undefined
-            ? `Ignored a tool result for "${part.name}" (${toolCallId}): the call is already answered.`
-            : `Ignored a tool result for "${part.name}" (${toolCallId}): only client tools accept host results.`
-          : `Ignored a tool result for unknown tool call ${toolCallId}.`,
+        message: `Ignored a tool result: ${why}.`,
         details: { toolCallId, ...(part?.name ? { toolName: part.name } : {}) },
       });
       return "rejected";
@@ -856,7 +864,10 @@ export class AgentChatController {
     // The answer is durable state, not just a channel write: without this the process could die
     // between the answer and the resumed pump's persist, leaving an unanswered `ask_user` on disk
     // while the host already reported the answer sent.
-    this.persistMessages("user-message");
+    //
+    // `client-tool-result`, not `user-message`: the `session:persist` audit row would otherwise
+    // report "the user typed something" for a fact `agent:client-tool-result` already names.
+    this.persistMessages("client-tool-result");
     // Answering a client tool RESUMES the parked turn: it is the next pump of the same prompt, so
     // it must not reset the turn's tool-phase budget (the per-run ceiling is not per-interaction).
     if (options.awaitTurn === false) this.startRun({ continuesTurn: true });
@@ -1704,7 +1715,7 @@ export class AgentChatController {
     });
   }
 
-  private persistMessages(reason: "user-message" | "pump-complete"): void {
+  private persistMessages(reason: SessionSaveReason): void {
     const messages = this.channel.getMessages();
     if (messages.length > 0) {
       this.managed.maybeSaveSessionUIMessages(messages, reason);

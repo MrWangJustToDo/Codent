@@ -2,7 +2,7 @@
 import { getEnv, hasCoreEnv } from "../../env";
 import { mergeAbortSignals } from "../../runtime-types/abort.js";
 import { errorMessage, toError } from "../../utils/errors.js";
-import { createAgentEventBus } from "../agent-event-bus";
+import { createAgentEventBus, snapshotInterceptorRewrite } from "../agent-event-bus";
 import { compareDispatchRank, resolveExtensionOrder } from "../dispatch-order.js";
 
 import { BusExtensionEventBus } from "./bus-extension-event-bus.js";
@@ -22,6 +22,7 @@ import type { PendingExtensionNotice } from "./default-extension-ui.js";
 import type { ExtensionUiBridge } from "./extension-ui-bridge.js";
 import type {
   ExtensionInstance,
+  ExtensionTeardownHooks,
   ExtensionActivation,
   ExtensionRuntimeAccess,
   ExtensionLlmRequest,
@@ -768,6 +769,22 @@ export class ExtensionRunner {
           error: `replacing duplicate instance: ${errorMessage(error)}`,
         });
       }
+      // A concurrent `setEnabled(id, true)` can land in the teardown window above: it re-activates
+      // the instance we are about to drop, so its new incarnation owns a live lease and fresh
+      // registrations that nothing would ever release (the instance leaves `extensions` just below,
+      // and only `destroyAll` iterates that list). Tear the current incarnation down again — the
+      // second call resolves `instance.context` at call time, so it targets whatever is live now.
+      if (this.contexts.has(api.id)) {
+        try {
+          await this.destroyExtension(duplicate);
+        } catch (error) {
+          this.emitExtensionEvent("agent:extension-error", {
+            extensionId: api.id,
+            phase: "teardown",
+            error: `replacing duplicate instance: ${errorMessage(error)}`,
+          });
+        }
+      }
       this.extensions = this.extensions.filter((entry) => entry !== duplicate);
       // Replace IN PLACE. `seq` is the stable tie-break WITHIN one `order` value, and deleting the
       // rank made the replacement take a fresh (larger) `seq` — it moved behind every same-order
@@ -1003,7 +1020,7 @@ export class ExtensionRunner {
    * `loadExtension`'s duplicate path and `setEnabled(false)`). `@internal`: it is not the public
    * unload, and a host that wants one must also drop the instance, its rank and its notification.
    */
-  async destroyExtension(instance: ExtensionInstance): Promise<void> {
+  async destroyExtension(instance: ExtensionInstance, hooks?: ExtensionTeardownHooks): Promise<void> {
     // External teardown: record it before the awaits so a failed activation's catch does not
     // overwrite the verdict this path publishes (see `revokedIncarnations`).
     this.revokedIncarnations.add(instance.context);
@@ -1012,7 +1029,7 @@ export class ExtensionRunner {
     // *releases* the extension, and a fire-and-forget teardown would drop the last batch. A
     // failing flush is reported and the sequence continues (the extension still gets deactivated).
     await this.flushExtension(instance);
-    await this.teardownIncarnation(instance);
+    await this.teardownIncarnation(instance, instance.context, hooks);
   }
 
   /**
@@ -1028,15 +1045,37 @@ export class ExtensionRunner {
    * once the lease was gone. `deactivate()` receives no context, and the arrays this step clears
    * are the runner's bookkeeping, not the extension's — logging/coreEnv still work after a revoke.
    */
-  private async teardownIncarnation(instance: ExtensionInstance, incarnation = instance.context): Promise<void> {
+  private async teardownIncarnation(
+    instance: ExtensionInstance,
+    incarnation = instance.context,
+    hooks?: ExtensionTeardownHooks
+  ): Promise<void> {
     // Cancel what the incarnation has in flight before waiting on it: a `ctx.llm.complete` is not a
     // callback the lease can revoke, and a slow `deactivate()` must not keep its request alive.
     this.incarnationAborts.get(incarnation)?.abort();
     // Serialize per incarnation: a revoke that lands while the first teardown is still awaiting
     // `deactivate()` must join it, not start a second concurrent pass.
     const inFlight = instance.teardownInFlight;
-    if (inFlight && inFlight.incarnation === incarnation) return inFlight.promise;
-    const promise = this.runTeardownIncarnation(instance, incarnation);
+    if (inFlight && inFlight.incarnation === incarnation) {
+      // The running pass revokes the lease and removes every dispatch surface SYNCHRONOUSLY before
+      // its first await, so a joiner can publish its transition NOW — waiting for that pass's
+      // `deactivate()` is the window this hook exists to close, and joining used to drop its hooks
+      // entirely (the disable then announced itself only after the slow shutdown).
+      //
+      // Contained like the teardown body's own call: a throwing publisher must not turn "the
+      // extension is disabled" into an exception escaping `setEnabled`.
+      try {
+        hooks?.onRevoked?.();
+      } catch (error) {
+        this.emitExtensionEvent("agent:extension-error", {
+          extensionId: instance.api.id,
+          phase: "teardown",
+          error: errorMessage(error),
+        });
+      }
+      return inFlight.promise;
+    }
+    const promise = this.runTeardownIncarnation(instance, incarnation, hooks);
     const entry = { incarnation, promise };
     instance.teardownInFlight = entry;
     // Both arms clear the marker (a rejecting teardown still ends); `.then` rather than `.finally`
@@ -1049,7 +1088,11 @@ export class ExtensionRunner {
   }
 
   /** The body of {@link teardownIncarnation}, run once per incarnation. */
-  private async runTeardownIncarnation(instance: ExtensionInstance, incarnation: ExtensionContext): Promise<void> {
+  private async runTeardownIncarnation(
+    instance: ExtensionInstance,
+    incarnation: ExtensionContext,
+    hooks?: ExtensionTeardownHooks
+  ): Promise<void> {
     // Identity-checked so an older teardown cannot revoke a newer incarnation's lease.
     if (this.contexts.get(instance.api.id) === incarnation) {
       this.contexts.delete(instance.api.id);
@@ -1065,6 +1108,23 @@ export class ExtensionRunner {
         this.uiBridge.clearOwner(instance.api.id);
       }
     } finally {
+      // The extension is no longer callable, but its own resources may still be shutting down.
+      // Publish the disable here — before `deactivate()` — so this turn's section snapshot stops
+      // advertising tools that are already unregistered. Awaiting the shutdown first (LSP's
+      // `shutdownAll()`) left the model reading a section for up to the full callback budget.
+      // Contained: a throwing host callback must not skip the extension's own cleanup — but not
+      // silently. This hook publishes the disable transition, so "it threw" is the difference between
+      // the panel saying disabled and nothing happening at all; the join branch above reports the same
+      // failure the same way.
+      try {
+        hooks?.onRevoked?.();
+      } catch (error) {
+        this.emitExtensionEvent("agent:extension-error", {
+          extensionId: instance.api.id,
+          phase: "teardown",
+          error: errorMessage(error),
+        });
+      }
       // Slow resource release last; everything it could still observe as "registered" is already
       // gone from the dispatch surfaces and the lease is revoked. `finally` because a throwing host
       // callback during unregistration must not also skip the extension's own cleanup (LSP
@@ -1490,12 +1550,60 @@ export class ExtensionRunner {
     // extension inert — but it used to skip the notice/notification entirely (and the state flip),
     // leaving the panel and the model looking at a still-active extension. Record the transition
     // either way and report the failure in the returned message.
-    let teardownError: unknown;
-    // Captured before the await: `destroyExtension` resolves the incarnation at call time, and this
-    // write-back happens after it. A re-enable that completed in between owns the instance now.
+    //
+    // The transition is published from `onRevoked`, i.e. after the lease is revoked and every
+    // dispatch surface is gone but BEFORE the extension's own `deactivate()` is awaited.
+    //
+    // `onExtensionDisabled` is the seam that withdraws this turn's section snapshot (and the
+    // management row) the moment the tools disappear. Publishing after the full teardown let a slow
+    // shutdown (LSP's `shutdownAll()`) leave the model reading a section that still advertised tools
+    // already unregistered, and the panel still showing the extension as enabled. The generic
+    // wording is what THIS turn sees; the producer's specific text replaces the runner-side notice
+    // below, so the next prepared turn carries it (one supersede notice, not a second live section).
+    const genericNotice = `Extension "${instance.api.name ?? id}" is disabled — its tools and commands are unavailable.`;
+    // Captured before the await: `teardownIncarnation` resolves the incarnation at call time, and
+    // every write-back happens after it. A re-enable that completed in between owns the instance now.
     const incarnation = instance.context;
+    // Whether this disable has announced its transition. Tracked explicitly rather than inferred from
+    // `instance.state`: the catch below (and a teardown that JOINED one already in flight without
+    // hooks) flips the state to `inactive` without ever publishing, so `state === "active"` was false
+    // in exactly the cases the fallback exists for — the branch was unreachable.
+    let published = false;
+    const publishDisabledTransition = (): void => {
+      // A re-enable that completed while the old teardown was still finishing owns the instance.
+      if (instance.context !== incarnation) return;
+      // Flip the state BEFORE the notification: `notifyStateChanged` reads `instance.state`, so a
+      // panel refresh emitted while it still said `active` would report the extension as enabled —
+      // the same stale row the callback exists to withdraw.
+      instance.state = "inactive";
+      instance.inactiveReason = undefined;
+      // Drop any previous status/retraction rows first: an enabled-again notice from an earlier
+      // cycle must not sit beside this disable's notice under a different named section.
+      this.turnContextSections.clearNotices(instance.api.id);
+      this.turnContextSections.setDisabledNotice(instance.api.id, genericNotice);
+      // Only replace the list when this disable actually captured sections. A second disable whose
+      // provider is already gone (an `error` instance, or a residual artifact) would otherwise reset
+      // it to `[]`, and the next enable could no longer retract the per-section notices already
+      // written into the model's history. `normalizeSections` already ran, so this does not depend
+      // on the producer.
+      if (disabledSections) instance.disabledSections = [...disabledSections.keys()];
+      // A disabled instance is not a broken one: keeping the previous activation's error made the
+      // management panel read "inactive + failed to activate (…)" forever, as if the state were
+      // current. A teardown failure is reported through the returned message and the bus event.
+      // Cleared BEFORE the notification: a subscriber that reads `instance.error` on the disable
+      // frame would otherwise see the previous activation's fault and keep it until the next change.
+      instance.error = undefined;
+      this.runHostCallback(
+        "onExtensionDisabled",
+        () => this.options.onExtensionDisabled?.(instance.api.id, genericNotice),
+        instance.api.id
+      );
+      this.notifyStateChanged(instance.api.id);
+      published = true;
+    };
+    let teardownError: unknown;
     try {
-      await this.destroyExtension(instance);
+      await this.destroyExtension(instance, { onRevoked: publishDisabledTransition });
     } catch (error) {
       teardownError = error;
       // Same identity rule as the teardown write-back inside `destroyExtension`: a newer incarnation
@@ -1507,39 +1615,23 @@ export class ExtensionRunner {
         error: errorMessage(error),
       });
     }
-    // Publish the disable BEFORE harvesting the custom notices.
-    //
-    // `onExtensionDisabled` is the seam that withdraws this turn's section snapshot (and the
-    // management row) the moment the tools disappear. Awaiting a third-party `disabledContent`
-    // producer first (one bounded wait per named section) left the model reading a section that
-    // still advertised tools already unregistered, and the panel still showing the extension as
-    // enabled — for up to `(1 + N) × 60s`, which is precisely the window the callback exists to
-    // close. The generic wording is what THIS turn sees; the producer's specific text replaces the
-    // runner-side notice below, so the next prepared turn carries it (one supersede notice, not a
-    // second live section).
-    const genericNotice = `Extension "${instance.api.name ?? id}" is disabled — its tools and commands are unavailable.`;
-    // Drop any previous status/retraction rows first: an enabled-again notice from an earlier
-    // cycle must not sit beside this disable's notice under a different named section.
-    this.turnContextSections.clearNotices(instance.api.id);
-    this.turnContextSections.setDisabledNotice(instance.api.id, genericNotice);
-    // Only replace the list when this disable actually captured sections. A second disable whose
-    // provider is already gone (an `error` instance, or a residual artifact) would otherwise reset
-    // it to `[]`, and the next enable could no longer retract the per-section notices already
-    // written into the model's history. `normalizeSections` already ran, so this does not depend
-    // on the producer.
-    if (disabledSections) instance.disabledSections = [...disabledSections.keys()];
-    // A disabled instance is not a broken one: keeping the previous activation's error made the
-    // management panel read "inactive + failed to activate (…)" forever, as if the state were
-    // current. A teardown failure is reported through the returned message and the bus event.
-    // Cleared BEFORE the notification: a subscriber that reads `instance.error` on the disable
-    // frame would otherwise see the previous activation's fault and keep it until the next change.
-    if (teardownError === undefined) instance.error = undefined;
-    this.runHostCallback(
-      "onExtensionDisabled",
-      () => this.options.onExtensionDisabled?.(instance.api.id, genericNotice),
-      instance.api.id
-    );
-    this.notifyStateChanged(instance.api.id);
+    // The fallback covers the two ways the hook can be missed: a teardown that threw before it got
+    // there (a throwing flush, an unreadable host, a throwing `onRevoked`), and a hook that threw
+    // itself (`published` is only set after the publish succeeds). A JOINT teardown is NOT one of
+    // them — the join branch runs the joiner's own hooks. Publishing twice is harmless (the identity
+    // guard plus an idempotent notice/notification); `published` makes sure this is a fallback, not
+    // a second announcement.
+    if (!published) {
+      try {
+        publishDisabledTransition();
+      } catch (error) {
+        this.emitExtensionEvent("agent:extension-error", {
+          extensionId: instance.api.id,
+          phase: "teardown",
+          error: errorMessage(error),
+        });
+      }
+    }
 
     // Now that the lease is revoked and the registrations are gone, harvest the notices. A producer
     // that hangs costs this extension's OWN notice (bounded), never the ability to disable it.
@@ -1550,19 +1642,26 @@ export class ExtensionRunner {
       providerTimeoutMs
     );
     const sectionNotices: Array<[string, string]> = [];
-    for (const pending of pendingSectionNotices) {
-      const body = await this.turnContextSections.captureDisabledNotice(
-        instance.api.id,
-        pending.label,
-        pending.produce,
-        pending.timeoutMs
-      );
-      // A named section only announces a disabled notice when it declares `disabledContent` (an
-      // empty string opts out). The base provider has a generic fallback; named sections do not,
-      // by contract — but every registered name is still recorded below so the ENABLE retraction
-      // can cover a section that produced content earlier.
-      if (body?.trim()) sectionNotices.push([pending.name, body.trim()]);
-    }
+    // Harvested CONCURRENTLY. Each producer is bounded on its own, but running them one after
+    // another made the user's next toggle wait `(1 + N) × timeout` — with N named sections and the
+    // 60s ceiling that is minutes of `already being toggled` for an extension being turned back on.
+    // The producers write nothing shared: each contributes its own `[name, body]` pair.
+    const harvested = await Promise.all(
+      pendingSectionNotices.map(async (pending) => {
+        const body = await this.turnContextSections.captureDisabledNotice(
+          instance.api.id,
+          pending.label,
+          pending.produce,
+          pending.timeoutMs
+        );
+        // A named section only announces a disabled notice when it declares `disabledContent` (an
+        // empty string opts out). The base provider has a generic fallback; named sections do not,
+        // by contract — but every registered name is still recorded below so the ENABLE retraction
+        // can cover a section that produced content earlier.
+        return body?.trim() ? ([pending.name, body.trim()] as [string, string]) : undefined;
+      })
+    );
+    for (const entry of harvested) if (entry) sectionNotices.push(entry);
     // `destroyAll()` can land inside the await above (it clears the notice maps and the instance
     // list). Writing a notice onto a destroyed runner would outlive the destroy's own invariant
     // that nothing survives it; the extension is already gone, so report success and stop.
@@ -1753,16 +1852,9 @@ export class ExtensionRunner {
       //
       // Clearing instead would also discard a rewrite a PREVIOUS interceptor already produced — on
       // `tool:after` that rewrite is legitimate and the middleware applies it, so one broken
-      // third-party handler would silently revert another extension's result shaping.
-      const mutable = event as {
-        modifiedArgs?: unknown;
-        modifiedResult?: unknown;
-        payload?: { modifiedResult?: unknown };
-      };
-      const beforeArgs = mutable.modifiedArgs;
-      const beforeResult = mutable.modifiedResult;
-      const beforePayloadResult =
-        mutable.payload && typeof mutable.payload === "object" ? mutable.payload.modifiedResult : undefined;
+      // third-party handler would silently revert another extension's result shaping. The bus uses
+      // the same helper on its own failure branches, so both layers agree.
+      const rollback = snapshotInterceptorRewrite(event);
       try {
         return await handler(event, this.contexts.get(extensionId));
       } catch (err) {
@@ -1776,22 +1868,7 @@ export class ExtensionRunner {
         // allowed every tool it matched.
         this.reportInterceptorFailure(extensionId, pattern, event.type, err);
         // Roll back THIS handler's partial writes; leave earlier interceptors' rewrites intact.
-        try {
-          mutable.modifiedArgs = beforeArgs;
-        } catch {
-          // Frozen/foreign event: containment must not become a throw.
-        }
-        try {
-          mutable.modifiedResult = beforeResult;
-        } catch {
-          // See above.
-        }
-        try {
-          if (mutable.payload && typeof mutable.payload === "object")
-            mutable.payload.modifiedResult = beforePayloadResult;
-        } catch {
-          // See above.
-        }
+        rollback();
         event.handlerError = true;
         return undefined;
       }

@@ -126,7 +126,7 @@ const toolDef = (name) => ({
 // its own, so this ordering is the only thing that stops it.
 // ============================================================================
 {
-  const { runner, tools } = makeRunner();
+  const { runner, tools, disabledCalls } = makeRunner();
   let captured;
   let releaseDeactivate;
   const deactivateGate = new Promise((resolve) => {
@@ -149,6 +149,17 @@ const toolDef = (name) => ({
   await tick();
   assert.equal(runner.contextFor("slow-off"), undefined, "the lease is gone while deactivate is still awaiting");
 
+  // The disable is PUBLISHED in that same window. The notice withdraws this turn's section
+  // snapshot, so waiting for `deactivate()` (LSP shuts every server down) left the model reading a
+  // section that still advertised tools already unregistered.
+  assert.equal(disabledCalls.length, 1, "the host hears about the disable before deactivate resolves");
+  assert.match(disabledCalls[0].notice, /disabled/);
+  assert.equal(
+    runner.getExtensionInfos()[0].state,
+    "inactive",
+    "the panel reads disabled while the extension is still shutting down"
+  );
+
   // A retained callback firing in that window must be refused, not land a tool on a disabled ext.
   captured.registerTool(toolDef("slow-off-late"));
   assert.equal(tools.has("slow-off-late"), false, "a release-time registration is refused");
@@ -156,6 +167,7 @@ const toolDef = (name) => ({
   releaseDeactivate();
   assert.equal((await disabling).ok, true, "the disable completes");
   assert.equal(runner.contextFor("slow-off"), undefined, "and the lease stays revoked");
+  assert.equal(disabledCalls.length, 1, "the transition is announced exactly once");
 }
 
 // ============================================================================

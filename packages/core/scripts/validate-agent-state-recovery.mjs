@@ -165,7 +165,7 @@ const CHUNK = { type: "REASONING_MESSAGE_CONTENT", delta: "hmm" };
   chat.stop();
 
   assert.equal(
-    stops.at(-1)?.reason,
+    stops.at(-1)?.outcome,
     "error",
     "the real Esc path finalizes a failed-but-parked run as `error`, not `aborted`"
   );

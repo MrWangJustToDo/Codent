@@ -13,6 +13,7 @@
  * Run: pnpm --filter @codent/core run validate:auto-compact-noop
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   autoCompact,
@@ -20,6 +21,8 @@ import {
   formatCompactionSummaryContent,
   formatContextSectionUserContent,
   isLatestDurableMessageCompactionSummary,
+  truncatedSummaryNote,
+  unusableSummaryReason,
 } from "../dist/dev.mjs";
 
 /** Manager whose methods throw — proves a no-op never touches it. */
@@ -155,3 +158,47 @@ assert.equal(resultH.error, undefined, "H: a cancel carries no failure text");
 console.log("scenario H (aborted summarizer reports aborted) OK");
 
 console.log("\nvalidate:auto-compact-noop passed");
+
+// ============================================================================
+// Scenario E: only a COMPLETE summarizer report may become a checkpoint
+// ============================================================================
+//
+// An aborted run was the only rejected shape. `incomplete` / `reachedLimit` / `truncated` results
+// carry partial text too, and installing one replaces the whole pre-cut history with a fragment —
+// permanent, because the channel is append-only and the transcript is never rewritten.
+{
+  const clean = { incomplete: false, reachedLimit: false, truncated: false };
+  assert.equal(unusableSummaryReason(clean), undefined, "a complete report is installable");
+  assert.equal(unusableSummaryReason({ incomplete: true }), "incomplete", "a partial report is not");
+  assert.equal(unusableSummaryReason({ reachedLimit: true }), "reachedLimit", "a budget-cut report is not");
+  // `truncated` is NOT a missing verdict: our own output cap cut a report that finished. Rejecting it
+  // made compaction fail deterministically for that history (same input, same cap, same cut) while
+  // paying a summarizer on every model call — a compaction that can never succeed. It is installed
+  // WITH a note instead (asserted below).
+  assert.equal(unusableSummaryReason({ truncated: true }), undefined, "a length-cut report is installable");
+  assert.match(
+    truncatedSummaryNote(1234),
+    /truncated at the output cap \(1234 tokens\)/,
+    "the installed checkpoint records that its tail is missing"
+  );
+  assert.equal(
+    unusableSummaryReason({ incomplete: true, reachedLimit: true }),
+    "incomplete, reachedLimit",
+    "every failing flag is named, so the diagnostic says why"
+  );
+  // …and the predicate is actually WIRED. Asserting only the pure function left the install site
+  // free to revert to `result.aborted`, which is the shape that installed a half-written checkpoint.
+  const autoCompactSrc = readFileSync(new URL("../src/agent/compaction/auto-compact.ts", import.meta.url), "utf8");
+  assert.match(
+    autoCompactSrc,
+    /result\.truncated \? `\$\{output\}\\n\\n\$\{truncatedSummaryNote/,
+    "…and the accepted report actually carries it"
+  );
+  const installSite = autoCompactSrc.slice(autoCompactSrc.indexOf("const unfit = unusableSummaryReason(result)"));
+  assert.ok(
+    installSite.length < autoCompactSrc.length,
+    "autoCompact calls unusableSummaryReason before installing a checkpoint"
+  );
+  assert.match(installSite.slice(0, 200), /if \(unfit\) throw/, "…and refuses the checkpoint when it returns a reason");
+  console.log("scenario E (unfit summarizer report) -> rejected OK");
+}

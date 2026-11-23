@@ -66,6 +66,7 @@ export {
   type ParsedCommand,
   type SlashResult,
 } from "./session/commands.js";
+export { formatUsageReport } from "./session/usage-report.js";
 export {
   permissionOptions,
   mapPermissionOutcome,

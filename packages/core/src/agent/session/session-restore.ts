@@ -199,8 +199,15 @@ export async function restoreManagedSession(
           SESSION_END_CANCELLED_MESSAGE,
           (path) => !missingCommandLogs.has(path)
         );
+  // A `run_in_background` task that already SETTLED keeps its real result: the ledger still holds it
+  // on a same-session resume, and writing the "session ended" marker there was permanent (the repair
+  // pass only recognised a running handle, so nothing could ever correct it). Scoped to THIS session
+  // by the host accessor — at this point a cross-session switch still has the leaving session's rows.
+  const settledTasks = options.repairRuntime === false ? undefined : host.getSettledBackgroundTasks?.(session.id);
   const taskMessages =
-    options.repairRuntime === false ? restoredMessages : cancelInterruptedBackgroundTasks(restoredMessages);
+    options.repairRuntime === false
+      ? restoredMessages
+      : cancelInterruptedBackgroundTasks(restoredMessages, SESSION_END_CANCELLED_MESSAGE, settledTasks);
   // The same classification the live boundary uses, so an `{}` call for a required-args tool reads
   // as "arguments never arrived" after a resume too — not as a user cancellation.
   //
@@ -223,7 +230,26 @@ export async function restoreManagedSession(
   // while the file kept a `running` handle that `session_read` and other processes still report.
   // The helpers are copy-on-write, so reference equality means "nothing to repair".
   if (uiMessages !== restored.uiMessages) {
-    await host.session.saveRestoredMessages(session, uiMessages);
+    // Bound, not passed bare: `host.emitEvent` is a prototype method, so a detached reference is
+    // called with `this === undefined` and throws. That throw would land in `saveToStore`'s failure
+    // path and turn "the repair write failed" into a failed `/resume` — the opposite of this block's
+    // contract.
+    const emit: typeof host.emitEvent = (type, ...args) => host.emitEvent(type, ...args);
+    const outcome = await host.session.saveRestoredMessages(session, uiMessages, emit);
+    if (outcome !== "written") {
+      // The restore itself is valid, so this does not fail it — but the FILE still describes an
+      // unfinished tool call while the agent has adopted the settled one. Only a REFUSAL is reported
+      // here: a failed write already emitted its own `session:save-error` inside `saveToStore`, and
+      // reporting it twice would make one failure look like two.
+      host.emitEvent("session:save-error", {
+        target: "session",
+        error:
+          (outcome === "refused"
+            ? "The repaired transcript from this restore was not written (the write gate refused it)"
+            : "The repaired transcript from this restore could not be dehydrated") +
+          "; the file may still describe an unfinished tool call until the next save.",
+      });
+    }
   }
 
   // `SessionStore.load` validates only the envelope version, so `planMode` is whatever the file held.

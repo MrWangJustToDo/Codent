@@ -2,7 +2,7 @@
  * TanStack StreamProcessor wrapper for subagent preview and non-useChat consumers.
  */
 
-import { StreamProcessor } from "@tanstack/ai";
+import { StreamProcessor, normalizeToolResult } from "@tanstack/ai";
 
 import { deliverContained } from "../../utils/contained-report.js";
 import { generateId } from "../../utils/generate-id.js";
@@ -296,7 +296,19 @@ export class AgentUIChannel {
   }
 
   addToolResult(toolCallId: string, output: unknown, error?: string): void {
-    this.processor.addToolResult(toolCallId, output, error);
+    // Provider ids are request-scoped and reused (`call_0`), so the transcript can hold several calls
+    // sharing one id. The SDK's updater matches the FIRST part in EVERY message — answering a reused
+    // id would overwrite a previous turn's result and attach a second result to it, while the live
+    // call stayed unanswered. With a duplicate present, write the LAST call (and only its message)
+    // instead; a unique id keeps the SDK as the only writer, which also routes a child-owned call to
+    // its child processor (this channel cannot reach that).
+    if (!hasDuplicateToolCall(this.getMessages(), toolCallId)) {
+      this.processor.addToolResult(toolCallId, output, error);
+      return;
+    }
+    const next = attachResultToLastCall(this.getMessages(), toolCallId, output, error);
+    if (next) this.processor.setMessages(next);
+    else this.processor.addToolResult(toolCallId, output, error);
   }
 
   /**
@@ -311,9 +323,13 @@ export class AgentUIChannel {
     // `shouldSuppressStaleTextChunk` drop every remaining TEXT delta of the assistant message that
     // is still streaming — the tool call is normally mid-message, so the model's text after the
     // tool would be lost. `addToolApprovalResponse` patches the processor for the same reason.
-    const next = patchToolCallParts(this.getMessages(), (part) =>
-      part.id === toolCallId ? { ...part, display } : undefined
-    );
+    // The SAME target `addToolResult` writes. Patching every part carrying the id gave an older
+    // turn's completed row the NEW call's summary — output from turn 1, display from turn 2 — and
+    // the channel is what gets persisted, so the wrong pair outlived the session.
+    const messages = this.getMessages();
+    const next = hasDuplicateToolCall(messages, toolCallId)
+      ? patchLastToolCall(messages, toolCallId, { display })
+      : patchToolCallParts(messages, (part) => (part.id === toolCallId ? { ...part, display } : undefined));
     if (next) this.processor.setMessages(next);
   }
 
@@ -691,6 +707,117 @@ interface PatchableToolCallPart {
 
 interface PatchableMessage {
   parts?: PatchableToolCallPart[];
+}
+
+/** True when more than one part carries this tool-call id (a reused provider id). */
+function hasDuplicateToolCall(messages: readonly PatchableMessage[], toolCallId: string): boolean {
+  let seen = 0;
+  for (const message of messages) {
+    for (const part of message.parts ?? []) {
+      if (part?.type !== "tool-call" || part.id !== toolCallId) continue;
+      seen += 1;
+      if (seen > 1) return true;
+    }
+  }
+  return false;
+}
+
+/** Patch the LAST part carrying `toolCallId` (the live call when provider ids are reused). */
+function patchLastToolCall<M extends PatchableMessage>(
+  messages: M[],
+  toolCallId: string,
+  patch: Record<string, unknown>
+): M[] | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const parts = messages[i]?.parts;
+    if (!parts?.length) continue;
+    for (let j = parts.length - 1; j >= 0; j--) {
+      const part = parts[j];
+      if (part?.type !== "tool-call" || part.id !== toolCallId) continue;
+      const nextParts = [...parts];
+      nextParts[j] = { ...part, ...patch } as PatchableToolCallPart;
+      const next = [...messages];
+      next[i] = { ...messages[i], parts: nextParts } as M;
+      return next;
+    }
+  }
+  return null;
+}
+
+/**
+ * Settle the LAST call carrying `toolCallId`, in the message that owns it.
+ *
+ * Mirrors both halves of the SDK's `addToolResult`: the call's `state`/`output` and a `tool-result`
+ * part in the SAME message (the model wire reads `tool-result`; a call-only patch would settle the
+ * UI and leave the model without an answer).
+ */
+function attachResultToLastCall<M extends PatchableMessage>(
+  messages: M[],
+  toolCallId: string,
+  output: unknown,
+  error?: string
+): M[] | null {
+  let messageIndex = -1;
+  let partIndex = -1;
+  for (let i = messages.length - 1; i >= 0 && messageIndex < 0; i--) {
+    const parts = messages[i]?.parts;
+    if (!parts?.length) continue;
+    for (let j = parts.length - 1; j >= 0; j--) {
+      const part = parts[j];
+      if (part?.type === "tool-call" && part.id === toolCallId) {
+        messageIndex = i;
+        partIndex = j;
+        break;
+      }
+    }
+  }
+  if (messageIndex < 0) return null;
+
+  const message = messages[messageIndex]!;
+  const parts = [...(message.parts ?? [])];
+  const call = parts[partIndex]!;
+  parts[partIndex] = {
+    ...call,
+    output: error ? { error } : output,
+    state: error ? "error" : "complete",
+  };
+  const content = normalizeToolResult(output);
+  const resultIndex = parts.findIndex((part) => part?.type === "tool-result" && part.id === toolCallId);
+  // Mirror the SDK's `updateToolResultPart`: an EXISTING result keeps the fields this function does
+  // not own (`name`, `id`, `metadata`) and the new state replaces the rest — including clearing a
+  // stale `error` when the call now succeeds.
+  const existing = resultIndex >= 0 ? (parts[resultIndex] as Record<string, unknown>) : undefined;
+  const resultPart = {
+    ...(existing ?? {}),
+    type: "tool-result",
+    toolCallId,
+    content,
+    state: error ? "error" : "complete",
+  } as unknown as Record<string, unknown>;
+  if (error) resultPart.error = error;
+  else delete resultPart.error;
+  // A CONTROL outcome left on metadata outlives the result it described. The SDK strips it whenever
+  // the result completes without a new outcome (`withoutStaleToolResultOutcome`), because the wire
+  // reader treats `metadata.tanstack.toolResultOutcome` as the verdict — a kept `"denied"` would make
+  // a now-complete result project as an error. Same rule, same place.
+  if (!error) {
+    const metadata = (resultPart as { metadata?: Record<string, unknown> }).metadata;
+    const tanstack = metadata?.tanstack as Record<string, unknown> | undefined;
+    if (metadata && tanstack && "toolResultOutcome" in tanstack) {
+      const { toolResultOutcome: _staleOutcome, ...restTanstack } = tanstack;
+      const nextMetadata = { ...metadata };
+      if (Object.keys(restTanstack).length > 0) nextMetadata.tanstack = restTanstack;
+      else delete nextMetadata.tanstack;
+      if (Object.keys(nextMetadata).length > 0) resultPart.metadata = nextMetadata;
+      else delete resultPart.metadata;
+    }
+  }
+  if (resultIndex >= 0) parts[resultIndex] = resultPart as unknown as PatchableToolCallPart;
+  else parts.push(resultPart as unknown as PatchableToolCallPart);
+
+  const next = [...messages];
+  next[messageIndex] = { ...message, parts } as M;
+  return next;
 }
 
 /**

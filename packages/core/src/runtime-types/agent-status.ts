@@ -132,13 +132,19 @@ export function isParkedStatus(status: AgentStatus): boolean {
 }
 
 /**
- * Resolve the status to apply when an agent run finishes.
+ * Wakeable = a settled session a background completion may start a promptless turn on.
  *
- * Terminal/parked/compacting states are kept; otherwise the result is the run's error or success.
- * The axes decide the first three, so a new wait/terminal state does not need a fourth special case.
+ * Only `idle` and `completed` qualify. A run the user ABORTED or that ended in ERROR is deliberately
+ * left alone — they just stopped it (or it failed), and a finished job is not a reason to start
+ * talking again — and `compacting` is excluded because a lease owns the phase.
+ *
+ * Derived from the axes rather than listed: the chat controller used to keep its own
+ * `WAKEABLE_STATUSES` set, so a new terminal reason or wait kind compiled clean and silently changed
+ * what a background job could start.
  */
-export function resolveFinishStatus(current: AgentStatus, errorMessage: string): AgentStatus {
-  const state = deriveAgentState(current, errorMessage);
-  if (isTerminalState(state) || state.wait !== "none" || state.run === "compacting") return current;
-  return errorMessage ? "error" : "completed";
+export function isWakeableStatus(status: AgentStatus): boolean {
+  const state = deriveAgentState(status);
+  if (state.lifecycle !== "ready" || state.wait !== "none") return false;
+  if (state.run === "compacting") return false;
+  return state.outcome === "none" || state.outcome === "completed";
 }

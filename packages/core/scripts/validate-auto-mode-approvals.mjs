@@ -151,6 +151,41 @@ assert.equal(approvalOf().approved, undefined, "plan mode does not auto-approve"
 assert.equal(session.getSnapshot().mode, "plan");
 
 // ============================================================================
+// 5. A FAILED auto-answer is reported, and the mode change still succeeds
+// ============================================================================
+//
+// `authorizeAndResume` awaits the command analyzer (an HTTP call on a remote workspace), the
+// tool-before hook and the persist. Its failure used to be swallowed: auto was on, the approval stayed
+// pending, the pump never resumed, and nothing at all was emitted — the one symptom being "I turned
+// auto on and nothing happened".
+{
+  const diagnostics = [];
+  manager.on("session:diagnostic", (event) => diagnostics.push(event.payload));
+
+  chat.setMessages(pendingMessages());
+  managed.statusController.reconcileWithPolicy(chat.getMessages(), "during-run");
+  assert.equal(managed.getPendingApprovalCount(), 1, "fixture: one approval is pending again");
+
+  const original = chat.authorizeAndResume;
+  chat.authorizeAndResume = async () => {
+    throw new Error("command analyzer unreachable");
+  };
+  try {
+    const result = await session.dispatch({ type: "mode.set", mode: "auto" });
+    assert.equal(result.ok, true, "the mode change succeeded, so the command is not failed");
+    assert.equal(session.getSnapshot().mode, "auto", "…and auto is on");
+  } finally {
+    chat.authorizeAndResume = original;
+  }
+  const row = diagnostics.find((entry) => entry.message.includes("could not answer the pending approval"));
+  assert.ok(row, "the failed auto-answer is reported");
+  assert.equal(row.level, "warn");
+  assert.equal(row.error, "command analyzer unreachable", "…with the cause");
+  assert.equal(row.details?.pendingApprovals, 1, "…and how many approvals are still waiting");
+  assert.equal(managed.getPendingApprovalCount(), 1, "the approval is still pending (nothing was decided)");
+}
+
+// ============================================================================
 // Cleanup
 // ============================================================================
 

@@ -50,6 +50,14 @@ export interface UsageRecord {
   reasoningTokens: number;
   totalTokens: number;
   costUsd: number;
+  /**
+   * Present ONLY when the model had no pricing metadata — the call was not free, it was unpriced.
+   *
+   * `costUsd: 0` cannot carry that distinction, and it does not need to for old records: a file
+   * without this key is read as "priced" (its existing semantics). Leaving it absent when priced
+   * keeps every existing record valid.
+   */
+  priced?: false;
 }
 
 /** Input for recording one LLM call (tokens + optional precomputed cost). */
@@ -60,6 +68,8 @@ export interface UsageRecordInput {
   usage: TokenUsage;
   /** Cost computed with the model's own pricing at call time (0 when unknown). */
   costUsd?: number;
+  /** `false` when the model had no pricing metadata — recorded so totals can say "N unpriced". */
+  priced?: boolean;
   /** Completion timestamp; defaults to now. */
   ts?: number;
 }
@@ -71,6 +81,8 @@ export interface DailyUsageBucket {
   totalTokens: number;
   costUsd: number;
   calls: number;
+  /** Calls with no pricing metadata — their share of `costUsd` is unknown, not zero. */
+  unpricedCalls: number;
 }
 
 export interface ModelUsageTotal {
@@ -79,6 +91,8 @@ export interface ModelUsageTotal {
   outputTokens: number;
   costUsd: number;
   calls: number;
+  /** Calls with no pricing metadata — see {@link DailyUsageBucket.unpricedCalls}. */
+  unpricedCalls: number;
 }
 
 export interface UsageHistoryResult {
@@ -125,6 +139,7 @@ function buildRecord(input: UsageRecordInput): Omit<UsageRecord, "v"> | null {
     reasoningTokens: usage.reasoningTokens ?? 0,
     totalTokens,
     costUsd: Number.isFinite(input.costUsd) ? Math.max(0, input.costUsd!) : 0,
+    ...(input.priced === false ? { priced: false as const } : {}),
   };
 }
 
@@ -214,9 +229,10 @@ export class UsageStore {
         const costUsd = raw.costUsd ?? 0;
         const model = raw.model ?? "unknown";
 
+        const unpriced = raw.priced === false ? 1 : 0;
         let day = dailyMap.get(date);
         if (!day) {
-          day = { date, inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0, calls: 0 };
+          day = { date, inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0, calls: 0, unpricedCalls: 0 };
           dailyMap.set(date, day);
         }
         day.inputTokens += raw.inputTokens ?? 0;
@@ -224,16 +240,18 @@ export class UsageStore {
         day.totalTokens += totalTokens;
         day.costUsd += costUsd;
         day.calls += 1;
+        day.unpricedCalls += unpriced;
 
         let m = modelMap.get(model);
         if (!m) {
-          m = { model, totalTokens: 0, outputTokens: 0, costUsd: 0, calls: 0 };
+          m = { model, totalTokens: 0, outputTokens: 0, costUsd: 0, calls: 0, unpricedCalls: 0 };
           modelMap.set(model, m);
         }
         m.totalTokens += totalTokens;
         m.outputTokens += raw.outputTokens ?? 0;
         m.costUsd += costUsd;
         m.calls += 1;
+        m.unpricedCalls += unpriced;
       }
     }
 

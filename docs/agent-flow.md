@@ -76,21 +76,28 @@ type AgentStatus =
 `input.kind !== "waiting"` 之后 `input.kind` 被类型缩窄成 `RunFinalizeReason`）。
 新增一个终态原因会自动同时成为 outcome kind；新增一种暂停必须只在 `AgentRunOutcomeKind` 里声明。
 
-### 2.1 三个谓词，回答三个不同问题
+### 2.1 谓词，回答不同问题
 
 | 谓词 | 集合 | 回答的问题 | 用在哪 |
 |---|---|---|---|
-| `isTerminalStatus` (`:88`) | `aborted` `error` `waiting` `awaiting_user` | "流正常结束时**不许被覆盖**" | `resolveFinishStatus` (`:97`)、`onRunFinish` |
-| `isActiveStatus` (`:92`) | `running` `thinking` `responding` `waiting` `awaiting_user` `compacting` | "现在有活可干，abort 能改变点什么" | abort 监听器 (`managed-agent-run-lifecycle.ts:87`)、`abortManagedAgentRun` (`:197`)、`ctx.isIdle()` (`managed-agent.ts:1580`) |
-| `shouldDeferMidRunQueue` (`agent/queue/defer-mid-run-queue.ts:11`) | `pumpDepth > 0` 或 `waiting`/`awaiting_user` | "这条新输入该排队还是直接开跑" | `shouldDeferQueue` (`agent-chat-controller.ts:398`) |
+| `isTerminalStatus` (`agent-status.ts:77`) | `aborted` `error`（由 `deriveAgentState` 派生，不再是手写清单） | "这次 run 已经失败/被取消" | `chat-controller.ts:983`、`agent-status-controller.ts:216`（与 `isParkedStatus` 并列判断） |
+| `isParkedStatus` (`agent-status.ts:130`) | `wait: !== "none"` → `waiting` `awaiting_user` | "这一轮停在问题上，还没结束" | `shouldDeferMidRunQueue`、`chat-controller.ts:324`、`agent-status-controller.ts:199` |
+| `isActiveStatus` (`agent-status.ts:81`) | `running` `thinking` `responding` `waiting` `awaiting_user` `compacting` | "现在有活可干，abort 能改变点什么" | abort 监听器 (`run/run-lifecycle.ts:51`)、`abortManagedAgentRun` (`:218`)、`ctx.isIdle()` (`managed-agent.ts:2396`) |
+| `shouldDeferMidRunQueue` (`agent/queue/defer-mid-run-queue.ts:13`) | `pumpDepth > 0`、`waiting`/`awaiting_user` **或 `compacting`** | "这条新输入该排队还是直接开跑" | `shouldDeferQueue` (`run/chat-controller.ts:895`) |
+
+`isStickyStatus`（`agent-status.ts:108`）是第四件不同的事：`waiting` `awaiting_user` `completed`
+`error` `aborted` `compacting` 的**显示值**不被 chunk 覆盖（`applyChunkStatus` 开头直接返回）。
+"粘性"只约束显示，不表示 run 结束——别把它当 terminal 用。
 
 关键点：**`completed` 不在 `TERMINAL_STATUSES` 里，也不在 `ACTIVE_STATUSES` 里**。
 它不是"终止态"，而是"正常结束写下的那个值"，因此下一次 `onRunStart` 可以把它推进 `running`。
-`waiting` / `awaiting_user` 同时是"terminal（结束时不覆盖）"和"active（abort 有意义）"——
-它们是**停在问题上的开放轮**，不是已结束的轮。
+`waiting` / `awaiting_user` 是 **parked**（`wait !== "none"`）且 **active**（abort 有意义）：它们是
+停在问题上的开放轮，既不是"失败/取消"的 terminal，也不是已结束的轮。**"结束不覆盖"由粘性实现，
+不是 terminal 集合**——把两者混为一谈，就是下面这次误用的成因。
 
-`managed-agent-run-lifecycle.ts:62-90` 记录了一次真实误用：abort 监听器曾用
-`isTerminalStatus` 判断，结果 `completed` 不受保护、而审批暂停反而拒绝被 abort。两个表不能互换。
+`run/run-lifecycle.ts:31-56` 记录了一次真实误用：abort 监听器曾用
+`isTerminalStatus` 判断，结果 `completed` 不受保护、而审批暂停反而拒绝被 abort。两个表不能互换：
+"失败/取消" 与 "停在问题上" 是两件事，所以现在是两个谓词。
 
 ### 2.2 状态含义与写入者
 
@@ -100,14 +107,14 @@ type AgentStatus =
 | `running` | 正在跑（工具/等待模型继续） | 否 | `prepareRunPhase` (`:104`)、`onRunStart` (`:120`)、`TOOL_CALL_START` (`:75-78`)、`approvals-cleared`、`before-tool-call`、`compaction-end` |
 | `thinking` | 收到 reasoning chunk | 否 | `REASONING_MESSAGE_*` (`:80-83`) |
 | `responding` | 正在输出正文 | 否 | `TEXT_MESSAGE_CONTENT`，且当前是 `running`/`thinking` (`:85-89`) |
-| `waiting` | 停在未决定的工具审批上 | 是（结束不覆盖） | `syncApprovals(count>0)` (`:207`)、`reconcile`（`pendingCount>0`，`:254`） |
-| `awaiting_user` | 停在 `ask_user` 上 | 是 | `setClientToolWaiting(true)` (`:228`)、`reconcile`（`hasPendingAskUser`，`:258`） |
-| `compacting` | 压缩摘要进行中 | 否 | `beginCompaction` (`:177`)，auto / reactive / manual 三处调用 |
-| `completed` | 上一轮正常结束 | 否（settled） | `onRunFinish` → `resolveFinishStatus`、`reconcileAfterRun`、`client-tool-resume` |
+| `waiting` | 停在未决定的工具审批上 | 否（parked，粘性） | `syncApprovals(count>0)` (`:280`)、`reconcile`（`pendingCount>0`，`:391`） |
+| `awaiting_user` | 停在 `ask_user` 上 | 否（parked，粘性） | `setClientToolWaiting(true)` (`:326`)、`reconcile`（`hasPendingAskUser`，`:391`） |
+| `compacting` | 压缩摘要进行中 | 否 | `CompactionController.begin()`（`compaction/compaction-controller.ts:120`），auto / reactive / manual 三处经 lease 进入；`finish` / `release` / `cancel` 恢复先前状态 |
+| `completed` | 上一轮正常结束 | 否（settled） | `onRunFinish` → `settle`、`reconcileAfterRun`、`client-tool-resume` |
 | `aborted` | 被用户/abort 中止 | 是 | `onUserCancel` (`:170`)、abort 监听器、`abortManagedAgentRun` |
 | `error` | 流/外部失败 | 是 | `onRunError` (`:146`)、`onExternalError` (`:163`)、`applyRunOutcome` (`:309-321`) |
 
-`waiting` / `awaiting_user` / `aborted` 是**粘性**的：`applyChunkStatus` 在开头直接返回
+`waiting` / `awaiting_user` / `completed` / `error` / `aborted` / `compacting` 是**粘性**的：`applyChunkStatus` 在开头直接返回
 (`:66-67`)，残留 chunk 不能把它们改回 `running`。
 
 ### 2.3 转换表
@@ -119,8 +126,8 @@ type AgentStatus =
 | `running` `thinking` `responding` | `thinking` | `chunk:reasoning` | `:80-83` |
 | `running` `thinking` | `responding` | `chunk:text` | `:85-89` |
 | 任意非粘性 | `running` | `chunk:tool` | `:75-78` |
-| 非终止 | `completed` | `run-finish`（`resolveFinishStatus`，无 error） | `:135-140` |
-| 非终止 + error 文本 | `error` | `run-finish` | `runtime-types/agent-status.ts:97-101` |
+| 非终止 | `completed` | `run-finish`（`settle`，无 error） | `:135-140` |
+| 非终止 + error 文本 | `error` | `run-finish` | `runtime-types/agent-state.ts`（`settle` 的 `coerceSettledOutcome`） |
 | `running` 等 | `waiting` | `approvals-pending` / `reconcile` | `:196-219`、`:254-257` |
 | `waiting` | `running` | `approvals-cleared` / `before-tool-call` / `run-prepare` | `:200-203`、`:221-226` |
 | 任意 | `awaiting_user` | `client-tool-wait` / `reconcile` | `:228-237`、`:258-261` |
@@ -332,7 +339,7 @@ recordStreamDuration()
 persistSession()
 clearTurnContext()
 reason === "finished" ? memory.runExtraction(...) : skip
-emit("agent:stop", { reason })
+emit("agent:stop", { outcome })
 setCurrentRunId(null)
 queueMicrotask(() => log.setRun(null))
 ```
@@ -580,20 +587,20 @@ managed 路径不传 owner controller 会直接抛错，只有 `detached: true` 
 | `agent:state` | `state` | 是 (`meta.ts:102`) | 否（不是日志事件；状态跳转另由 `setStatus` 记一行，`managed-agent.ts:783-791`） | `publishStateChange` (`:993-1001`)：status、error、pendingApprovalCount、retry、model、`lastFinishReason`、`lastStreamDurationMs` |
 | `session:messages` | `messages` | 是 (`:103`) | 否 | `AgentUIChannel` 每次消息变更 (`ui-channel.ts:585-592`) |
 | `session:usage` | `usage` | 是 (`:105`) | 否 | `UsageTracker` (`usage-tracker.ts:357`) |
-| `agent:iteration` | `iteration` | 是 (`:113`) | **否**（规则表里没有这一项） | lifecycle middleware `onIteration` → `setIterationProgress` (`managed-agent.ts:938`)。尺度是**当前 chat**（每个 tool phase 重新从 1 开始，`max` 是那次 `chat()` 的预算），与 `turn:start.index` / `llm:*` 的 `iteration`（run 作用域）**不是同一套编号**，不要互相配对 |
-| `turn:start` | — | 否 (`:116`) | 否（`event-log-rules.ts:301`） | 每个 model turn 开始；`index` 是 run 作用域编号（与 `llm:*` 的 `iteration` 同源），`max` 只是当次 `chat()` 的预算，不是 `index` 的分母 |
+| `agent:iteration` | `iteration` | 是 (`:113`) | **否**（规则表里没有这一项） | lifecycle middleware `onIteration` → `setIterationProgress` (`managed-agent.ts:938`)。尺度是**当前 chat**（每个 tool phase 重新从 1 开始，`max` 是那次 `chat()` 的预算），与 `turn:start.turnIndex` / `llm:*` 的 `turnIndex`（run 作用域）**不是同一套编号**，不要互相配对 |
+| `turn:start` | — | 否 (`:116`) | 否（`event-log-rules.ts:301`） | 每个 model turn 开始；`turnIndex` 是 run 作用域编号（与 `llm:*` 的 `turnIndex` 同源），`chatMaxIterations` 只是当次 `chat()` 的预算，不是 `turnIndex` 的分母 |
 | `turn:end` | — | 否 | 否 (`:302`) | `RUN_FINISHED`；同一 iteration 的第二个"interrupt 形状"结束会被 `turnClosed` 吞掉（`lifecycle-middleware.ts:209-214`） |
 | `message:start` | — | 否 | 否 (`:303`) | 首个 text/reasoning/tool chunk；`firstOutput` 是**每个 user turn** 一次（`lifecycle-middleware.ts:181-170`） |
-| `message:end` | — | 否 | 否 (`:304`) | `RUN_FINISHED` 时收尾 |
-| `agent:stop` | `lifecycle` | 否 | 是 | `finalizeManagedAgentRun` (`managed-agent-run-lifecycle.ts:162`)，reason = `finished`/`aborted`/`error` |
-| `agent:abort` | `lifecycle` | 否 | 是 | `abortManagedAgentRun` (`managed-agent-run-lifecycle.ts:189`)，reason 是调用方给的字符串（`user-cancelled` / `force-submit` / `session-switch` / …） |
+| `message:end` | — | 否 | 否 (`:304`) | `RUN_FINISHED` 时收尾；只带 `toolCalls` / `finishReason`，**不带文本**（内容在 transcript） |
+| `agent:stop` | `lifecycle` | 否 | 是 | `finalizeManagedAgentRun` (`managed-agent-run-lifecycle.ts:162`)，`outcome` = `finished`/`aborted`/`error` |
+| `agent:abort` | `lifecycle` | 否 | 是 | `abortManagedAgentRun` (`managed-agent-run-lifecycle.ts:189`)，`cause` 是调用方给的字符串（`user-cancelled` / `force-submit` / `session-switch` / …） |
 | `agent:stream-error` | `lifecycle` | 否 | 是 | `AgentStatusController.onRunError` (`agent-status-controller.ts:149`) |
 | `agent:retry` | `lifecycle` | 否 | 是 | `recordRetry` (`run-stream-recovery.ts:148-158`)；同时写 L1 `retry` |
 | `agent:extension-error` | `lifecycle` | 否 | 是 | 扩展 runner / message-transform（`phase` 区分来源） |
 | `agent:tool-approval-request` | `lifecycle` | 否 | 是 | `syncApprovals`（每个待审批一条，`agent-status-controller.ts:211-218`） |
 | `agent:tool-approval-resolved` | `lifecycle` | 否 | 是 | `ToolApprovalTable.onResolved` (`managed-agent.ts:599-609`) |
 | `turn:summary` | `lifecycle` | 否 | 是（`event-log-rules.ts:159`） | `RunFinalizer.finalizeChat` 末尾；`waiting` 时无 `outcome`。**每个字段都是这个 pump 自己的**（相对 pump 起点的增量），不是会话累计：被审批切开的回合每段各报一次，空 pump 报 0。`toolCalls` 数的是**已结算**（跑完/失败）的调用，所以执行已批准工具的是 resume pump，不是请求它的那个 pump |
-| `subagent:*` | `lifecycle` | 否 | 多数是（例外：`subagent:queue` 显式 `false`，`event-log-rules.ts:362`） | `runSubagent` / `task-result.ts:203`；`session:subagents` 另有 retained 列表 (`meta.ts:128`) |
+| `subagent:*` | `lifecycle` | 否 | 多数是（例外：`subagent:queue` 显式 `false`，`event-log-rules.ts:732`） | `runSubagent` / `task-result.ts:203`；`session:subagents` 是 retained 的单一快照 (`meta.ts:169`)，现在同时承载 `subagents` 与 `queued` |
 
 要点：
 
@@ -708,7 +715,7 @@ managed 路径不传 owner controller 会直接抛错，只有 `detached: true` 
 
 | 文件 | 负责 |
 |---|---|
-| `packages/core/src/runtime-types/agent-status.ts` | `AgentStatus`、`RunFinalizeReason`/`AgentRunOutcomeKind`（后者 = 前者 + `"waiting"`）、`TERMINAL_STATUSES`/`ACTIVE_STATUSES`、`resolveFinishStatus` |
+| `packages/core/src/runtime-types/agent-status.ts` | `AgentStatus`、`RunFinalizeReason`/`AgentRunOutcomeKind`（后者 = 前者 + `"waiting"`）、`TERMINAL_STATUSES`/`ACTIVE_STATUSES`、`isWakeableStatus` |
 | `packages/core/src/agent/state/agent-status-controller.ts` | 所有状态跳转的唯一实现、审批/交互状态同步、`applyRunOutcome` |
 | `packages/core/src/agent/run/chat-controller.ts` | pump 循环、run chain/epoch/token、steer/follow-up、打断、tool-phase 续跑 |
 | `packages/core/src/agent/run/run-coordinator.ts` | abort controllers、run token、continuation 标记、turn finalize 守卫、wire-only 覆盖、截断上限 |

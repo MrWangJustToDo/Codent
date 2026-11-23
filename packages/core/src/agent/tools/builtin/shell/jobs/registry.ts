@@ -295,7 +295,14 @@ export class CommandJobRegistry {
       const footer = job.logPath ? await readJobLogFooter(job.logPath, this.env) : null;
       if (persisted.status === "running") {
         if (footer) {
-          job.status = footer.status === "killed" ? "killed" : footer.status === "exited" ? "exited" : "failed";
+          // `interrupted` is the footer a session-end write leaves; the `killed` record lands a
+          // moment later, so a crash in between is the same event — not a command failure.
+          job.status =
+            footer.status === "killed" || footer.status === "interrupted"
+              ? "killed"
+              : footer.status === "exited"
+                ? "exited"
+                : "failed";
           job.exitCode = footer.exitCode;
           job.endedAt = footer.endedAt ?? Date.now();
         } else {

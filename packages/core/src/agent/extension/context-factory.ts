@@ -190,7 +190,12 @@ export function createExtensionContext(
         host.refuse(api.id, "registerToolOutputDecorator");
         return () => {};
       }
-      const disposeOwned = host.registerToolOutputDecorator(api.id, toolName, decorator, options);
+      // A holder rather than a `let`, because the ledger entry exists BEFORE the host call: a throw
+      // during registration still leaves a listed artifact whose disposer is safe to call, and the
+      // entry's body must tolerate a host that never returned a handle (the optional call is a no-op).
+      // It does NOT make an already-installed decorator removable — a host that installs and THEN
+      // throws leaves nothing to call; the current host (tool-facet) cannot do that.
+      const owned: { dispose?: () => void } = {};
       let active = true;
       const dispose = () => {
         if (!active) return;
@@ -204,9 +209,15 @@ export function createExtensionContext(
         if (registrations && index < 0) return;
         active = false;
         if (index >= 0) registrations!.toolOutputDecoratorDisposers.splice(index, 1);
-        disposeOwned?.();
+        owned.dispose?.();
       };
+      // Record the claim BEFORE the host call — the same rule as `registerTool` / `registerCommand`
+      // above. The host call can throw AFTER installing the decorator (an owner conflict), and with
+      // the push after it the activation rollback iterated an empty ledger and left the decorator
+      // installed with `hasLiveArtifacts()` false, so the "already disabled" fast path refused the
+      // only cleanup path.
       registrations?.toolOutputDecoratorDisposers.push(dispose);
+      owned.dispose = host.registerToolOutputDecorator(api.id, toolName, decorator, options);
       return dispose;
     },
 

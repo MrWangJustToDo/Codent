@@ -43,7 +43,7 @@ function drive(runToken = "turn-1") {
 
   assert.deepEqual(
     of("turn:start").map((e) => e.payload),
-    [{ index: 1, max: 5 }]
+    [{ turnIndex: 1, chatMaxIterations: 5 }]
   );
   const starts = of("message:start");
   assert.equal(starts.length, 1, "one assistant message per turn opens once");
@@ -51,11 +51,14 @@ function drive(runToken = "turn-1") {
 
   const ends = of("message:end");
   assert.equal(ends.length, 1);
-  assert.equal(ends[0].payload.text, "hello");
+  // Metadata only: the message text lives on the transcript (`ctx.getMessages()`), not on a frame every
+  // wildcard subscriber receives.
+  assert.equal("text" in ends[0].payload, false, "message:end carries no assistant text");
+  assert.equal(ends[0].payload.messageId, of("message:start")[0].payload.messageId);
   assert.equal(ends[0].payload.finishReason, "stop");
   assert.deepEqual(
     of("turn:end").map((e) => e.payload),
-    [{ index: 1, finishReason: "stop", toolCalls: 0 }]
+    [{ turnIndex: 1, finishReason: "stop", toolCalls: 0 }]
   );
 }
 
@@ -75,20 +78,29 @@ function drive(runToken = "turn-1") {
   middleware.onChunk(ctx, { type: "RUN_FINISHED", finishReason: "stop" });
 
   assert.deepEqual(
-    of("turn:start").map((e) => e.payload.index),
+    of("turn:start").map((e) => e.payload.turnIndex),
     [1, 2],
     "the turn index advances per model call within the run"
   );
   assert.deepEqual(
-    of("turn:end").map((e) => ({ index: e.payload.index, toolCalls: e.payload.toolCalls })),
+    of("turn:end").map((e) => ({ turnIndex: e.payload.turnIndex, toolCalls: e.payload.toolCalls })),
     [
-      { index: 1, toolCalls: 1 },
-      { index: 2, toolCalls: 0 },
+      { turnIndex: 1, toolCalls: 1 },
+      { turnIndex: 2, toolCalls: 0 },
     ],
     "tool calls are per turn, not cumulative"
   );
-  const texts = of("message:end").map((e) => e.payload.text);
-  assert.deepEqual(texts, ["one", "two"], "each message reports only its own text");
+  // Each message closes with its OWN counts; the text is no longer carried at all.
+  assert.deepEqual(
+    of("message:end").map((e) => e.payload.toolCalls),
+    [1, 0],
+    "each message reports its own tool-call count"
+  );
+  assert.deepEqual(
+    of("message:end").map((e) => e.payload.messageId),
+    of("message:start").map((e) => e.payload.messageId),
+    "…and pairs with the message it opened"
+  );
   assert.deepEqual(
     of("message:start").map((e) => e.payload.firstOutput),
     [true, false]
@@ -110,7 +122,7 @@ function drive(runToken = "turn-1") {
   middleware.onChunk(ctx, { type: "RUN_FINISHED", finishReason: "stop" });
 
   assert.deepEqual(
-    of("turn:start").map((e) => e.payload.index),
+    of("turn:start").map((e) => e.payload.turnIndex),
     [1, 2],
     "a new chat in the same run continues the turn numbering"
   );
@@ -127,8 +139,7 @@ function drive(runToken = "turn-1") {
 
   assert.equal(of("message:start").length, 1, "a tool-call message is still an assistant message");
   assert.equal(of("message:end")[0].payload.toolCalls, 2);
-  assert.equal(of("message:end")[0].payload.text, "");
-  assert.deepEqual(of("turn:end")[0].payload, { index: 1, finishReason: "tool_calls", toolCalls: 2 });
+  assert.deepEqual(of("turn:end")[0].payload, { turnIndex: 1, finishReason: "tool_calls", toolCalls: 2 });
 }
 
 // ── 4. an aborted turn opens but never closes ──────────────────────────────

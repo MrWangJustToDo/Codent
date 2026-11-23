@@ -241,11 +241,12 @@ export async function maybeCacheOutput(
     /**
      * Re-throw a failed spill instead of degrading to the uncached content.
      *
-     * `task` sets this: its summary is advertised downstream as "full output at
-     * `<path>`", so a write failure has to end the row as a failure (the caller reports
-     * "could not be recorded") rather than silently hand back an unreferenced summary.
-     * Every other tool keeps the default — a cache is a display optimization, not part of
-     * the result contract, and losing a successful grep/tree/command result to it is worse.
+     * Only `task` sets this, and only because its summary is advertised downstream as "full output at
+     * `<path>`" — the caller has to decide whether to advertise a path at all. `buildTaskOutput` still
+     * CATCHES that throw and degrades to the full text plus a "cache unavailable" note, so a write
+     * failure never discards a report the child already produced; it just means there is no path.
+     * Every other tool keeps the default — a cache is a display optimization, not part of the result
+     * contract, and losing a successful grep/tree/command result to it is worse.
      */
     failClosed?: boolean;
   }

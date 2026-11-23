@@ -98,6 +98,20 @@ export const SUBAGENT_ABORT_REASONS = {
  */
 export const SUBAGENT_RUN_RESTART_REASONS: readonly string[] = [SUBAGENT_ABORT_REASONS.forceSubmit];
 
+/**
+ * Every reason that means "the CONVERSATION/SESSION ended", not "the parent's run moved on".
+ *
+ * They classify as `parent-stop` — the same bucket as `Agent destroyed`, which is what a session end
+ * actually is — because the alternative was the accidental fall-through: a switch-killed task read as
+ * "[Task stopped with its parent run.]" while the command side wrote "Cancelled because the session
+ * ended." for the same event, and the model was told the run advanced when nothing had advanced.
+ *
+ * Producers: the abort handle a background task is detached with
+ * (`controller.abort("session-ended")`, `task-background.ts`), the prefork middleware's background
+ * handle, and `AgentChatController.stopIfActive("session-switch")` fed through the parent cascade.
+ */
+export const SUBAGENT_SESSION_END_REASONS: readonly string[] = ["session-ended", "session-switch"];
+
 export type SubagentStopReason = "user" | "parent-run" | "parent-stop" | "unknown";
 
 /** Notices, exported so consumers match on them instead of on a copied literal. */
@@ -139,6 +153,9 @@ export function resolveSubagentStopReason(info: SubagentAbortReason): SubagentSt
   // Case-insensitive on the destroy label so the spelling the producer chose ("Agent
   // destroyed") cannot drift away from the classifier again.
   if (/agent[\s_-]?destroyed/i.test(reason)) return "parent-stop";
+  // A session switch/end is the conversation being torn down — the same event class as the destroy
+  // above, and NOT "the parent's run moved on".
+  if (SUBAGENT_SESSION_END_REASONS.includes(reason)) return "parent-stop";
   // A bare `abort()` is the run-lifecycle reset/restart path, which is where the
   // pre-fork orphan comes from. Any *other* string is a caller's own label; it is not
   // strong enough to claim the user did it, but it is stronger than "we know nothing",

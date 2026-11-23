@@ -35,9 +35,10 @@ export const compactionConfigSchema = z.object({
   /** Percentage of tokenThreshold at which compaction triggers (default: 80) */
   compactAtPercent: z.number().min(50).max(99).default(COMPACTION_CONFIG_DEFAULTS.compactAtPercent),
   /**
-   * Token budget for the kept window after compaction. When set, it wins;
-   * when unset, derived from the model context window (or the shared default
-   * window when unknown — see keep-policy.ts).
+   * Token budget for the kept window after compaction. When set it is preferred, but it is still
+   * clamped to `triggerAt - reserveTokens`: a budget at or above the trigger point makes the cut
+   * land at index 0 forever, which silently disables compaction (see keep-policy.ts). When unset,
+   * derived from the model context window (or the shared default window when unknown).
    */
   keepRecentTokens: z.number().int().positive().optional(),
   /** Tokens reserved for summary + next turn when deriving keep budget. Default is `DEFAULT_RESERVE_TOKENS` (keep-policy.ts). */
@@ -60,6 +61,17 @@ export const compactionResultSchema = z.object({
   summary: z.string().optional(),
   /** Index in the input messages where the kept portion starts (messages before this were summarized) */
   cutIndex: z.number().int().nonnegative().optional(),
+  /**
+   * Token budget this compaction KEPT (the tail it did not summarize).
+   *
+   * Persisted onto the checkpoint so the wire projection reproduces this decision instead of
+   * re-deriving it from whatever policy is current later. A `/models` switch to a bigger window (or
+   * a late models.dev read) used to widen the kept window on every projection, pulling messages the
+   * summary had already replaced back into the wire — "summary + originals", longer than before.
+   * Absent on old checkpoints and on producers that did not record one: the projection then falls
+   * back to the current policy (the pre-fix behaviour).
+   */
+  keepRecentTokens: z.number().int().positive().optional(),
   /** Error message if compaction failed */
   error: z.string().optional(),
   /**

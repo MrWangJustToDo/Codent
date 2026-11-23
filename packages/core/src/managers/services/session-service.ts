@@ -54,6 +54,15 @@ export interface SessionAdoptInput {
   todoManager: TodoManager | null;
 }
 
+/**
+ * Outcome of {@link SessionService.saveRestoredMessages}.
+ *
+ * `written` — on disk. `refused` — a write gate said no (nobody emitted an event). `failed` is not
+ * returned: `saveToStore` already reported it. `canonicalize-failed` — the dehydrate pass threw, so
+ * nothing was attempted.
+ */
+export type RestoredRepairOutcome = "written" | "refused" | "canonicalize-failed";
+
 export class SessionService {
   private store: SessionStore | null = null;
   private data: SessionData | null = null;
@@ -726,7 +735,15 @@ export class SessionService {
     // folded into a merged transcript. Acquired BEFORE the read so the refusal happens before
     // anything is written, and thrown out of here so the switch's existing failure path (abort the
     // claim, re-open the departure) owns the cleanup.
-    await this.sessionLock.lockSession(sessionId, this.store.getEnv());
+    //
+    // Tagged as a READ failure: the refusal happens before anything of the target was read, so the
+    // recovery must not reload the departure from disk (that would roll back an in-memory message
+    // whose earlier persist failed) — the same rule the missing/corrupt branch below follows.
+    try {
+      await this.sessionLock.lockSession(sessionId, this.store.getEnv());
+    } catch (error) {
+      throw markRestoreReadFailure(error);
+    }
 
     try {
       // Mark a missing/corrupt target. This is the `/resume <bad id>` case: nothing of the target
@@ -783,28 +800,44 @@ export class SessionService {
   }
 
   /**
-   * Persist a restored session again after read-side repairs.
+   * Write the transcript a restore REPAIRED (settled tool calls, interrupted handles).
    *
    * `readSessionForRestore` writes the canonical form before anyone adopts it, but the interrupted
    * run handles (`task`, background `run_command`) and the half-open tool calls are repaired from
    * the hydrated messages AFTER that write. Without this second write the repaired transcript only
    * exists in memory: `tracker.reset(uiMessages)` is given the repaired array, so the sync tracker
    * believes it is already on disk and every later `maybeSaveSessionUIMessages` is a no-op — the
-   * file keeps a `running` handle that `session_read` / another process / a downgraded reader still
-   * reports, while the UI (correctly) shows it settled.
+   * file keeps a `running` handle that `session_read` / another process still reports, while the UI
+   * (correctly) shows it settled. Only called when a repair actually changed the transcript (the
+   * helpers are copy-on-write).
    *
-   * Only called when a repair actually changed the transcript (the repair helpers are copy-on-write).
+   * @returns the outcome, because WHO reports differs per cause: `saveToStore` already emits
+   * `session:save-error` for a failed write, so a second row for the same failure would double-count
+   * it. `"refused"` (a gate said no) and `"canonicalize-failed"` are silent there and must be
+   * reported by the caller.
    */
-  async saveRestoredMessages(session: SessionData, uiMessages: UIMessage[]): Promise<void> {
-    if (!this.store) return;
+  async saveRestoredMessages(
+    session: SessionData,
+    uiMessages: UIMessage[],
+    emitEvent?: EmitAgentTelemetryFn
+  ): Promise<RestoredRepairOutcome> {
+    if (!this.store) return "refused";
     try {
       session.uiMessages = await dehydrateUIMessages(uiMessages, { env: this.store.getEnv() });
     } catch {
       // Canonicalize is best-effort here too: the repaired in-memory form is still what the agent
       // adopts, and the next real save will canonicalize from the same arrays.
-      return;
+      return "canonicalize-failed";
     }
-    await this.store.save(session);
+    // Through the write gate, not a direct `store.save`: this used to bypass `closed`, the lost-lock
+    // guard and `persistGate`. During a restore that window is exactly when another process may have
+    // taken the log over, and appending the repair behind it is the merged-transcript failure the
+    // lock exists to prevent. (`readSessionForRestore` still writes the canonical form directly —
+    // it runs before adoption, on a transcript the gate does not describe.)
+    const landed = await this.saveToStore(emitEvent, session, "session+uiMessages");
+    // `saveToStore` reports its own write failure; a `false` return here is therefore a REFUSAL
+    // (closed / placeholder / deleted / lost lock / blocked gate), which nobody else reports.
+    return landed ? "written" : "refused";
   }
 
   /**

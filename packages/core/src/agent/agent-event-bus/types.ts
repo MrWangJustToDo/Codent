@@ -29,6 +29,7 @@ import type {
   AgentL1State,
   AgentMode,
   QueuedMessagesSnapshot,
+  QueuedSubagentTask,
   SessionInteractionsSnapshot,
   SessionJobsSnapshot,
   UsageChangeSnapshot,
@@ -99,7 +100,18 @@ export interface AgentEvents extends AgentEventPayloadMap {
    * that re-reads its cached snapshot on them gains and loses nothing off-process — the list had
    * no channel of its own and moved only on a full resync.
    */
-  "session:subagents": { subagents: AgentSessionSubagentSummary[] };
+  "session:subagents": {
+    subagents: AgentSessionSubagentSummary[];
+    /**
+     * `task` calls still waiting for a concurrency slot, in admission order.
+     *
+     * Carried HERE rather than as its own retained event: a waiting task is not a row, but it is the
+     * same subject (child work) and it has to survive a late subscribe. As a retained `lifecycle`
+     * event it made a snapshot look like an append-only fact and consumed that channel's single
+     * retained slot.
+     */
+    queued: QueuedSubagentTask[];
+  };
   /** Extension UI notification. */
   "extension:ui": AgentExtensionUiEvent;
   /** Streaming tool output chunk. */

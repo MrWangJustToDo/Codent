@@ -239,6 +239,15 @@ export class LifecycleCoordinator {
       // receive this agent's late `pump-complete`.
       await settleStep("session persist drain", () => managedAgent.session?.awaitPersistIdle?.());
 
+      // The idempotent child kill runs BEFORE the sink is dropped: MCP `client.close()` and LSP
+      // `connection.kill()` report through `emitDiagnostic` / `agent:extension-error`, and those rows
+      // are the evidence that explains a bad shutdown. With the flush first, they were written to a
+      // closed seam and lost. This is a pass BETWEEN two `await`s above (`releaseAgentResources`
+      // already killed once), so it catches a child spawned by work that finished while we waited —
+      // not the "first" kill. A further pass after the lease release below catches a late async
+      // producer, which is why the helper being idempotent is what makes four calls one decision.
+      attempt(() => forceKillChildProcesses(managedAgent));
+
       try {
         // Land buffered teardown/abort entries before the sink is dropped. Bounded: on a remote
         // CoreEnv the final batch is a real HTTP call, and an unbounded flush hung `dispose()`.
@@ -253,13 +262,18 @@ export class LifecycleCoordinator {
         // CoreEnv (an HTTP round trip on a remote workspace), and this was the one unbounded await
         // left in the teardown — a hung fs could keep `dispose()` from ever resolving.
         await settleStep("session lease release", () => managedAgent.releaseSessionLease());
-        this.deps.ownership.releaseAllFor(id);
-        this.deps.releaseLog?.(id);
+        // The tail is best-effort by construction: `trackTeardown` swallows a rejection and
+        // `settleTeardowns` uses `allSettled`, and every reporting channel (log sink, bus scope,
+        // registry entry) is already gone here — so a throw must not reject the teardown it can no
+        // longer describe. Contain each step instead of dropping the rest of the cleanup.
+        attempt(() => this.deps.ownership.releaseAllFor(id));
+        attempt(() => this.deps.releaseLog?.(id));
         // Idempotent backstop: the synchronous kill at the top of `destroy` already covered a host
-        // that exits before teardowns settle. This second pass covers a child registered by a late
-        // async producer during the teardown window (an LSP restart timer, a FileSync poll), and is a
-        // no-op when the maps are empty. Same list as the first pass — MCP AND LSP.
-        forceKillChildProcesses(managedAgent);
+        // that exits before teardowns settle; the pass above covers this teardown's own window. This
+        // third call covers a child registered by a late async producer (an LSP restart timer, a
+        // FileSync poll), and is a no-op when the maps are empty. Same list as the first pass — MCP
+        // AND LSP.
+        attempt(() => forceKillChildProcesses(managedAgent));
       }
     })();
     this.trackTeardown(teardown);

@@ -15,6 +15,7 @@ import {
   subagentStopNotice,
   SUBAGENT_ABORTED_NOTICE,
   SUBAGENT_ABORT_REASONS,
+  SUBAGENT_SESSION_END_REASONS,
   SUBAGENT_RUN_RESTART_REASONS,
   SUBAGENT_CANCELLED_NOTICE,
   SUBAGENT_PARENT_RUN_NOTICE,
@@ -72,6 +73,17 @@ for (const spelling of ["Agent destroyed", "agent-destroyed", "agent destroyed",
   assert.equal(resolveSubagentStopReason({ aborted: true, reason: spelling }), "parent-stop", spelling);
 }
 
+// A SESSION ending is not "the parent's run moved on": the conversation is gone, exactly like the
+// destroy path above. Declared explicitly so the verdict is a decision, not a fall-through.
+for (const reason of SUBAGENT_SESSION_END_REASONS) {
+  assert.equal(
+    resolveSubagentStopReason({ aborted: true, reason }),
+    "parent-stop",
+    `"${reason}" means the session ended, not that the parent's run advanced`
+  );
+}
+assert.deepEqual(SUBAGENT_SESSION_END_REASONS, ["session-ended", "session-switch"], "the declared set");
+
 // The orphan case: `resetRunState` calls `abort()` with no reason — a bare abort is the run
 // moving on, NOT a user cancel. This is the misattribution the reason exists to fix.
 assert.equal(resolveSubagentStopReason({ aborted: true, reason: undefined }), "parent-run");
@@ -92,6 +104,10 @@ assert.equal(resolveSubagentStopReason({ aborted: true, reason: "some-other" }),
     "managers/managed-agent.ts",
     "agent-session/local-session-dispatch.ts",
     "agent/run/chat-controller.ts",
+    // These two were missing, which is exactly how `session-ended` slipped past the guard: a
+    // background task killed by a session end was classified as a parent-run restart.
+    "agent/subagent/task-background.ts",
+    "managers/middleware/task-prefork-middleware.ts",
   ];
   const callSite = /(\.abort|interruptCurrentRun)\(\s*"([^"]+)"/g;
   let checked = 0;

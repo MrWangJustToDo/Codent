@@ -3,7 +3,7 @@ import {
   syntheticCancelMessage,
   TOOL_CANCELLED_MESSAGE,
 } from "../../../../runtime-types/abort.js";
-import { promptTokensOf } from "../../../../runtime-types/token-usage.js";
+import { reportedRunTokens } from "../../../../runtime-types/token-usage.js";
 import { formatExtensionDeniedOutput, isExtensionDeniedOutput } from "../../../../runtime-types/tool-denial.js";
 import { isBareToolErrorResult } from "../../../../runtime-types/tool-error.js";
 import { interruptedToolMessage, isInterruptedToolOutput } from "../../../../runtime-types/tool-truncation.js";
@@ -302,8 +302,7 @@ function formatTaskOutput(output: TaskOutput): string {
     // sessions). Read the cached counters then — the same convention-aware sum the tracker
     // uses — rather than defaulting to 0, which rendered `[1 iteration, 300 tokens]` for a
     // 27k-token run: not the prompt, but at least the part of it the data still holds.
-    const billedInput = usage.billedInputTokens ?? promptTokensOf(usage);
-    statusParts.push(`${billedInput + (usage.outputTokens ?? 0)} tokens`);
+    statusParts.push(`${reportedRunTokens(usage, usage.billedInputTokens)} tokens`);
   }
   // Disk cache preview (large summary) vs length truncation (maxOutputLength) are different.
   if (cachedOutputPath) statusParts.push("cached");

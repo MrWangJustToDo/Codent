@@ -16,6 +16,8 @@ import {
   UsageTracker,
   createAgentEventBus,
   createLocalAgentSession,
+  getTaskPreforkCoordinator,
+  readLocalAgentSessionSnapshot,
   registerCoreEnv,
   sessionForSubagent,
 } from "../dist/dev.mjs";
@@ -214,6 +216,10 @@ assert.equal(snap.plan.phase, "off");
 assert.deepEqual(snap.mcp, { servers: [] });
 assert.deepEqual(snap.extensions, { extensions: [], commands: [] });
 assert.deepEqual(snap.subagents, []);
+// The pre-fork queue rides this snapshot. A waiting `task` has no subagent yet, so it is not a row;
+// keeping it on the append-only `lifecycle` channel (retained) made a snapshot look like a lifecycle
+// fact and consumed that channel's single retained slot.
+assert.deepEqual(snap.subagentQueue, [], "the queue is part of the subagents snapshot, empty when idle");
 
 const stopResult = await session.dispatch({ type: "stop" });
 assert.equal(stopResult.ok, true);
@@ -267,9 +273,119 @@ managed.getEventBus().emit("session:jobs", {
 });
 assert.ok(channels.includes("jobs"), "session:jobs must reach its channel, not fall through the projector");
 
+// ----------------------------------------------------------------------------
+// The pre-fork queue reaches the `subagents` CHANNEL, not only a later retained replay.
+//
+// `subagent:queue` is emitted by the prefork middleware through `createEmitTelemetryFn(managed)`,
+// which dispatches straight onto the bus — it does NOT pass through `ManagedAgent.emitEvent`, so that
+// method's `subagent:*` refresh hook never runs. The middleware therefore republishes the snapshot
+// itself. This pins both halves: `readSubagents()` carries the queue, `refreshSubagents()` publishes
+// it, and the middleware still calls it. Without that call a subscribed host kept showing a waiting
+// task as started — the retained value is pull-only, so only a NEW subscriber would see the queue.
+// ----------------------------------------------------------------------------
+{
+  const rootPath = await fs.promises.mkdtemp(path.join(os.tmpdir(), "local-session-queue-"));
+  const toAbs = (p) => (path.isAbsolute(p) ? p : path.join(rootPath, p));
+  registerCoreEnv({
+    rootPath,
+    getPlatform: async () => "linux",
+    getArch: async () => "arm64",
+    getEnv: async () => ({}),
+    homedir: async () => rootPath,
+    fs: {
+      readFile: async (p, encoding) => fs.promises.readFile(toAbs(p), encoding),
+      writeFile: async (p, content) => fs.promises.writeFile(toAbs(p), content),
+      appendFile: async (p, content) => fs.promises.appendFile(toAbs(p), content, "utf8"),
+      rename: async (from, to) => fs.promises.rename(toAbs(from), toAbs(to)),
+      mkdir: async (p) => fs.promises.mkdir(toAbs(p), { recursive: true }),
+      exists: async (p) =>
+        fs.promises.access(toAbs(p)).then(
+          () => true,
+          () => false
+        ),
+      readdir: async (p) => {
+        try {
+          const entries = await fs.promises.readdir(toAbs(p), { withFileTypes: true });
+          return entries.map((e) => ({ name: e.name, type: e.isDirectory() ? "directory" : "file" }));
+        } catch {
+          return [];
+        }
+      },
+      stat: async (p) => {
+        const st = await fs.promises.stat(toAbs(p));
+        return { isDirectory: st.isDirectory(), isFile: st.isFile(), size: st.size, mtime: st.mtime };
+      },
+      remove: async (p) => fs.promises.rm(toAbs(p), TEMP_RM_OPTIONS),
+    },
+    runCommand: async () => ({ stdout: "", stderr: "", code: 0 }),
+    exec: async () => ({ stdout: "", stderr: "", code: 0 }),
+    fetch: async () => new Response(),
+  });
+
+  const queueManager = new AgentManager();
+  const queuedAgent = await queueManager.createManagedAgent({
+    name: "queue-projection",
+    model: "test-model",
+    maxConcurrentTasks: 1,
+  });
+  const coordinator = getTaskPreforkCoordinator(queuedAgent);
+  const releases = [];
+  const blockingRun = () =>
+    new Promise((resolve) => {
+      releases.push(resolve);
+    });
+
+  coordinator.start("task-a", () => {}, blockingRun);
+  coordinator.start("task-b", () => {}, blockingRun);
+  assert.deepEqual(
+    queuedAgent.readSubagents().queued.map((entry) => entry.toolCallId),
+    ["task-b"],
+    "the snapshot's queue lists the task waiting for a slot"
+  );
+
+  // The snapshot half: a local host builds `AgentSessionSnapshot` separately from the channel, so a
+  // queue that only reached the channel would be invisible to `getSnapshot()` consumers.
+  assert.deepEqual(
+    readLocalAgentSessionSnapshot(queuedAgent, queueManager).subagentQueue.map((entry) => entry.toolCallId),
+    ["task-b"],
+    "the local snapshot carries the queue too"
+  );
+
+  const frames = [];
+  queuedAgent.getEventBus().on("session:subagents", (event) => frames.push(event.payload), { replay: false });
+  queuedAgent.refreshSubagents();
+  assert.equal(frames.length, 1, "the subagents snapshot is republished on demand");
+  assert.deepEqual(
+    frames[0].queued.map((entry) => entry.toolCallId),
+    ["task-b"],
+    "…carrying the queue, which is what a host renders"
+  );
+
+  // The publisher half that cannot be driven from here: the middleware's dispatch path bypasses the
+  // agent hook, so it MUST republish. Source-level because reaching it needs a full streaming turn.
+  const middlewareSrc = fs.readFileSync(
+    new URL("../src/managers/middleware/task-prefork-middleware.ts", import.meta.url),
+    "utf8"
+  );
+  const emitQueueStart = middlewareSrc.indexOf("const emitQueue = (): void => {");
+  assert.ok(emitQueueStart >= 0, "the queue publisher was not found — did it move?");
+  const emitQueueBody = middlewareSrc.slice(emitQueueStart, middlewareSrc.indexOf("\n  };", emitQueueStart));
+  // Order matters, not just presence: publishing the snapshot BEFORE the event would leave the
+  // subscriber's frame describing the previous queue (the event handler has not run yet).
+  const emitAt = emitQueueBody.indexOf('"subagent:queue"');
+  const refreshAt = emitQueueBody.indexOf("managed.refreshSubagents();");
+  assert.ok(emitAt >= 0, "emitQueue publishes the queue event");
+  assert.ok(refreshAt > emitAt, "emitQueue republishes the `subagents` snapshot AFTER the event it announces");
+
+  for (const release of releases) release({ aborted: false, summary: "done" });
+  await queueManager.dispose?.();
+  fs.rmSync(rootPath, TEMP_RM_OPTIONS);
+  console.log("queue reaches the subagents channel — ok");
+}
+
 // The retained `subagents` list must reach its channel too — it is the only channel that can add or
 // drop a task row off-process, and the per-id `subagent:*` lifecycle events carry no list.
-managed.getEventBus().emit("session:subagents", { subagents: [] });
+managed.getEventBus().emit("session:subagents", { subagents: [], queued: [{ toolCallId: "task-queued" }] });
 assert.ok(channels.includes("subagents"), "session:subagents must reach its channel");
 unsub();
 

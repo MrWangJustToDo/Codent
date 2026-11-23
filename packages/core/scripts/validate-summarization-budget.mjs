@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   DEFAULT_SUMMARIZATION_CONTEXT_WINDOW,
+  boundedMergeInput,
+  buildSummarizationUserPrompt,
   SUMMARY_OUTPUT_CAP,
   measureSerializedConversationChars,
   measureSerializedTokens,
@@ -9,6 +12,7 @@ import {
   resolveSummarizationInputBudget,
   resolveAutoCompactTrigger,
   splitMessagesByTokenBudget,
+  truncateMergeInput,
 } from "../dist/dev.mjs";
 
 // ============================================================================
@@ -111,13 +115,83 @@ for (const [label, window, tokenThreshold, defaultMaxTokens] of [
 // A ~2× budget slice splits (fallback preserved).
 {
   const { inputBudget } = resolveSummarizationBudget({ contextWindow: 128_000, defaultMaxTokens: 16_000 });
-  const huge = Array.from({ length: 21 }, (_, i) => ({
+  // Sized AFTER serialization: one 40 KB message is now cut to `TEXT_BLOCK_MAX_CHARS` by the
+  // serializer, so "21 × 40 000 chars" stopped being oversized (the fixture, not the splitter, was
+  // what shrank). Many messages still exceed the budget by ~2×, which is the property under test.
+  const huge = Array.from({ length: 200 }, (_, i) => ({
     role: i % 2 === 0 ? "user" : "assistant",
     content: "x".repeat(40_000),
   }));
   const batches = splitMessagesByTokenBudget(huge, inputBudget);
   assert.ok(batches.length > 1, "an oversized (2× budget) slice should split");
-  assert.equal(batches.flat().length, huge.length);
+  assert.equal(batches.flat().length, huge.length, "…without dropping a message");
+}
+
+// ============================================================================
+// The merge pass sends summary text VERBATIM (rawText)
+// ============================================================================
+//
+// `buildSummarizationUserPrompt` serializes conversation history and caps a text block at
+// `TEXT_BLOCK_MAX_CHARS`. Applying that to the MERGE input was silent data loss: the request was one
+// user message built from every segment summary, so the cap kept only the first 8000 characters — and
+// the split decision measured the same truncated string, so it always "fit" and never split. The
+// partials were paid for and discarded. `rawText` is the seam that says "this is already a summary".
+{
+  const longSummary = `${"S".repeat(9_000)}TAIL-MARKER`;
+  const raw = buildSummarizationUserPrompt([{ role: "user", content: longSummary }], { rawText: true });
+  assert.ok(raw.includes("TAIL-MARKER"), "raw mode sends the whole summary text");
+  assert.ok(!raw.includes("chars truncated"), "raw mode does not apply the per-block cap");
+
+  const asHistory = buildSummarizationUserPrompt([{ role: "user", content: longSummary }]);
+  assert.ok(!asHistory.includes("TAIL-MARKER"), "history mode still caps a text block");
+  assert.match(asHistory, /chars truncated/, "…and says so");
+
+  // The bound itself: everything within the budget survives; only what cannot be subdivided is cut,
+  // and it says so. This is the seam the merge pass uses, so a truncated marker here is the only
+  // permitted loss.
+  const parts = Array.from({ length: 6 }, (_, i) => `segment-${i}-TAIL`);
+  const joined = parts.map((p, i) => `## Segment ${i + 1}\n\n${p}`).join("\n\n");
+  assert.equal(truncateMergeInput(joined, 10_000), joined, "a request inside the bound is sent verbatim");
+  const over = truncateMergeInput(joined, 60);
+  assert.ok(!over.includes("segment-5-TAIL"), "a request past the bound is cut");
+  assert.match(over, /chars truncated/, "…and names the loss");
+
+  // A cut exactly between the halves of an astral character leaves a lone surrogate, which is
+  // invalid UTF-8 on the wire. `slice` was the only thing standing between the two, and the cap is
+  // reached at an arbitrary byte position.
+  const boundary = `${"a".repeat(7_999)}😀TAIL`;
+  const cut = buildSummarizationUserPrompt([{ role: "user", content: boundary }]);
+  assert.ok(
+    !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(cut),
+    "truncation must not split a surrogate pair (a lone high surrogate is invalid text)"
+  );
+
+  // The bounded merge keeps EVERY summary: cutting the joined text kept only the head, so with two
+  // summaries the second one (which starts past the bound) vanished from the request entirely.
+  {
+    const one = `FIRST-${"a".repeat(600)}`;
+    const two = `SECOND-${"b".repeat(600)}`;
+    const bounded = boundedMergeInput([one, two], 400);
+    assert.ok(bounded.includes("FIRST-"), "the first summary survives the bound");
+    assert.ok(bounded.includes("SECOND-"), "…and so does the second (a head-only cut dropped it)");
+    assert.ok(bounded.length <= 400 + 80, `the bound holds (got ${bounded.length})`);
+  }
+
+  // The recursion must not split a two-way merge: there is no smaller split, so re-entering with
+  // [left, right] looped forever (two paid completions per pass). Only >2 summaries can shrink.
+  {
+    const autoCompactSrc = readFileSync(new URL("../src/agent/compaction/auto-compact.ts", import.meta.url), "utf8");
+    assert.match(
+      autoCompactSrc,
+      /summaries\.length > 2 && mergeInputText\(summaries\)\.length > mergeMaxChars/,
+      "the merge split requires at least three summaries, so every pass makes progress"
+    );
+  }
+
+  // …and the merge pass actually ASKS for verbatim text. Without this, the two seams above hold while
+  // the wiring silently serializes (and truncates) again.
+  const autoCompactSrc = readFileSync(new URL("../src/agent/compaction/auto-compact.ts", import.meta.url), "utf8");
+  assert.match(autoCompactSrc, /rawText: true/, "the merge pass sends summaries verbatim");
 }
 
 // ============================================================================
@@ -146,9 +220,14 @@ for (const [label, window, tokenThreshold, defaultMaxTokens] of [
 }
 
 // A genuinely oversized serialized slice still splits (fallback preserved).
+//
+// The budget is sized to the SERIALIZED prompt, so the fixture has to be oversized there too: one
+// 40 KB message is cut to `TEXT_BLOCK_MAX_CHARS` (≈2k tokens) before it is measured, and 6 × 2k is
+// well under 50k. Dropping the budget keeps the property under test ("too big to fit one request
+// still splits") while reflecting what actually gets sent.
 {
   const huge = Array.from({ length: 6 }, () => ({ role: "user", content: "y".repeat(40_000) }));
-  const batches = splitMessagesByTokenBudget(huge, 50_000);
+  const batches = splitMessagesByTokenBudget(huge, 5_000);
   assert.ok(batches.length > 1, "an oversized serialized slice should still split");
   assert.equal(batches.flat().length, huge.length);
 }

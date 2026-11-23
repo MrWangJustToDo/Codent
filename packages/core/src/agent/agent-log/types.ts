@@ -105,6 +105,27 @@ export interface AgentLogFileSinkOptions {
   onPersistError?: (info: LogPersistErrorInfo) => void;
 }
 
+/**
+ * An entry (or a buffered batch) that never reached a sink.
+ *
+ * Same delivery rationale as {@link LogPersistErrorInfo}: `console.warn` is invisible to a host with
+ * no stderr reader (ACP, remote), and "the log lost its own last lines" is exactly the fact that
+ * explains a bad shutdown.
+ */
+export interface AgentLogDropInfo {
+  /**
+   * `unbound` = the entry never had a sink, so it was retained (bounded) for the next one.
+   *
+   * `closed` is reserved for a future post-teardown reporter and is never produced today: after
+   * `close()` there is nowhere to write and nobody left to drain a buffer, so those lines go to
+   * `console.warn` only (`agent-log.ts`).
+   */
+  stage: "closed" | "unbound";
+  count: number;
+  /** Entries already dropped by the pending-buffer cap (unbound case only). */
+  capDropped?: number;
+}
+
 /** One persistence failure, as reported by the sink's {@link AgentLogFileSinkOptions.onPersistError}. */
 export interface LogPersistErrorInfo {
   /** Which gate rejected the bytes. */

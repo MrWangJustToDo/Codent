@@ -16,7 +16,14 @@ import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, normalize, parse, resolve, sep } from "node:path";
 
-import { MemoryManager, findRelevantMemories, formatRelevantMemories, registerCoreEnv } from "../dist/dev.mjs";
+import {
+  DEFAULT_MAX_SESSION_MEMORY_BYTES,
+  MemoryManager,
+  MemoryService,
+  findRelevantMemories,
+  formatRelevantMemories,
+  registerCoreEnv,
+} from "../dist/dev.mjs";
 
 import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
 
@@ -137,6 +144,57 @@ assert.ok(!filenames.includes("expired-note.md"), "expired memory never selected
 const injected = formatRelevantMemories(relevant);
 assert.ok(injected.includes("<relevant_memories>"), "injected text wraps in relevant_memories");
 assert.ok(injected.includes("user-prefers-tabs"), "injected text contains memory");
+
+// ============================================================================
+// 7. The session budget ACCUMULATES (it used to restart from zero every turn)
+// ============================================================================
+//
+// `maxSessionBytes` was passed as a per-CALL ceiling while its name promised a session cap: each turn
+// could inject up to it again, and every block stayed on the wire (admitted by hash, superseded not
+// replaced). 20 memories × ~4 KB therefore reached ~80 KB of `<relevant_memories>` while the code
+// believed it had capped 60 KB.
+{
+  const body = "tabs setting detail. ".repeat(200);
+  for (let i = 0; i < 20; i += 1) {
+    await manager.writeMemory(`budget-note-${i}`, "reference", `tabs note ${i}`, body);
+  }
+
+  const statuses = [];
+  const service = new MemoryService((type, payload) => {
+    if (type === "memory:prefetch") statuses.push(payload.status);
+  });
+  service.setManager(manager);
+
+  let injectedBytes = 0;
+  for (let turn = 0; turn < 10; turn += 1) {
+    service.clearTurnContext();
+    await service.prefetchRelevantMemories({
+      // `extractUserQuery` reads ModelMessage shape (`content`), not UIMessage parts.
+      messages: [{ role: "user", content: "tabs" }],
+      complete: null,
+    });
+    const content = service.getRelevantContent();
+    if (!content) continue;
+    injectedBytes += Buffer.byteLength(content, "utf-8");
+    service.commitSurfacedMemories();
+  }
+
+  assert.ok(
+    injectedBytes <= DEFAULT_MAX_SESSION_MEMORY_BYTES,
+    `injected bytes stay within the session budget (got ${injectedBytes})`
+  );
+  // The cap is BINDING: three turns of 5 × ~4 KB fill it, and the fourth retrieves nothing. Under the
+  // old per-turn reading the same fixture injected ~80 KB (every turn restarted from zero).
+  assert.ok(
+    injectedBytes >= DEFAULT_MAX_SESSION_MEMORY_BYTES * 0.8,
+    `the budget is actually reached (got ${injectedBytes} of ${DEFAULT_MAX_SESSION_MEMORY_BYTES})`
+  );
+  assert.ok(
+    statuses.filter((status) => status === "selected").length > 0,
+    "fixture sanity: turns selected memories before the cap"
+  );
+  assert.ok(injectedBytes > 0, "fixture sanity: something was injected before the cap");
+}
 
 // Cleanup
 await rm(root, TEMP_RM_OPTIONS);

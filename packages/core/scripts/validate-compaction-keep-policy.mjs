@@ -12,7 +12,9 @@ import { convertMessagesToModelMessages } from "@tanstack/ai";
 import assert from "node:assert/strict";
 
 import {
+  applyCompactionResult,
   createCompactionConfig,
+  UsageTracker,
   deriveKeepRecentTokens,
   findCutPointByBudget,
   getModelVisibleMessages,
@@ -92,6 +94,39 @@ assert.deepEqual(keepPolicyProjectionOptions({ kind: "tokens", keepRecentTokens:
   keepRecentTokens: 5_000,
 });
 
+// The clamp only removes room that does not exist — it must never DISABLE compaction.
+//
+// `keepRecentTokens < triggerAt` is true for every clamp value, including a degenerate 1, so the
+// relationship alone is not evidence. The reachable bad shape is a `tokenThreshold` smaller than the
+// reserve: the keep budget collapses toward 0, and a cut at index 0 is a no-op that reports `skipped`
+// on every model call forever. Asserted on a real chain, because the boundary walk is what turns a
+// tiny budget into a usable cut.
+{
+  const policy = resolveKeepPolicy({ tokenThreshold: 8_000 }, 128_000);
+  assert.ok(policy.keepRecentTokens >= 1, "the clamp always returns a positive budget");
+  assert.ok(
+    policy.keepRecentTokens < resolveAutoCompactTrigger({ tokenThreshold: 8_000 }, 128_000).triggerAt,
+    "…below the trigger, which is the whole point of the clamp"
+  );
+  const chain = [
+    user("first question"),
+    assistant("first answer"),
+    user("second question"),
+    assistant("second answer"),
+  ];
+  const { cutIndex } = findCutPointByBudget(chain, policy.keepRecentTokens);
+  assert.ok(cutIndex > 0, `a degenerate keep budget must still cut (got cutIndex ${cutIndex})`);
+  assert.ok(chain.length - cutIndex >= 1, "…and keep at least the newest message");
+}
+
+// An explicit budget that fits under the trigger is NOT lowered: the clamp is a ceiling, not a
+// normalisation, and silently shrinking a working config is the other half of this rule.
+assert.equal(
+  resolveKeepPolicy({ keepRecentTokens: 10_000, tokenThreshold: 200_000 }, 200_000).keepRecentTokens,
+  10_000,
+  "a budget with room is preserved verbatim"
+);
+
 // ============================================================================
 // Trigger base — working budget (tokenThreshold), clamped to the real window
 // ============================================================================
@@ -151,6 +186,44 @@ assert.deepEqual(resolveAutoCompactTrigger({ compactAtPercent: 80 }, 32_000), {
 }
 
 // ============================================================================
+// The CHECKPOINT's recorded budget wins over the current policy
+//
+// Everything before a checkpoint is frozen, so re-walking with the budget that compaction used
+// reproduces its cut. Re-deriving from the CURRENT policy is what let a `/models` switch to a larger
+// window (or a late models.dev read) widen the kept window on the next projection — pulling
+// already-summarized messages back onto the wire, so the prompt became "summary + originals".
+// ============================================================================
+{
+  const old = Array.from({ length: 6 }, (_, i) => user(`old-${i} ${"y".repeat(8_000)}`));
+  const kept = Array.from({ length: 3 }, (_, i) => user(`kept-${i} ${"x".repeat(200)}`));
+  const anchored = createCompactionSummaryUIMessage("ANCHORED\n[END SUMMARY]", undefined, {
+    keepRecentTokens: 300,
+  });
+  const chronologic = convertMessagesToModelMessages([...old, ...kept, anchored]);
+
+  // A policy that would keep EVERYTHING (a bigger model window) must not undo the recorded cut.
+  const wire = getModelVisibleMessages(chronologic, { keepRecentTokens: 200_000 });
+  assert.equal(wire[0].role, "user");
+  assert.ok(JSON.stringify(wire[0]).includes("ANCHORED"), "the checkpoint heads the wire");
+  // The exact kept count is the cut helper's business (it may widen by one to keep a turn intact);
+  // the invariant is that NOTHING summarized comes back.
+  assert.ok(wire.length <= 1 + kept.length + 1, `the wire stays at the recorded tail (got ${wire.length})`);
+  assert.equal(JSON.stringify(wire).includes("old-0"), false, "summarized history does not come back");
+
+  // A checkpoint written before the anchor existed carries none → the caller's policy applies, which
+  // is the pre-fix behaviour (those sessions keep working, they just keep the old semantics).
+  const legacy = createCompactionSummaryUIMessage("LEGACY\n[END SUMMARY]");
+  const legacyWire = getModelVisibleMessages(convertMessagesToModelMessages([...old, ...kept, legacy]), {
+    keepRecentTokens: 200_000,
+  });
+  assert.equal(
+    JSON.stringify(legacyWire).includes("old-0"),
+    true,
+    "an unanchored checkpoint keeps the pre-fix behaviour (the caller's larger policy applies)"
+  );
+}
+
+// ============================================================================
 // Pairing safety across random-ish budgets
 // ============================================================================
 
@@ -181,6 +254,56 @@ assert.deepEqual(resolveAutoCompactTrigger({ compactAtPercent: 80 }, 32_000), {
     // Never cut on a tool message.
     assert.notEqual(kept[0].role, "tool");
   }
+}
+
+// ============================================================================
+// Apply transports the producer's budget onto the checkpoint
+//
+// The projection can only read what was written, so the writer is asserted too: `applyCompactionResult`
+// prefers `result.keepRecentTokens` over the policy resolved at the call site (they differ on the
+// reactive path by design).
+// ============================================================================
+{
+  const written = [];
+  const channel = {
+    getMessages: () => written,
+    setMessages: (next) => {
+      written.splice(0, written.length, ...next);
+    },
+  };
+  const applied = applyCompactionResult({}, [], channel, new UsageTracker(), {
+    compacted: true,
+    tokensBefore: 10,
+    tokensAfter: 5,
+    type: "auto",
+    summary: "APPLIED BODY",
+    keepRecentTokens: 1_234,
+  });
+  assert.equal(applied, true, "the checkpoint is applied");
+  const summary = written.at(-1);
+  assert.equal(
+    summary?.metadata?.compaction?.keepRecentTokens,
+    1_234,
+    "the checkpoint carries the budget the producer cut with"
+  );
+}
+
+// The anchor survives the SESSION LOG, not just the in-memory object.
+//
+// This is the load-bearing link of the whole fix: if `metadata.compaction` did not survive
+// `dehydrateUIMessages` → JSONL → `hydrateUIMessages` → `convertMessagesToModelMessages`, every
+// restored session would silently fall back to the current policy and re-widen the kept window —
+// "summary + originals", which is exactly what the anchor exists to prevent. The dehydrate/hydrate
+// pair is a JSON round trip, so the round trip is what this asserts.
+{
+  const summaryUI = createCompactionSummaryUIMessage("ROUND TRIP BODY", undefined, { keepRecentTokens: 4_321 });
+  const persisted = JSON.parse(JSON.stringify([summaryUI]));
+  const wire = convertMessagesToModelMessages(persisted);
+  assert.equal(
+    wire[0]?.metadata?.compaction?.keepRecentTokens,
+    4_321,
+    "the compaction anchor is still readable after a JSON round trip (session log)"
+  );
 }
 
 // ============================================================================
@@ -269,5 +392,33 @@ assert.deepEqual(
   },
   { tokenThreshold: 100_000, keepRecentTokens: undefined }
 );
+
+// --- the keep budget can never reach the trigger point ----------------------
+//
+// The trigger comes from `tokenThreshold`, the keep budget from the CONTEXT WINDOW. With the
+// defaults unconstrained, `{ tokenThreshold: 30_000 }` on a 200k window derived a 46k keep: the cut
+// had no room, `findCutPointByBudget` returned 0 on every call, and auto-compaction reported
+// `skipped` forever — silently disabled, while the UI still showed a percentage that never moved.
+{
+  const window = 200_000;
+  for (const config of [
+    { tokenThreshold: 30_000 },
+    { tokenThreshold: 30_000, keepRecentTokens: 90_000 },
+    { tokenThreshold: 8_000 },
+  ]) {
+    const policy = resolveKeepPolicy(config, window);
+    const { triggerAt } = resolveAutoCompactTrigger(createCompactionConfig(config), window);
+    assert.ok(
+      policy.keepRecentTokens < triggerAt,
+      `keep (${policy.keepRecentTokens}) must leave room below the trigger (${triggerAt}) for ${JSON.stringify(config)}`
+    );
+  }
+  // A normal config is untouched: the derived keep already sits well below the trigger.
+  assert.equal(
+    resolveKeepPolicy({ tokenThreshold: 100_000 }, window).keepRecentTokens,
+    deriveKeepRecentTokens(window, createCompactionConfig().reserveTokens ?? 16_384),
+    "the clamp does not move a keep budget that already fits"
+  );
+}
 
 console.log("compaction-keep-policy validation passed");

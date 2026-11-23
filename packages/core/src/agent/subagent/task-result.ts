@@ -7,6 +7,7 @@
  * leaves the runner as spawn + span + cleanup.
  */
 
+import { reportedRunTokens } from "../../runtime-types/token-usage.js";
 import { extractAssistantText } from "../stream/extract-assistant-text.js";
 import { agentStreamKey } from "../stream-hub";
 
@@ -231,14 +232,13 @@ export async function finalizeSubagentTask(input: FinalizeSubagentTaskInput): Pr
     iterations: statusFlags.iterations,
     maxIterations: statusFlags.maxIterations,
     durationMs,
-    usage: {
-      inputTokens: usage.inputTokens ?? 0,
-      outputTokens: usage.outputTokens ?? 0,
-      totalTokens: usage.totalTokens ?? 0,
-    },
+    // Flat, and the ONLY copy: a nested `usage` object was carried alongside these three fields and
+    // summarized to `usageBytes` + a 200-char preview by the log, so every reader with a numeric
+    // question already used the flat form. `totalTokens` comes from the one helper so the event and
+    // the `task` result cannot disagree (`usage.totalTokens` omits the cached prompt).
     inputTokens: usage.inputTokens ?? 0,
     outputTokens: usage.outputTokens ?? 0,
-    totalTokens: usage.totalTokens ?? 0,
+    totalTokens: reportedRunTokens(usage, billedInputTokens),
     costUsd: subagentManaged.usage.getTotalCostUsd(),
   };
 
@@ -275,7 +275,7 @@ export async function finalizeSubagentTask(input: FinalizeSubagentTaskInput): Pr
     usage: {
       inputTokens: usage.inputTokens ?? 0,
       outputTokens: usage.outputTokens ?? 0,
-      totalTokens: billedInputTokens + (usage.outputTokens ?? 0),
+      totalTokens: reportedRunTokens(usage, billedInputTokens),
       billedInputTokens,
       cacheReadTokens: usage.cacheReadTokens ?? 0,
       cacheWriteTokens: usage.cacheWriteTokens ?? 0,

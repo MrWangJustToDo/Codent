@@ -207,8 +207,13 @@ import { AGENT_EVENT_META, createAgentEventBus } from "../dist/dev.mjs";
   assert.equal(AGENT_EVENT_META["agent:tool-approval-resolved"].channel, "lifecycle");
   assert.equal(AGENT_EVENT_META["subagent:progress-summary-error"].channel, "lifecycle");
   // The pre-fork queue rides the lifecycle channel with the rest of the subagent family, so a host
-  // that already watches subagent rows gets the wait state on the same subscription.
+  // that already watches subagent rows gets the wait state on the same subscription — but it is NOT
+  // retained: `lifecycle` is append-only and its one retained slot belongs to a lifecycle fact. The
+  // queue survives a late subscribe through the retained `subagents` snapshot (`queued`).
   assert.equal(AGENT_EVENT_META["subagent:queue"].channel, "lifecycle");
+  assert.equal(AGENT_EVENT_META["subagent:queue"].retained, undefined, "the queue is an event, not a retained fact");
+  assert.equal(AGENT_EVENT_META["session:subagents"].retained, true, "…the retained source is the subagents snapshot");
+  assert.equal(AGENT_EVENT_META["session:subagents"].channel, "subagents");
 }
 
 // ============================================================================
@@ -279,6 +284,39 @@ import { AGENT_EVENT_META, createAgentEventBus } from "../dist/dev.mjs";
   assert.ok(elapsed < 1000, `a hung handler cannot hold the chain (waited ${elapsed}ms)`);
   assert.equal(reported.length, 1, "the timeout is reported once, like a throw");
   assert.match(String(reported[0].error), /did not settle within \d+ms/);
+}
+
+// ============================================================================
+// 4d. Interceptor rollback is PER HANDLER
+//
+// A throwing handler may only undo ITS OWN partial write. Clearing the field reverted a rewrite an
+// earlier interceptor legitimately produced (the extension wrapper has always snapshotted; the bus
+// cleared), so one broken third-party `tool:after` handler silently discarded another extension's
+// result shaping.
+// ============================================================================
+{
+  const bus = createAgentEventBus("root", () => {});
+  bus.onIntercept("tool:after:*", (event) => {
+    event.modifiedResult = { patched: true };
+  });
+  bus.onIntercept("tool:after:*", (event) => {
+    event.modifiedResult = { halfWritten: true };
+    throw new Error("late hook boom");
+  });
+  let lastRan = false;
+  bus.onIntercept("tool:after:*", () => {
+    lastRan = true;
+  });
+
+  const event = { type: "tool:after:read_file", payload: { result: {} }, defaultReturn: undefined };
+  await bus.intercept(event);
+  assert.deepEqual(
+    event.modifiedResult,
+    { patched: true },
+    "the failing handler's own write is rolled back, the earlier interceptor's rewrite survives"
+  );
+  assert.equal(lastRan, true, "the chain continues after a throw (unchanged behaviour)");
+  assert.equal(event.handlerError, true, "the failure is still marked fail-closed");
 }
 
 console.log("agent-event-bus validation passed");

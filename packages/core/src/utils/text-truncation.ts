@@ -10,6 +10,20 @@
 /** The default omission marker. */
 export const OMISSION_MARKER = "...";
 
+/**
+ * `text.slice(0, end)` that never splits a surrogate pair.
+ *
+ * A cut between the halves of an astral character (an emoji, a rare CJK glyph) leaves a lone
+ * surrogate: valid JS, invalid UTF-8 on the wire, and some providers reject the request or replace it
+ * with U+FFFD. Truncation is where that happens, so the guard lives here rather than at each call site.
+ */
+export function sliceAtCodePoint(text: string, end: number): string {
+  if (end <= 0) return "";
+  if (end >= text.length) return text;
+  const code = text.charCodeAt(end - 1);
+  return code >= 0xd800 && code <= 0xdbff ? text.slice(0, end - 1) : text.slice(0, end);
+}
+
 export interface TruncateTextOptions {
   /** Marker appended when truncation occurs. Defaults to {@link OMISSION_MARKER}. */
   marker?: string;
@@ -27,5 +41,5 @@ export function truncateText(text: string, maxLength: number, options: TruncateT
   const marker = options.marker ?? OMISSION_MARKER;
   if (text.length <= maxLength) return text;
   const keep = Math.max(0, maxLength - marker.length);
-  return text.slice(0, keep) + marker;
+  return sliceAtCodePoint(text, keep) + marker;
 }

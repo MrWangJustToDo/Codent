@@ -36,6 +36,35 @@ const DYNAMIC_TABLE_ONLY = new Set(["discover_tools", "execute_typescript", "beg
 /** The plan authoring factory takes its name as a parameter, so both names share one declaration. */
 const FACTORY_NAMES = ["create_plan", "update_plan"];
 
+/**
+ * Definition sites whose `name:` is a module CONSTANT rather than a string literal.
+ *
+ * The name↔present pairing above requires the literal, so these are resolved separately: the
+ * constant's VALUE must equal the table key and the `present` block registered under it must match.
+ * Listing a name here is not an exemption — a missing/incorrect declaration still fails.
+ */
+const CONSTANT_NAMED = new Map([
+  ["computer_screenshot", { file: "agent/computer-use/extension.ts", constant: "COMPUTER_SCREENSHOT_TOOL" }],
+  ["computer", { file: "agent/computer-use/extension.ts", constant: "COMPUTER_ACTION_TOOL" }],
+]);
+
+/** Resolve `name: CONST,` … `present: { … }` for one constant-named definition site. */
+function collectConstantDeclaration(name, { file, constant }) {
+  const src = readFileSync(join(SRC, file), "utf8");
+  const valueMatch = src.match(new RegExp(`const ${constant}\\s*=\\s*"([a-z_]+)"`));
+  if (!valueMatch || valueMatch[1] !== name) return undefined;
+  const nameIndex = src.search(new RegExp(`name:\\s*${constant}\\s*,`));
+  if (nameIndex < 0) return undefined;
+  const presentMatch = src.slice(nameIndex).match(/present:\s*\{([^}]*)\}/);
+  if (!presentMatch) return undefined;
+  const entry = parseEntries(presentMatch[1]);
+  // `[^}]*` stops at the FIRST `}`: a `present` containing an inline object/function body would be
+  // cut in half and parse to `{}`, which used to read as "declared with no fields" and pass. A
+  // non-empty `category` is the minimum a real declaration carries, so an empty parse is a failure.
+  if (Object.keys(entry).length === 0) return undefined;
+  return { ...entry, file };
+}
+
 function walk(dir) {
   return readdirSync(dir).flatMap((entry) => {
     const path = join(dir, entry);
@@ -62,7 +91,7 @@ function collectDeclarations() {
 function parseEntries(body) {
   const entry = {};
   // Keys are identifiers; values are strings or booleans. The old `"([a-z]+)"` value pattern
-  // silently dropped any value with a dot or an uppercase letter (`labelKey: "tool.read"`), so
+  // silently dropped any value with a dot or an uppercase letter (`summary: …`), so
   // such an entry was compared with a missing field instead of the real one.
   for (const [, key, value] of body.matchAll(/([A-Za-z_$][\w$]*):\s*("([^"]*)"|true|false)/g)) {
     entry[key] = value.startsWith('"') ? value.replaceAll('"', "") : value === "true";
@@ -86,7 +115,9 @@ assert.ok(table.size > 20, `fallback table parsed (${table.size} entries)`);
 
 const problems = [];
 for (const [name, expected] of table) {
-  const actual = declared.get(name);
+  const actual =
+    declared.get(name) ??
+    (CONSTANT_NAMED.has(name) ? collectConstantDeclaration(name, CONSTANT_NAMED.get(name)) : undefined);
   if (!actual) {
     if (!DYNAMIC_TABLE_ONLY.has(name)) problems.push(`${name}: no \`present\` declaration found`);
     continue;

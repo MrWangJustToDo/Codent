@@ -107,6 +107,7 @@ import { AgentStreamHub } from "../agent/stream-hub/agent-stream-hub.js";
 import {
   clearTaskRuns,
   discardRegisteredPrefork,
+  peekSubagentRuns,
   peekTaskPreforkCoordinator,
 } from "../agent/subagent/subagent-runs.js";
 import { buildSubagentSummaries } from "../agent/subagent/subagent-summaries.js";
@@ -211,6 +212,7 @@ import type { TelemetryEventType, EmitAgentTelemetryOptions, EmitPayloadArgs } f
 import type { AgentProfileId, AgentToolsetProfile } from "../runtime-types/agent-profile.js";
 import type { AgentRetryState } from "../runtime-types/agent-retry.js";
 import type { AgentStatus, RunFinalizeReason } from "../runtime-types/agent-status.js";
+import type { RestoredTaskSettlement } from "../runtime-types/session-host.js";
 import type {
   QueuedMessageContent,
   AgentIterationState,
@@ -220,6 +222,7 @@ import type {
   SessionInteractionsSnapshot,
   SessionJobsSnapshot,
   QueuedMessagesSnapshot,
+  QueuedSubagentTask,
   WhenClearStatus,
 } from "../runtime-types/session-payloads.js";
 
@@ -228,13 +231,13 @@ import type {
 // ============================================================================
 
 /**
- * `subagent:*` types that move work between seats but do not change a retained row.
+ * `subagent:*` types that move work between seats but cannot change the retained snapshot.
  *
- * The row summary carries status / task phase / usage, not queue depth. Rebuilding the whole list
- * for these sent two full frames per admission (one for the queue event, one for the transition
- * that followed). Kept as an exclusion set, so a new event type refreshes by default.
+ * The snapshot carries rows AND the queue, so a queue change does refresh it — a discarded seat does
+ * not (it has no row and never entered the queue). Kept as an exclusion set, so a new event type
+ * refreshes by default.
  */
-const NON_ROW_SUBAGENT_EVENTS: ReadonlySet<string> = new Set(["subagent:queue", "subagent:prefork-discarded"]);
+const NON_ROW_SUBAGENT_EVENTS: ReadonlySet<string> = new Set(["subagent:prefork-discarded"]);
 
 /**
  * Args tuple for {@link ManagedAgent.emitEvent}: the payload is mandatory when its type has a
@@ -705,6 +708,17 @@ export class ManagedAgent {
       getLog: () => this.log,
       getCoreEnv: () => this.getCoreEnv(),
       attachViaManager: (log, options) => this.manager?.getLogExtension()?.attachSink(log, options),
+      // A build that failed before the sink was bound drops its bootstrap buffer with the object.
+      // stderr is the only reader there for a browser/ACP host, so the loss is reported on the one
+      // channel the session still has.
+      onEntriesDropped: (info) => {
+        this.emitEvent("session:save-error", {
+          target: "agent log",
+          error:
+            `dropped ${info.count} buffered log entr${info.count === 1 ? "y" : "ies"} (no sink bound)` +
+            (info.capDropped ? ` (+${info.capDropped} cap-overflowed)` : ""),
+        });
+      },
     });
     this.tools = init.tools;
     this.toolService = new AgentToolService(this.tools);
@@ -803,7 +817,6 @@ export class ManagedAgent {
     this.childIds = [];
     this.createdAt = Date.now();
     this.updatedAt = Date.now();
-    this.extensions.setManagedToolsProvider(() => this.tools);
     this.statusController = createAgentStatusController({
       getStatus: () => this.getStatus(),
       getAgentState: () => this.agentState,
@@ -919,7 +932,6 @@ export class ManagedAgent {
       getToolService: () => this.toolService,
       getTools: () => this.tools,
       getToolCompactCache: () => this.toolCompactCache,
-      getManagedTools: () => this.extensions.getManagedToolsProvider()?.() ?? {},
     });
 
     // ============================================================================
@@ -1036,6 +1048,10 @@ export class ManagedAgent {
             }
           }
         },
+        // The teardown is asynchronous even though `destroyAgent` is not (extension deactivate,
+        // MCP/LSP shutdown, log flush). The switch awaits it so the leaving session's
+        // `subagent:destroyed` rows and shutdown diagnostics land in the transcript they describe.
+        settleChildTeardowns: () => this.manager?.settleTeardowns?.() ?? Promise.resolve(),
         resetBackgroundWork: (reason) => {
           // Drop the facade whole: its sources are closed/generation-bumped by `reset()`, and the
           // next session builds a fresh pair (same lifecycle the command registry always had).
@@ -1166,7 +1182,7 @@ export class ManagedAgent {
       });
       return;
     }
-    const next = deriveAgentState(status, this.getError());
+    const next = deriveAgentState(status);
     if (this.agentState.wait === "approval" && next.wait === "none" && next.outcome === "none") {
       this.emitDiagnostic("session", "Ignored a status write that would drop a pending wait", {
         level: "warn",
@@ -1215,6 +1231,16 @@ export class ManagedAgent {
         });
       },
     });
+    // The event's message has ONE owner: the run coordinator, which is what the L1 frame's `error`
+    // is built from. `AgentState` used to mirror it instead, which is how a `fail` event's text
+    // reached the axes while the frame itself reported an empty error (and why a clearing `setError`
+    // could leave a stale message behind on the axes).
+    //
+    // Keyed on the VERDICT the transition actually produced, not on "the field is present": a
+    // `settle`/`stream-end` carrying a message but `result: "completed"` must not invent a fault on a
+    // healthy run — the guard the old `setError` mirror had, which moving the write here dropped.
+    const eventError: unknown = "error" in event ? event.error : undefined;
+    if (typeof eventError === "string" && next.outcome === "error") this.run.setError(eventError);
     this.agentState = next;
     const status = projectAgentStatus(next);
     this.applyStatus(status, event.type, next.wait === "none" ? undefined : next.wait);
@@ -1279,13 +1305,9 @@ export class ManagedAgent {
 
   setError(error: string): void {
     this.run.setError(error);
-    // The axes are the serialized authority for the message (`fail` / `stream-end` write them), and a
-    // CLEARING write — `setError("")` on a retry or a compaction repair — never did, so the state
-    // frame kept reporting a fault the run had already moved past while `error` was empty. Mirror
-    // only onto an axes FAILURE: writing a message onto a healthy/completed state would invent one.
-    if (this.agentState.outcome === "error") {
-      this.agentState = { ...this.agentState, ...(error ? { errorMessage: error } : { errorMessage: undefined }) };
-    }
+    // No axes mirror: `errorMessage` used to be copied onto `AgentState` here and in four transition
+    // branches, and nothing ever read it — `getError()` reads the run coordinator. A second copy of
+    // the same fact only had a way to drift.
     this.emitStateChange();
   }
 
@@ -1431,14 +1453,38 @@ export class ManagedAgent {
   }
 
   /**
+   * Settled `run_in_background` task results this agent still holds for `sessionId`.
+   *
+   * The restore asks for this BEFORE writing the "session ended" marker onto a running task part:
+   * a same-session resume keeps the ledger, so a task whose result never reached its part can still
+   * be replayed. Scoped by the row's `ownerSessionId` — a cross-session switch still has the leaving
+   * session's rows in the ledger at restore time, and replaying those would put one conversation's
+   * result into another's transcript.
+   */
+  getSettledBackgroundTasks(sessionId: string): ReadonlyMap<string, RestoredTaskSettlement> {
+    const settled = new Map<string, RestoredTaskSettlement>();
+    for (const run of peekSubagentRuns(this)?.settledBackground() ?? []) {
+      if (run.ownerSessionId !== sessionId) continue;
+      settled.set(run.toolCallId, { output: run.output, ...(run.display ? { display: run.display } : {}) });
+    }
+    return settled;
+  }
+
+  /**
    * Child-agent list for the retained `subagents` channel.
    *
    * Same projection as the snapshot's `subagents` field, and the reason it needs a channel at all:
    * `subagent:created` / `subagent:destroyed` carry a single id, so off-process a task row could
    * never be added or removed — the list only moved on a full snapshot refetch.
    */
-  readSubagents(): { subagents: AgentSessionSubagentSummary[] } {
-    return { subagents: buildSubagentSummaries(this, this.manager) };
+  readSubagents(): { subagents: AgentSessionSubagentSummary[]; queued: QueuedSubagentTask[] } {
+    // One snapshot for both: the rows describe child work, and a waiting `task` is child work that
+    // has no row yet. They used to be two retained events on different channels, which is how the
+    // queue ended up as the only retained value on an append-only channel.
+    return {
+      subagents: buildSubagentSummaries(this, this.manager),
+      queued: peekTaskPreforkCoordinator(this)?.queueSnapshot() ?? [],
+    };
   }
 
   /**
@@ -1677,10 +1723,12 @@ export class ManagedAgent {
     //
     // The event is dispatched by the CHILD, but the rows describe the PARENT's children, so resolve
     // the parent and refresh its scope. A root agent emitting its own event refreshes itself.
-    // Queue / discarded-seat events move work between seats but do not change a row (the summary
-    // carries status/phase/usage, not queue depth), and rebuilding the whole list for them sent a
-    // second full frame per admission. Every other `subagent:*` refreshes, so a NEW event type is
-    // covered by default rather than silently leaving rows stale.
+    // A discarded seat moves work between seats without changing the snapshot; a QUEUE change does
+    // change it (the summary now carries `queued`), so `subagent:queue` is deliberately NOT excluded.
+    // That event does not reach this hook anyway when emitted by the prefork middleware (that path
+    // dispatches onto the bus directly), which is why the middleware republishes the snapshot itself.
+    // Every other `subagent:*` refreshes, so a NEW event type is covered by default rather than
+    // silently leaving rows stale.
     if (type.startsWith("subagent:") && !NON_ROW_SUBAGENT_EVENTS.has(type)) {
       const parent = this.parentId ? this.manager?.getAgent(this.parentId) : this;
       parent?.refreshSubagents();
@@ -1719,10 +1767,9 @@ export class ManagedAgent {
     bus.retain("session:interaction", () => this.readInteractions());
     bus.retain("agent:iteration", () => this.readIteration());
     bus.retain("session:jobs", () => this.readJobs());
+    // Carries the queue too: a waiting `task` has no subagent yet, so it appears in neither a row nor
+    // `agent:tool-start`, and this retained snapshot is what a late subscriber reads it from.
     bus.retain("session:subagents", () => this.readSubagents());
-    // A snapshot with no retained value was invisible to a late subscriber: a queued `task` has no
-    // subagent yet, so it appears in neither `session:subagents` nor `agent:tool-start`.
-    bus.retain("subagent:queue", () => ({ queued: peekTaskPreforkCoordinator(this)?.queueSnapshot() ?? [] }));
     // Route telemetry through this agent's scoped bus (up-flows to the root
     // observer / Event→Log bridge) instead of the process-wide root bus.
     // A new bus has no subscribers that saw the old frames; do not suppress its first snapshot.
@@ -2175,7 +2222,8 @@ export class ManagedAgent {
 
   /**
    * Persist `uiMessages` when an explicit trigger fires and the fingerprint changed.
-   * Reasons: `user-message` | `pump-complete` | `force` (via {@link saveSessionUIMessages}).
+   * Reasons: see `SessionSaveReason` (`user-message` | `client-tool-result` | `pump-complete` | `force`),
+   * via {@link saveSessionUIMessages}.
    * Fire-and-forget — dehydrate + disk write happen in the background.
    */
   maybeSaveSessionUIMessages(uiMessages: TanStackUIMessage[], reason: SessionSaveReason): Promise<boolean> | undefined {

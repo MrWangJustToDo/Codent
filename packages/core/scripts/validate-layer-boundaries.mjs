@@ -170,7 +170,7 @@ const ALLOWED_EDGES = {
     mode: "type-only",
     reason:
       "hosts.ts exposes the AgentUIChannel port (`agent/ui/ui-channel.ts` implements it); session-runtime.ts names the agent-side collaborators of the session switch.",
-    onlySources: ["hosts", "session-runtime", "session-host", "chat-host", "run-host"],
+    onlySources: ["hosts", "session-runtime", "session-host", "chat-host", "run-host", "event-payloads/session"],
     onlyTargets: [
       "approval/approval-requirement",
       "approval/tool-approval-table",
@@ -192,6 +192,7 @@ const ALLOWED_EDGES = {
       "state/agent-status-controller",
       "stream-hub/agent-stream-hub",
       "todo/index",
+      "tools/presentation/types",
       "ui/ui-channel",
     ],
   },

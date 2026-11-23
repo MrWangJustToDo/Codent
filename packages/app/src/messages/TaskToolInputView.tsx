@@ -31,7 +31,7 @@ export const TaskToolInputView = ({ part, toolInput }: { part: ToolCallPart; too
     // `agent:tool-start` until they are admitted. A bare spinner there made every waiting task an
     // anonymous row that could not be told apart from the others, or from a task with nothing to
     // show yet. The label comes from the tool input this row already carries; the `queued` entry
-    // comes from `subagent:queue` and is what makes the wait itself visible.
+    // rides the retained `subagents` snapshot (`queued`) and is what makes the wait itself visible.
     const waiting = queued.find((entry) => entry.toolCallId === part.id);
     return (
       <Box flexDirection="row" height={1} paddingLeft={2} flexWrap="nowrap">

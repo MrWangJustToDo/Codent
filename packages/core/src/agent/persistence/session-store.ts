@@ -430,6 +430,19 @@ export class SessionStore {
   }
 
   /**
+   * Preflight: refuse a session id another PROCESS is writing, without touching any local state.
+   *
+   * `readSessionForRestore` acquires the same lock, but only after a switch has already unloaded the
+   * current session — so a target that was plainly locked still aborted the run on screen and
+   * cleared its queue. The lock is a disk sidecar, so it can be checked before the unload; the read
+   * still re-acquires it (this is a probe, not the claim), which keeps the atomic part where it was.
+   */
+  async assertUnlocked(id: string): Promise<void> {
+    if (!isSafeSessionId(id)) throw new Error(`Invalid session id: ${id}`);
+    await throwIfLockedByAnotherProcess(this.env, id);
+  }
+
+  /**
    * Delete a session by ID (its log; there is no separate snapshot file).
    *
    * The agent timeline is NOT deleted: it is one workspace-wide file (`.agents/logs/agent.log`)
@@ -453,6 +466,7 @@ export class SessionStore {
     sessionSaveLocks.delete(key);
     this.lastSaved.delete(id);
     this.statusStamps.delete(id);
+    this.tailTerminated.delete(id);
     let removed = false;
     if (await this.fs.exists(logPath)) {
       await this.fs.remove(logPath);
@@ -477,6 +491,11 @@ export class SessionStore {
   clearCache(id: string): void {
     this.lastSaved.delete(id);
     this.statusStamps.delete(id);
+    // `tailTerminated` is deliberately KEPT. The two maps above are memoized derivations that a
+    // reload re-primes; this one is the only knowledge that the file's last line is intact, and a
+    // leaving session can still have an admitted write in flight. Dropping it makes the next append
+    // assume "terminated" (`?? true`) over a possibly torn tail — the glued-line corruption the flag
+    // exists to avoid. `delete()` clears it, where the file is going away anyway.
   }
 
   /**

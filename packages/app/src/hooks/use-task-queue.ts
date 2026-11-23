@@ -1,16 +1,17 @@
 /**
  * The pre-fork queue: `task` calls waiting for a concurrency slot.
  *
- * Core publishes the whole queue on every admission and discard (`subagent:queue`, a full
- * SNAPSHOT on the `lifecycle` channel) because a waiting task is otherwise invisible: it has no
- * subagent yet, so it appears in neither `snapshot.subagents` nor `agent:tool-start`, and its
- * transcript row would have nothing to say about why it has not started.
+ * Core publishes the whole queue on every admission and discard as the `queued` field of the
+ * retained `subagents` snapshot, because a waiting task is otherwise invisible: it has no subagent
+ * yet, so it is not a row and has no `agent:tool-start`, and its transcript row would have nothing to
+ * say about why it has not started. It used to be its own retained event on the append-only
+ * `lifecycle` channel, which is the slot that channel can no longer use for a lifecycle fact.
  *
  * The snapshot is replaced, never merged — that is what makes a dropped, duplicated or re-ordered
  * event harmless, and what keeps this hook free of any per-task bookkeeping.
  *
- * Retained: a remount/subscription receives the current queue snapshot, and every mutation still
- * emits a full snapshot. Both carry the same payload; a late subscriber no longer starts empty.
+ * Retained: a remount/subscription receives the current snapshot, and every mutation still emits a
+ * full one. A late subscriber no longer starts empty.
  */
 
 import { useEffect, useState } from "react";
@@ -25,7 +26,7 @@ export interface QueuedTask {
 }
 
 /**
- * Narrow one `subagent:queue` payload, tolerating a host that omits a field.
+ * Narrow one `session:subagents` payload (`{ subagents, queued }`), tolerating a host that omits a field.
  *
  * Only the queue membership is read: occupancy counts were deliberately left out of the payload
  * (a waiting entry *because* the cap is full says nothing with `n/m`, and the cap moves), so there
@@ -52,16 +53,13 @@ export const useTaskQueue = (): QueuedTask[] => {
 
     return session.subscribe(
       (event) => {
-        if (event.channel !== "lifecycle") return;
-        // The lifecycle channel carries the typed AgentEvent ENVELOPE, so the snapshot is
-        // `envelope.payload` — reading `event.payload.queued` silently returned [] forever.
-        // A remote client only `JSON.parse`s a block, so a malformed frame is possible.
-        const envelope = event.payload as { type?: unknown; payload?: unknown } | null | undefined;
-        if (!envelope || typeof envelope !== "object") return;
-        if (envelope.type !== "subagent:queue") return;
-        setQueue(readQueued((envelope.payload ?? {}) as { queued?: unknown }));
+        // The `subagents` channel is the typed snapshot (`{ subagents, queued }`), so no envelope
+        // unwrapping is needed. A remote client only `JSON.parse`s a block, so `readQueued` still
+        // tolerates a malformed payload.
+        if (event.channel !== "subagents") return;
+        setQueue(readQueued(event.payload as { queued?: unknown }));
       },
-      { channels: ["lifecycle"] }
+      { channels: ["subagents"] }
     );
   }, [session]);
 

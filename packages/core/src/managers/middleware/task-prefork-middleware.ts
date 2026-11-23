@@ -94,6 +94,13 @@ export function createTaskPreforkMiddleware(deps: TaskPreforkMiddlewareDeps): Ch
     }
     coordinator.syncQueuedDescriptions(descriptions);
     deps.emitEvent?.("subagent:queue", { queued: coordinator.queueSnapshot() });
+    // The queue lives in the retained `session:subagents` SNAPSHOT, so that is the frame a host
+    // renders from. `deps.emitEvent` is the bound telemetry fn (`createEmitTelemetryFn`), which
+    // dispatches straight onto the bus — it does NOT pass through `ManagedAgent.emitEvent` and
+    // therefore never reaches that method's `subagent:*` refresh hook. Without this line the event
+    // fires, the snapshot never republishes, and a subscribed UI keeps showing a task as started
+    // (the retained value is pull-only, so only a NEW subscriber would see the queue).
+    managed.refreshSubagents();
   };
 
   /**

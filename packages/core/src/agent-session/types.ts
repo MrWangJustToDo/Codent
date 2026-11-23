@@ -36,6 +36,7 @@ import type {
   AgentIterationState,
   SessionInteractionsSnapshot,
   QueuedMessageContent,
+  QueuedSubagentTask,
   SessionJobsSnapshot,
 } from "../runtime-types/session-payloads.js";
 import type { ContentPart, UIMessage } from "@tanstack/ai";
@@ -204,6 +205,14 @@ export interface AgentSessionSnapshot {
   /** Agent-loop progress for the current run, mirroring the retained `iteration` channel. */
   iteration: AgentIterationState;
   subagents: AgentSessionSubagentSummary[];
+  /**
+   * `task` calls waiting for a concurrency slot (mirrors `subagents.queued`).
+   *
+   * On the snapshot as well as the channel because the remote client seeds the `subagents` channel
+   * from the snapshot on remount — a waiting task that only existed on the channel would vanish for
+   * a reconnecting host.
+   */
+  subagentQueue: QueuedSubagentTask[];
 }
 
 // ============================================================================
@@ -402,7 +411,7 @@ export interface AgentSessionChannelPayloads {
   interaction: SessionInteractionsSnapshot;
   iteration: AgentIterationState;
   jobs: SessionJobsSnapshot;
-  subagents: { subagents: AgentSessionSubagentSummary[] };
+  subagents: { subagents: AgentSessionSubagentSummary[]; queued: QueuedSubagentTask[] };
 }
 
 export type AgentSessionEvent = {

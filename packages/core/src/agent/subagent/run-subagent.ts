@@ -17,7 +17,7 @@ import { buildExploreSystemPrompt } from "./explore-prompt.js";
 import { captureStreamFinishReason } from "./run-stats.js";
 import { EMPTY_SUMMARY } from "./subagent-output.js";
 import { beginTaskRun, enterTaskPhase } from "./subagent-runs.js";
-import { SUBAGENT_PARENT_RUN_NOTICE } from "./subagent-stop-reason.js";
+import { resolveSubagentStopReason, subagentStopNotice } from "./subagent-stop-reason.js";
 import { finalizeSubagentTask, subagentPreviewOutput } from "./task-result.js";
 import { SUBAGENT_DEFAULT_MAX_ITERATIONS } from "./types.js";
 
@@ -51,16 +51,31 @@ export function subagentResultToTaskOutput(result: SubagentResult) {
     incomplete: result.incomplete,
     aborted: result.aborted,
     ...(result.stopReason ? { stopReason: result.stopReason } : {}),
-    success: !result.aborted && !result.incomplete,
+    // NO `success`: it is not in `taskOutputSchema`, and `success: false` made the early mirror
+    // render as an error row (`getUiToolState` reads it) for an incomplete-but-finished task — the
+    // authoritative output has no such field, so the two writers disagreed about the same result.
   };
 }
 
-/** Result for an abort that landed before the child could start (or just after spawn). */
-function abortedBeforeStartResult(subagentId: string, profile: AgentProfileId, maxIterations: number): SubagentResult {
+/**
+ * Result for an abort that landed before the child could start (or just after spawn).
+ *
+ * The stop reason comes from the SIGNAL, not a constant: this branch is only reached once the caller
+ * already inspected `abortSignal.reason` (`retainsAbortedPreview`), so hard-coding `parent-run` wrote
+ * "[Task stopped with its parent run.]" for a user Esc and for a destroy — the exact misattribution
+ * `subagent-stop-reason.ts` exists to end, and it went into the parent model's context.
+ */
+function abortedBeforeStartResult(
+  subagentId: string,
+  profile: AgentProfileId,
+  maxIterations: number,
+  reason: unknown
+): SubagentResult {
+  const stopReason = resolveSubagentStopReason({ aborted: true, reason });
   return {
     subagentId,
     profile,
-    output: SUBAGENT_PARENT_RUN_NOTICE,
+    output: subagentStopNotice(stopReason),
     truncated: false,
     iterations: 0,
     maxIterations,
@@ -69,7 +84,7 @@ function abortedBeforeStartResult(subagentId: string, profile: AgentProfileId, m
     reachedLimit: false,
     incomplete: false,
     aborted: true,
-    stopReason: "parent-run",
+    stopReason,
   };
 }
 
@@ -119,7 +134,7 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
   // and its usage must not be booked to (or its part written into) the target session.
   const parentEpoch = parentManaged.captureEpoch();
   if (abortSignal?.aborted) {
-    return abortedBeforeStartResult(subagentId, effectiveProfileId, maxIterations);
+    return abortedBeforeStartResult(subagentId, effectiveProfileId, maxIterations, abortSignal.reason);
   }
 
   const subagent = await manager.spawnSubagent(
@@ -145,7 +160,7 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
     } catch {
       // Cleanup must never mask the abort.
     }
-    return abortedBeforeStartResult(subagentId, effectiveProfileId, maxIterations);
+    return abortedBeforeStartResult(subagentId, effectiveProfileId, maxIterations, abortSignal.reason);
   }
 
   // link task to agent, for unstable input

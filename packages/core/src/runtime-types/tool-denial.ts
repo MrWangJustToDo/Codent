@@ -7,9 +7,22 @@
  */
 export const DENIED_TOOL_MESSAGE = "Denied by an extension.";
 
+/**
+ * The exact keys a denial marker may carry.
+ *
+ * Same guard as {@link isSyntheticCancelOutput} / `isInterruptedToolOutput`: the marker is a
+ * framework-synthesized payload, not a tool's output schema, so a tool that happens to return a
+ * business field named `denied` must not be swallowed by the marker. Without this, a shape like
+ * `{ denied: true, path: "a.txt", bytes: 12 }` was replaced wholesale with `Denied: …` on the
+ * model wire, and the real result disappeared with no diagnostic.
+ */
+const DENIED_TOOL_KEYS = new Set(["success", "cancelled", "denied", "error"]);
+
 export function isExtensionDeniedOutput(output: unknown): boolean {
   if (typeof output !== "object" || output === null) return false;
-  return (output as { denied?: unknown }).denied === true;
+  const record = output as Record<string, unknown>;
+  if (record.denied !== true) return false;
+  return Object.keys(record).every((key) => DENIED_TOOL_KEYS.has(key));
 }
 
 /** One line for a denied row: the extension's reason when it gave one. */

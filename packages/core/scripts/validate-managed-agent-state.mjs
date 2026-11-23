@@ -300,7 +300,8 @@ registerCoreEnv({
   agent.setStatus("error");
   assert.equal(agent.getStatus(), "awaiting_user", "an error leaves the question answerable");
   assert.equal(agent.getAgentState().outcome, "error", "and is recorded");
-  assert.equal(agent.getAgentState().errorMessage, "provider down", "with its message");
+  // The message lives on the run coordinator (one copy); the axes carry only the verdict.
+  assert.equal(agent.getError(), "provider down", "with its message, on the one owner");
   agent.transitionStatus({ type: "resume" });
   assert.equal(agent.getStatus(), "error");
 
@@ -323,35 +324,41 @@ registerCoreEnv({
 // ---------------------------------------------------------------------------
 // 5. The L1 frame has ONE authority for the error message
 // ---------------------------------------------------------------------------
-// `fail` writes the axes, while a CLEARING `setError("")` (retry, compaction repair) wrote only the
-// run field — so the frame carried `error: ""` beside `state.errorMessage: "old fault"`, and an
-// axes-reading host (ACP, the remote reducer) rendered a failure that no longer existed.
+// `AgentState` used to MIRROR the run's fault string (`errorMessage`), and the mirror had its own sync
+// bug: `fail` wrote the axes while a CLEARING `setError("")` (retry, compaction repair) wrote only the
+// run field, so the frame carried `error: ""` beside `state.errorMessage: "old fault"`. Nothing ever
+// READ the mirror — the frame's `error` is the single authority — so the field is gone and there is no
+// second copy left to drift.
 {
   const manager = new AgentManager();
   const agent = await manager.createManagedAgent({ name: "l1-error-single-source", model: "test-model" });
 
-  // Production order: `setError` first (no verdict on the axes yet, so it is not mirrored), then the
-  // status writer records the failure on the axes.
   agent.setError("provider down");
   agent.transitionStatus({ type: "fail", error: "provider down" });
   assert.equal(agent.getStatus(), "error");
   let l1 = agent.getL1State();
-  assert.equal(l1.error, "provider down");
-  assert.equal(l1.state.errorMessage, "provider down");
+  assert.equal(l1.error, "provider down", "the frame's error is the one copy");
+  assert.equal("errorMessage" in l1.state, false, "the axes carry the verdict, not a mirrored message");
+  assert.equal(l1.state.outcome, "error");
 
   agent.setError("");
   l1 = agent.getL1State();
-  assert.equal(l1.error, "");
-  assert.equal(l1.state.errorMessage, undefined, "a cleared error is not still reported by the axes");
+  assert.equal(l1.error, "", "a cleared error is cleared in the frame");
+  assert.equal(l1.state.outcome, "error", "…without rewriting the verdict it described");
 
   agent.setError("later fault");
   l1 = agent.getL1State();
-  assert.equal(l1.state.errorMessage, "later fault", "and a new one reaches the axes the same way");
+  assert.equal(l1.error, "later fault", "and a new one reaches the frame the same way");
 
-  // A healthy/completed state never gains a message from a stray `setError`.
-  const healthy = await manager.createManagedAgent({ name: "l1-error-healthy", model: "test-model" });
-  healthy.setError("not a verdict");
-  assert.equal(healthy.getL1State().state.errorMessage, undefined, "no failure is invented on a live state");
+  // The guard moved with the write: `transitionStatus` now feeds `run.setError` from the event's
+  // message, so it must key on the VERDICT. A `settle` that says `completed` while carrying text is
+  // still a completed run — writing the text would invent a fault on a healthy state (the rule the
+  // old `setError` mirror enforced).
+  const healthyRun = await manager.createManagedAgent({ name: "l1-no-invented-error", model: "test-model" });
+  healthyRun.transitionStatus({ type: "prepare" });
+  healthyRun.transitionStatus({ type: "settle", result: "completed", error: "not a verdict" });
+  assert.equal(healthyRun.getStatus(), "completed");
+  assert.equal(healthyRun.getL1State().error, "", "a completed verdict does not adopt the event's text");
 }
 
 // ---------------------------------------------------------------------------
@@ -415,7 +422,7 @@ registerCoreEnv({
 
   agent.setStatus("completed");
   assert.equal(agent.getStatus(), "error", "`completed` cannot turn a failure into a success");
-  assert.equal(agent.getAgentState().errorMessage, "boom", "and the message survives the refused write");
+  assert.equal(agent.getError(), "boom", "and the message survives the refused write, on its one owner");
   agent.setStatus("idle");
   assert.equal(agent.getStatus(), "error", "nor can `idle`");
 

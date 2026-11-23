@@ -103,9 +103,10 @@ function errorCode(error: unknown): string | undefined {
  *   non-overflow failure, but they are not evidence-backed the way the first eight
  *   are, and that is stated rather than implied.
  *
- * `too large` is deliberately left in place despite being the broadest entry: it is
- * pre-existing behaviour, and it is only reachable from an LLM run failure (tool
- * errors never reach this predicate), so narrowing it is a separate decision.
+ * `too large` used to match ANY oversized value, which mis-read a `max_tokens … is too large`
+ * request (or an image error) as a context overflow: the run then spent a paid emergency compaction
+ * and its only reactive retry, and failed again with the original error. It now has to sit in a
+ * prompt/input/token context.
  */
 function looksLikeContextOverflowMessage(message: string): boolean {
   const lower = message.toLowerCase();
@@ -115,7 +116,7 @@ function looksLikeContextOverflowMessage(message: string): boolean {
     lower.includes("too many tokens") ||
     lower.includes("max tokens exceeded") ||
     lower.includes("context length exceeded") ||
-    lower.includes("too large") ||
+    /\b(?:prompt|input|request|context|messages?|tokens?)\b[^\n]{0,40}\btoo large\b/.test(lower) ||
     lower.includes("maximum context length") ||
     // Missing spellings of a real overflow.
     lower.includes("prompt is too long") ||
@@ -178,6 +179,19 @@ export interface ReactiveCompactConfig {
 }
 
 /**
+ * The tail budget this reactive pass keeps.
+ *
+ * Exported because the apply site has to RECORD it on the checkpoint: the projection reproduces the
+ * cut from this number, and the ordinary policy (`resolveKeepPolicy`) can differ from it — the
+ * emergency path deliberately ignores a configured `keepRecentTokens` when it needs to shrink more.
+ */
+export function resolveReactiveKeepTokens(config: ReactiveCompactConfig = {}): number {
+  if (config.keepRecentTokens && config.keepRecentTokens > 0) return config.keepRecentTokens;
+  if (config.contextWindow && config.contextWindow > 0) return deriveKeepRecentTokens(config.contextWindow);
+  return DEFAULT_REACTIVE_KEEP_TOKENS;
+}
+
+/**
  * Resolve the tail token budget and split `messages` into summary + kept
  * portions at a pairing-safe boundary.
  *
@@ -190,12 +204,7 @@ function selectReactiveTail(
   messages: ModelMessage[],
   config: ReactiveCompactConfig
 ): { summaryMessages: ModelMessage[]; tailMessages: ModelMessage[] } {
-  const budget =
-    config.keepRecentTokens && config.keepRecentTokens > 0
-      ? config.keepRecentTokens
-      : config.contextWindow && config.contextWindow > 0
-        ? deriveKeepRecentTokens(config.contextWindow)
-        : DEFAULT_REACTIVE_KEEP_TOKENS;
+  const budget = resolveReactiveKeepTokens(config);
 
   let cutIndex = findCutPointByBudget(messages, budget).cutIndex;
   if (cutIndex <= 0) {

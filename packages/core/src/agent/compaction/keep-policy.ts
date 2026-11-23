@@ -102,11 +102,19 @@ export function resolveKeepPolicy(
   const resolved = createCompactionConfig(config ?? undefined);
   const explicit = resolved.keepRecentTokens;
   const contextBudget = contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_SUMMARIZATION_CONTEXT_WINDOW;
-  return {
-    kind: "tokens",
-    keepRecentTokens:
-      explicit && explicit > 0 ? explicit : deriveKeepRecentTokens(contextBudget, resolveReserveTokens(resolved)),
-  };
+  const requested =
+    explicit && explicit > 0 ? explicit : deriveKeepRecentTokens(contextBudget, resolveReserveTokens(resolved));
+  // The cut needs ROOM: everything before it is summarized and the kept window is the tail, so a keep
+  // budget at or above the trigger point makes `findCutPointByBudget` return `cutIndex 0` forever —
+  // auto-compaction fires, finds nothing to cut, and reports `skipped` on every model call. That is a
+  // silent disable, and it is reachable with ordinary config: `tokenThreshold: 30_000` on a 200k
+  // window derives a 46k keep from the WINDOW while the trigger is derived from the THRESHOLD.
+  //
+  // Both numbers come from the same config/window here, so the clamp cannot disagree with the
+  // trigger the middleware computes. The reserve is the room the summary + next turn need.
+  const { triggerAt } = resolveAutoCompactTrigger(resolved, contextWindow);
+  const ceiling = Math.max(1, triggerAt - effectiveReserveTokens(resolveReserveTokens(resolved), contextBudget));
+  return { kind: "tokens", keepRecentTokens: Math.min(requested, ceiling) };
 }
 
 /**

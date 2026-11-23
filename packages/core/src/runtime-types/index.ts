@@ -11,7 +11,7 @@ export {
   isActiveStatus,
   isBusyStatus,
   isTerminalStatus,
-  resolveFinishStatus,
+  isWakeableStatus,
 } from "./agent-status.js";
 
 export type { TelemetryEventType, EmitAgentTelemetryFn } from "./agent-events.js";

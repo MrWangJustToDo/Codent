@@ -20,6 +20,30 @@ export function isToolCallPart(part: { type?: string }): part is ToolCallPart {
 }
 
 /**
+ * The LAST part carrying this tool-call id — the live call.
+ *
+ * Provider ids are request-scoped and reused (`call_0`), so the transcript routinely holds several
+ * parts with the same id (one per turn). Every reader that must act on "the call now" has to resolve
+ * by last occurrence: `findToolCallPart` (first match) answers about the OLDEST one, which is how a
+ * second `ask_user` came to look "already answered" and a resumed approval looked already decided.
+ * `agent/approval/tool-approval-table.ts` and `AgentChatController.addToolResult` both depend on this.
+ */
+export function findLastToolCallPart(
+  messages: readonly { parts?: readonly { type?: string; id?: string }[] }[],
+  toolCallId: string
+): ToolCallPart | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const parts = messages[i]?.parts;
+    if (!parts?.length) continue;
+    for (let j = parts.length - 1; j >= 0; j--) {
+      const part = parts[j];
+      if (isToolCallPart(part) && part.id === toolCallId) return part;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Whether a tool call reached a terminal outcome (ran, or failed) — the one definition of
  * "this call is done", shared by the cancellation predicates and the turn summary's tool count.
  *

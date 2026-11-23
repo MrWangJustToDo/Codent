@@ -14,7 +14,7 @@ import { registerActiveAgentLog, unregisterActiveAgentLog } from "../agent/agent
 import { AGENT_LOG_DIR } from "../agent/persistence/types.js";
 
 import type { AgentLog } from "../agent/agent-log";
-import type { AgentLogFileSinkOptions } from "../agent/agent-log/types.js";
+import type { AgentLogDropInfo, AgentLogFileSinkOptions } from "../agent/agent-log/types.js";
 import type { ResolvedCoreEnv } from "../env";
 
 export interface AgentLogBindingDeps {
@@ -22,6 +22,15 @@ export interface AgentLogBindingDeps {
   getCoreEnv: () => ResolvedCoreEnv;
   /** Bind through the built-in log extension (which shares one sink per workspace). */
   attachViaManager?: (log: AgentLog, options: AgentLogFileSinkOptions) => (() => void) | null | undefined;
+  /**
+   * Report a buffered batch that never reached a sink (a build that failed before `bind`).
+   *
+   * Same delivery rationale as the sink's `onPersistError`: `console.warn` is invisible to a host
+   * with no stderr reader (ACP, remote), and "the bootstrap diagnostics explaining this failure were
+   * dropped" is the one fact such a host most needs. The session is still alive at this point (the
+   * agent is being disposed, not the process), so the channel can deliver it.
+   */
+  onEntriesDropped?: (info: AgentLogDropInfo) => void;
 }
 
 export class AgentLogBinding {
@@ -68,11 +77,23 @@ export class AgentLogBinding {
     if (!this.everBound && !log.hasSink() && (log.getPendingEntryCount() > 0 || log.getPendingDroppedCount() > 0)) {
       const count = log.getPendingEntryCount();
       const dropped = log.getPendingDroppedCount();
+      const info: AgentLogDropInfo = { stage: "unbound", count, ...(dropped > 0 ? { capDropped: dropped } : {}) };
+      // ALWAYS stderr, plus the channel when one exists. This branch is "no sink was ever bound",
+      // which is exactly the build that can fail before the agent's bus is wired — an event-only
+      // report would be counted as a dropped telemetry frame and leave nothing behind, which is what
+      // the console line was replacing.
       console.warn(
         `[agent] dropping ${count} buffered log entr${count === 1 ? "y" : "ies"}` +
           `${dropped > 0 ? ` and ${dropped} already-overflowed entr${dropped === 1 ? "y" : "ies"}` : ""}` +
           ": no sink was bound before teardown"
       );
+      if (this.deps.onEntriesDropped) {
+        try {
+          this.deps.onEntriesDropped(info);
+        } catch {
+          // Reporting must not block the rest of the teardown.
+        }
+      }
     }
     log.flushSync();
     try {

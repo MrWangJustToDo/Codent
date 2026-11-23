@@ -18,6 +18,7 @@ import type { ToolApprovalTable } from "../agent/approval/tool-approval-table.js
 import type { ToolCompactCache } from "../agent/compaction/tool-compact/tool-compact-cache.js";
 import type { SessionData } from "../agent/persistence/types.js";
 import type { TodoManager } from "../agent/todo";
+import type { ToolDisplayPayload } from "../agent/tools/presentation/types.js";
 import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
 import type { SessionService } from "../managers/services/session-service.js";
 import type { UsageTracker } from "../managers/telemetry/usage-tracker.js";
@@ -80,6 +81,13 @@ export interface AppliedPersistedModel {
   modelStyle?: ModelStyle;
 }
 
+/** One settled background-task result, keyed by its `task` tool call. */
+export interface RestoredTaskSettlement {
+  /** The exact value the settle wrote into the part (see `SubagentRuns` ledger). */
+  output: unknown;
+  display?: ToolDisplayPayload;
+}
+
 export interface SessionHost {
   getUI?: () => AgentUIChannel | undefined;
   /** Capture the session/run generation before an async write (see `runtime-types/epoch.ts`). */
@@ -121,6 +129,18 @@ export interface SessionHost {
    * restore settle falls back to the static client-tool table when absent.
    */
   isClientTool?: (toolName: string) => boolean;
+  /**
+   * Settled `run_in_background` task results this agent still holds for `sessionId`.
+   *
+   * The restore writes a cancel marker onto every `status: "running"` task part, because a part left
+   * running would spin forever. A SAME-session resume keeps the background ledger alive, so a task
+   * that finished but whose part was overwritten by a sibling batch's write-back still has its real
+   * result here — replaying it is what stops a completed task from being recorded as "cancelled
+   * because the session ended" for good (the repair pass only rewrites running handles).
+   *
+   * Optional for structural hosts; absent ⇒ the cancel marker is written (the previous behaviour).
+   */
+  getSettledBackgroundTasks?: (sessionId: string) => ReadonlyMap<string, RestoredTaskSettlement>;
   resolveTextAdapter?: () => Promise<TextAdapterConfig | null>;
   emitEvent: EmitAgentTelemetryFn;
   /** Update the agent's display name (broadcast via the state channel). */

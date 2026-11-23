@@ -683,6 +683,24 @@ export interface ExtensionActivation {
   inactive: string;
 }
 
+/**
+ * Optional seams into one teardown pass.
+ *
+ * @internal — the runner owns the sequence; these only let a caller observe a stage it has to act
+ * on (the disable path publishes its notice the moment the artifacts are gone).
+ */
+export interface ExtensionTeardownHooks {
+  /**
+   * Runs AFTER the lease is revoked and every dispatch surface is removed, BEFORE the extension's
+   * own `deactivate()` is awaited.
+   *
+   * This is the point where the extension is no longer callable but may still be shutting down
+   * (`shutdownAll()` on the LSP servers can take seconds). Publishing the disable here is what stops
+   * the current turn's `<ctx kind="ext:…">` section from advertising tools that no longer exist.
+   */
+  onRevoked?: () => void;
+}
+
 export interface ExtensionInstance {
   api: ExtensionAPI;
   context: ExtensionContext;

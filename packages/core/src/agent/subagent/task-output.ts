@@ -11,6 +11,8 @@
  * schema is the tool's own contract. This module borrows only the type.
  */
 
+import { errorMessage } from "../../utils/errors.js";
+import { sliceAtCodePoint } from "../../utils/text-truncation.js";
 import { maybeCacheOutput } from "../tools/shared/cache/tool-output-cache.js";
 
 import type { TaskOutput } from "./task-tool.js";
@@ -54,6 +56,38 @@ export function isRunningTaskOutput(output: unknown): output is TaskOutput {
   return typeof output === "object" && output !== null && (output as { status?: unknown }).status === "running";
 }
 
+/** The exact keys {@link interruptedTaskOutput} produces — the marker, not any settled task result. */
+const RESTORE_INTERRUPTED_TASK_KEYS = new Set([
+  "subagentId",
+  "summary",
+  "truncated",
+  "iterations",
+  "maxIterations",
+  "durationMs",
+  "usage",
+  "reachedLimit",
+  "incomplete",
+  "aborted",
+  "cachedOutputPath",
+  "status",
+  "runInBackground",
+]);
+
+/**
+ * Whether this output is the cancel marker a RESTORE wrote for a task whose session ended.
+ *
+ * A settled ledger row is authoritative over it: the marker says "we never learned the result",
+ * which stops being true when the row is still in memory (a same-session resume). The key set is
+ * exclusive, the same guard `isSyntheticCancelOutput` / `isInterruptedToolOutput` use, so an
+ * extension or tool output that happens to carry `aborted: true` is not mistaken for the marker.
+ */
+export function isRestoreInterruptedTaskOutput(output: unknown): boolean {
+  if (typeof output !== "object" || output === null) return false;
+  const record = output as Record<string, unknown>;
+  if (record.status !== "completed" || record.aborted !== true || record.incomplete !== true) return false;
+  return Object.keys(record).every((key) => RESTORE_INTERRUPTED_TASK_KEYS.has(key));
+}
+
 /**
  * The output for a background task that never produced a summary (spawn or run error).
  *
@@ -89,6 +123,28 @@ export function interruptedTaskOutput(reason: string): TaskOutput {
 }
 
 /**
+ * How much of a report is shown inline when the spill file could not be written.
+ *
+ * The report is NOT discarded (that was the bug), but it also must not be dropped into the model
+ * context whole: this path only runs because the text exceeded the cache threshold (10 KB), and
+ * without a file there is no way to read the rest back. Head + tail + an explicit marker is the same
+ * shape the cached preview has, minus the path it cannot offer.
+ */
+const UNCACHED_FALLBACK_CHARS = 4_000;
+
+function boundedInlineFallback(text: string): string {
+  if (text.length <= UNCACHED_FALLBACK_CHARS) return text;
+  const half = Math.floor(UNCACHED_FALLBACK_CHARS / 2);
+  const head = sliceAtCodePoint(text, half);
+  // The tail can start ON a low surrogate just as easily as the head can end on a high one: starting
+  // one unit later keeps the pair whole instead of emitting its second half alone.
+  let tailStart = text.length - half;
+  if (tailStart > 0 && text.charCodeAt(tailStart) >= 0xdc00 && text.charCodeAt(tailStart) <= 0xdfff) tailStart += 1;
+  const tail = text.slice(tailStart);
+  return `${head}\n\n[... ${text.length - head.length - tail.length} chars omitted — the full report was not stored ...]\n\n${tail}`;
+}
+
+/**
  * Build the settled output for one task call.
  *
  * Large summaries are previewed for the parent context while the full text stays on disk. `truncated`
@@ -105,11 +161,24 @@ export async function buildTaskOutput(
   result: SubagentResult,
   options: { runInBackground?: boolean } = {}
 ): Promise<TaskOutput> {
-  const cached = await maybeCacheOutput(coreEnv, result.output, `${toolCallId}-task`, { failClosed: true });
+  // `failClosed` is right for the ADVERTISING contract (a preview promises "full output at <path>"),
+  // but letting it throw dropped a report the child had already produced: the blocking `task` call
+  // had no catch, so a read-only workspace / sandboxed `.agents/cache` / remote fs error turned a
+  // SUCCESSFUL delegation into a bare tool error. Every other tool degrades to the uncached content;
+  // here that means "no path to advertise" and the full text in the result.
+  let cached: { content: string; cachedOutputPath: string | null };
+  try {
+    cached = await maybeCacheOutput(coreEnv, result.output, `${toolCallId}-task`, { failClosed: true });
+  } catch (error) {
+    cached = {
+      content: `${boundedInlineFallback(result.output)}\n\n[output cache unavailable — ${errorMessage(error)}]`,
+      cachedOutputPath: null,
+    };
+  }
   return {
     subagentId: result.subagentId,
     ...(result.profile ? { profile: result.profile } : {}),
-    summary: cached.cachedOutputPath ? cached.content : result.output,
+    summary: cached.content,
     truncated: result.truncated,
     iterations: result.iterations,
     maxIterations: result.maxIterations,

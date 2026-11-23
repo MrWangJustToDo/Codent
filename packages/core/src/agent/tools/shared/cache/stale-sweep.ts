@@ -131,7 +131,10 @@ export function createStaleFileSweeper(spec: StaleFileSweepSpec): StaleFileSweep
             return count;
           };
 
-          const matches = spec.match ?? ((name: string) => name.endsWith(spec.suffix));
+          // An EMPTY suffix must match nothing, not everything. `media` is the row that made a
+          // suffix-less artifact real, and it supplies its own matcher — a future row that forgot one
+          // would otherwise sweep the whole directory (`.agents/media` holds user attachments).
+          const matches = spec.match ?? (spec.suffix ? (name: string) => name.endsWith(spec.suffix) : () => false);
 
           const entries = await fs.readdir(spec.dir);
           if (spec.nested) {

@@ -15,8 +15,8 @@ import {
   createAgentStatusController,
   isActiveStatus,
   isTerminalStatus,
+  isWakeableStatus,
   ManagedAgent,
-  resolveFinishStatus,
 } from "../dist/dev.mjs";
 
 const SRC = fileURLToPath(new URL("../src/", import.meta.url));
@@ -29,15 +29,19 @@ assert.equal(isActiveStatus("thinking"), true);
 assert.equal(isActiveStatus("completed"), false);
 assert.equal(ACTIVE_STATUSES.has("compacting"), true);
 
-assert.equal(resolveFinishStatus("aborted", ""), "aborted");
-assert.equal(resolveFinishStatus("waiting", "oops"), "waiting");
-assert.equal(resolveFinishStatus("awaiting_user", ""), "awaiting_user");
-// `compacting` is owned by the CompactionController lease, not by the run. Overwriting it with
-// `completed` made the lease's restore a silent no-op and lost the turn's terminal status.
-assert.equal(resolveFinishStatus("compacting", ""), "compacting", "a finish must not overwrite the compaction lease");
-assert.equal(resolveFinishStatus("compacting", "boom"), "compacting", "…not even an error message may");
-assert.equal(resolveFinishStatus("running", "failed"), "error");
-assert.equal(resolveFinishStatus("responding", ""), "completed");
+// Wakeable is DERIVED: a background completion may only start a promptless turn on a settled
+// session. The chat controller kept its own `WAKEABLE_STATUSES` set, so a new terminal reason or
+// wait kind compiled clean while silently changing what a finished job could start.
+assert.equal(isWakeableStatus("idle"), true);
+assert.equal(isWakeableStatus("completed"), true);
+assert.equal(isWakeableStatus("error"), false, "a failed run is not woken by a background completion");
+assert.equal(isWakeableStatus("aborted"), false, "…nor one the user stopped");
+assert.equal(isWakeableStatus("waiting"), false, "a parked run is not woken behind the user's back");
+assert.equal(isWakeableStatus("awaiting_user"), false);
+assert.equal(isWakeableStatus("compacting"), false, "the compaction lease owns the phase");
+assert.equal(isWakeableStatus("running"), false);
+assert.equal(isWakeableStatus("thinking"), false, "a streaming turn is not settled");
+assert.equal(isWakeableStatus("responding"), false);
 
 // The two tables answer DIFFERENT questions, and the abort guard needs the second one.
 //

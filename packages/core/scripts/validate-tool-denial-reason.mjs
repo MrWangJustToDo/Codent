@@ -7,7 +7,12 @@
 import { uiMessageToModelMessages } from "@tanstack/ai";
 import assert from "node:assert/strict";
 
-import { AgentUIChannel, applyToolDenialReason, needsAgentResponseAfterTools } from "../dist/dev.mjs";
+import {
+  AgentUIChannel,
+  applyToolDenialReason,
+  isExtensionDeniedOutput,
+  needsAgentResponseAfterTools,
+} from "../dist/dev.mjs";
 
 const approvalId = "approval_call_cmd";
 const initialMessages = [
@@ -79,5 +84,29 @@ assert.equal(
   1,
   "no duplicate denial result on a re-answer"
 );
+
+// ---------------------------------------------------------------------------
+// The denial marker's key set is EXCLUSIVE, like the cancel and interruption markers.
+//
+// `denied: true` alone is not evidence that a payload is the framework's refusal: a tool whose own
+// output carries that word was replaced wholesale with `Denied: …` on the model wire, so its real
+// result disappeared with no diagnostic. The three markers must classify the same way.
+// ---------------------------------------------------------------------------
+{
+  assert.equal(
+    isExtensionDeniedOutput({ success: false, cancelled: false, denied: true, error: "blocked by plan" }),
+    true,
+    "the framework's refusal shape is recognized"
+  );
+  assert.equal(isExtensionDeniedOutput({ denied: true }), true, "a reason-less refusal is still the marker");
+  assert.equal(
+    isExtensionDeniedOutput({ denied: true, path: "a.txt", bytes: 12 }),
+    false,
+    "a business output that happens to carry `denied` is not the marker"
+  );
+  assert.equal(isExtensionDeniedOutput({ denied: "true" }), false, "only a literal true is the marker");
+  assert.equal(isExtensionDeniedOutput(null), false);
+  assert.equal(isExtensionDeniedOutput("denied"), false);
+}
 
 console.log("tool-denial-reason validation passed");

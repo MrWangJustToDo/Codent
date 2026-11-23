@@ -196,8 +196,11 @@ export function parseModelsDevModel(vendorId: string, modelId: string, data: Mod
     name: data.name ?? data.description ?? modelId,
     style,
     apiModel: data.id ?? modelId,
+    // `0` is not a usable cap: it is sent as `max_completion_tokens: 0` and the model returns 400 or
+    // nothing at all. models.dev omits `limit.output` for a real share of its entries (261 of the
+    // 11 456 in one cached corpus), so an absent value means "unknown", not "zero".
     contextWindow: data.limit?.context ?? 0,
-    defaultMaxTokens: data.limit?.output ?? 0,
+    ...(typeof data.limit?.output === "number" && data.limit.output > 0 ? { defaultMaxTokens: data.limit.output } : {}),
     ...(pricing ? { pricing } : {}),
     capabilities,
     ...(reasoningConfig ? { reasoningConfig } : {}),

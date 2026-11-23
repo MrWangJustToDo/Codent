@@ -19,6 +19,8 @@
 
 import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";
 
+import { utf8ByteLength } from "../../utils/bytes.js";
+import { truncateText } from "../../utils/text-truncation.js";
 import { BUILTIN_EXTENSION_ORDER } from "../dispatch-order.js";
 import { isProjectedModelContent } from "../tools/runtime/projected-model-content.js";
 
@@ -57,6 +59,60 @@ export interface CreateSkillsExtensionOptions {
   skillRegistry: SkillRegistry;
   /** Fine-grained config. */
   config?: SkillsExtensionConfig;
+}
+
+/** How many skill lines the `<skills>` index lists before summarizing the rest. */
+export const SKILL_INDEX_MAX_LINES = 50;
+/** Byte budget for the whole block (CJK descriptions cost 3 bytes per character). */
+export const SKILL_INDEX_MAX_BYTES = 12 * 1024;
+/** Per-description cap, so one enormous SKILL.md description cannot dominate the index. */
+export const SKILL_DESCRIPTION_MAX_CHARS = 160;
+
+/**
+ * Render the `<skills>` index.
+ *
+ * Bounded on purpose. It is injected into EVERY turn and is admitted by content hash, so an
+ * unbounded index (300 skills ≈ 9k tokens, or one 20KB description) sits in the context for the whole
+ * session. The header explains how to load one; the omitted tail is reachable through `list_skills`,
+ * which is the lazy tool this index already advertises.
+ */
+export function buildSkillsIndexContent(
+  skills: readonly { name: string; description: string; source: string }[]
+): string {
+  if (skills.length === 0) {
+    // Section admission is hash-based and has no retraction: returning `undefined` left the PREVIOUS
+    // index block in the wire forever, and the model kept calling `load_skill` for skills that were no
+    // longer visible. A stable sentinel supersedes it once.
+    return "<skills>No skills are currently available.</skills>";
+  }
+
+  const header = [
+    "<skills>",
+    "Use `load_skill` to load any of these skills when relevant to the user's task.",
+    "The index lists name + description summaries only — do not infer or follow a skill's instructions until its full content has been loaded via `load_skill`.",
+    `list_skills is a lazy tool — discover it via ${DISCOVERY_TOOL_NAME} before calling.`,
+    "",
+  ];
+  // The footer and the closing tag are part of the payload, so they are reserved BEFORE the first
+  // skill line is admitted — otherwise a "12 KB" budget emitted slightly more than 12 KB.
+  const FOOTER_RESERVE_BYTES = utf8ByteLength("… +9999 more (list_skills shows the rest)\n</skills>");
+  let used = utf8ByteLength(header.join("\n")) + FOOTER_RESERVE_BYTES;
+  const lines: string[] = [];
+  let omitted = 0;
+  for (const skill of skills) {
+    const description = truncateText(skill.description, SKILL_DESCRIPTION_MAX_CHARS);
+    const line = `- ${skill.name} (${skill.source}): ${description}`;
+    const cost = utf8ByteLength(line) + 1;
+    if (lines.length >= SKILL_INDEX_MAX_LINES || used + cost > SKILL_INDEX_MAX_BYTES) {
+      // Keep counting: the marker names how many were left out.
+      omitted += 1;
+      continue;
+    }
+    lines.push(line);
+    used += cost;
+  }
+  if (omitted > 0) lines.push(`… +${omitted} more (list_skills shows the rest)`);
+  return [...header, ...lines, "</skills>"].join("\n");
 }
 
 /** Create the built-in Skills extension. */
@@ -168,25 +224,7 @@ that help you complete specific types of tasks.`,
   // Inject the available-skills index into per-turn context (progressive disclosure).
   if (config?.indexDisabled !== true) {
     ctx.registerContextProvider({
-      content: () => {
-        const skills = visibleSkills();
-        if (skills.length === 0) {
-          // Section admission is hash-based and has no retraction: returning `undefined` left the
-          // PREVIOUS index block in the wire forever, and the model kept calling `load_skill` for
-          // skills that were no longer visible. A stable sentinel supersedes it once.
-          return "<skills>No skills are currently available.</skills>";
-        }
-        const lines = skills.map((s) => `- ${s.name} (${s.source}): ${s.description}`);
-        return [
-          "<skills>",
-          "Use `load_skill` to load any of these skills when relevant to the user's task.",
-          "The index lists name + description summaries only — do not infer or follow a skill's instructions until its full content has been loaded via `load_skill`.",
-          `list_skills is a lazy tool — discover it via ${DISCOVERY_TOOL_NAME} before calling.`,
-          "",
-          ...lines,
-          "</skills>",
-        ].join("\n");
-      },
+      content: () => buildSkillsIndexContent(visibleSkills()),
       disabledContent: () =>
         "Skills extension is disabled — list_skills/load_skill tools and the available-skills index injected into turn context are unavailable.",
     });

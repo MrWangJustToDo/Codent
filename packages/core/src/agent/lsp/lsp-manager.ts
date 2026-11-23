@@ -136,6 +136,15 @@ export class LspManager {
    */
   private startingServers = new Map<string, Promise<boolean>>();
   /**
+   * Connections that exist but are not yet in `clients` (the handshake window).
+   *
+   * `startServer` creates the connection before `connection.start()` resolves and only registers it
+   * afterwards, so a synchronous `forceKillAll()` — the path a host takes when it exits without
+   * settling the async teardown — used to miss a server that was mid-handshake and orphan its child
+   * process. `kill()` is synchronous, so this set is enough to close that window.
+   */
+  private inFlightConnections = new Set<LspConnection>();
+  /**
    * Memo of `languageId → server key`, cleared whenever the config map changes.
    *
    * The key is the whole config record: two ids with the identical record share ONE server process (the
@@ -493,6 +502,10 @@ export class LspManager {
    * pattern the notice classification keys on, turning a predictable degrade into an error as well.
    */
   private async startServer(languageId: string, config: LspServerConfigRecord): Promise<boolean> {
+    // A manager that is already shutting down must not spawn. `forceKillAll()` is the only pass that
+    // can reach a connection created after it, and it has already run — a start that lands here would
+    // add to `inFlightConnections` with no later owner to kill it.
+    if (this.shuttingDown) return false;
     const key = this.serverKeyOf(languageId);
     const clearStarting = () => {
       if (key !== null) this.startingServers.delete(key);
@@ -517,6 +530,9 @@ export class LspManager {
       this.callbacks.onServerStart?.(languageId, config.command);
 
       connection = this.getConnection(connConfig);
+      // Tracked from the moment it exists: `clients` only sees it after the handshake, and the
+      // synchronous kill path must be able to reach a server that is still starting.
+      this.inFlightConnections.add(connection);
       connection.onUnexpectedExit((code) => this.handleUnexpectedExit(languageId, code));
       connection.onPublishDiagnostics((uri, diagnostics) => {
         const client = this.clients.get(languageId);
@@ -541,6 +557,7 @@ export class LspManager {
       // Otherwise it would leak as a live child process until the next
       // session:shutdown (which may never come).
       if (this.shuttingDown) {
+        this.inFlightConnections.delete(connection);
         connection.shutdown().catch(() => {});
         clearStarting();
         this.callbacks.onServerError?.(
@@ -552,6 +569,7 @@ export class LspManager {
       }
       // Register the client under EVERY language id this server serves, so a per-language lookup
       // (`clients.get(id)`, a tool call, `/lsp` status) keeps working for an id that did not start it.
+      this.inFlightConnections.delete(connection);
       for (const shared of this.languagesForServer(languageId)) {
         this.clients.set(shared, client);
       }
@@ -569,6 +587,7 @@ export class LspManager {
       // exists (the connection factory, the config build). Dispose whatever was created so a process
       // cannot outlive the attempt, then report ONCE — this method is the only reporter.
       if (connection) {
+        this.inFlightConnections.delete(connection);
         await connection.shutdown().catch(() => {});
         connection.kill();
       }
@@ -739,7 +758,12 @@ export class LspManager {
     this.shuttingDown = true;
     for (const timer of this.restartTimers.values()) clearTimeout(timer);
     this.restartTimers.clear();
-    const connections = new Set([...this.clients.values()].map((client) => client.connection));
+    const connections = new Set([
+      ...[...this.clients.values()].map((client) => client.connection),
+      // Servers still in the handshake are not in `clients` yet; `kill()` is synchronous, so they
+      // are reachable from this path too (a host that exits mid-startup would otherwise orphan them).
+      ...this.inFlightConnections,
+    ]);
     for (const connection of connections) {
       try {
         connection.kill();
@@ -748,6 +772,7 @@ export class LspManager {
       }
     }
     this.clients.clear();
+    this.inFlightConnections.clear();
   }
 
   /** Restart a specific language server. */

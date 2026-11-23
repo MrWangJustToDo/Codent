@@ -21,6 +21,7 @@ import {
   buildProjectInstructionsSection,
   buildSystemPromptWithTurnContext,
   buildTurnContextSections,
+  summarizeGitStatus,
   contextAttributesFromText,
   contextKindFromText,
   extractContextSection,
@@ -653,6 +654,26 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
   assert.equal(lastGenuineUserText([summary]), undefined, "a transcript that ends on a summary has no prompt");
   assert.equal(lastGenuineUserText([shell]), undefined, "synthetic context is not the user");
   assert.equal(lastGenuineUserText([]), undefined);
+}
+
+// --- `<git_status>` is bounded --------------------------------------------------------------
+//
+// The raw listing is unbounded and changes on every file write, so a long editing loop appended one
+// full listing per turn — and the earlier blocks stay on the wire (superseded, not replaced) until a
+// compaction pays for them by summarizing real history. Counts + the first few paths keep the block
+// at a few hundred bytes and still answer "what changed".
+{
+  const many = Array.from({ length: 120 }, (_, i) => (i % 4 === 0 ? `?? new-${i}.ts` : ` M src/file-${i}.ts`));
+  const summarized = summarizeGitStatus(many.join("\n"));
+  assert.ok(summarized.length < 1_000, `the block stays small (got ${summarized.length})`);
+  assert.match(summarized, /^\d+ modified/, "it opens with the counts");
+  assert.match(summarized, /\+110 more/, "and names how many entries it omitted");
+  assert.ok(summarized.split("\n").length <= 12, "bounded to the listed entries plus the marker");
+
+  assert.equal(summarizeGitStatus(""), "", "a clean tree renders nothing");
+  const short = summarizeGitStatus(" M a.ts\n?? b.ts");
+  assert.match(short, /1 modified, 1 untracked/);
+  assert.ok(short.includes("a.ts") && !short.includes("more"), "a short listing is shown verbatim");
 }
 
 console.log("turn-context validation passed");

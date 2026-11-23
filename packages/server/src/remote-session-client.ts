@@ -519,7 +519,7 @@ export class RemoteSessionClient implements AgentSession {
     deliver("interaction", snapshot.interactions);
     deliver("iteration", snapshot.iteration);
     deliver("jobs", snapshot.jobs);
-    deliver("subagents", { subagents: snapshot.subagents });
+    deliver("subagents", { subagents: snapshot.subagents, queued: snapshot.subagentQueue });
     deliver("queues", snapshot.queues);
     deliver("tool-presentation", { descriptors: snapshot.toolDescriptors });
   }

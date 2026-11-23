@@ -21,8 +21,6 @@ export interface ToolFacetHost {
   getToolService(): AgentToolService;
   getTools(): ToolsRecord;
   getToolCompactCache(): ToolCompactCache;
-  /** The live record can be filled before the service sees it (host fallback). */
-  getManagedTools(): ToolsRecord;
 }
 
 export class ToolFacet {
@@ -35,7 +33,7 @@ export class ToolFacet {
   isToolNeedsApproval(toolName: string): boolean {
     const requirement = this.host.getToolService().getApprovalRequirement(toolName);
     if (requirement) return requirement.requiresApproval;
-    const tool = this.host.getManagedTools()[toolName];
+    const tool = this.host.getTools()[toolName];
     return tool != null && resolveApprovalRequirement(tool).requiresApproval;
   }
 

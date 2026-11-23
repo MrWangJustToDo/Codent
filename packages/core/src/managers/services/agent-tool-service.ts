@@ -50,9 +50,17 @@ export class AgentToolService {
     }>
   >();
 
+  /**
+   * Per-name record objects already adopted as incumbents.
+   *
+   * The point is to skip `seed`'s stack work for names whose record entry did not change — see
+   * {@link useTools}. Cleared when the record itself is replaced.
+   */
+  private readonly adopted = new Map<string, unknown>();
+
   constructor(tools: ToolsRecord = {}) {
     this.registry = new AgentToolRegistry(tools);
-    this.seed(tools);
+    this.useTools(tools);
   }
 
   /**
@@ -65,12 +73,23 @@ export class AgentToolService {
         throw new Error("AgentToolService tools record cannot be replaced after extension tools register");
       }
       this.registry = new AgentToolRegistry(tools);
+      this.adopted.clear();
     }
-    // Always re-seed: a host may write into the record directly (`agent-bootstrap` fills
-    // `tools.task`) and relies on this pass to adopt it as the incumbent. A "record identity
-    // unchanged" fast path skipped that and made unloading an extension delete the host tool
-    // instead of restoring it (validate-extension-tool-restore §3b).
-    this.seed(tools);
+    // Adopt host writes into the live record. This cannot be a "record identity unchanged ⇒ skip"
+    // fast path: a host writes into the record directly (`agent-bootstrap` fills `tools.task`) and
+    // relies on this pass to adopt it as the incumbent — skipping that made unloading an extension
+    // delete the host tool instead of restoring it (validate-extension-tool-restore §3b).
+    //
+    // Comparing the per-name OBJECT identity instead keeps the read cheap: the common case is one Map
+    // lookup per name, and only names that actually changed pay `seed`'s per-stack work
+    // (`stack.find` + `pickTopByRank`). This is on every presentation/approval query, so the
+    // difference is per tool part rather than per session.
+    for (const name in tools) {
+      const tool = tools[name];
+      if (this.adopted.get(name) === tool) continue;
+      this.registry.seed(name, tool);
+      this.adopted.set(name, tool);
+    }
     return this.registry.getToolsRecord();
   }
 
@@ -88,6 +107,9 @@ export class AgentToolService {
    */
   seedTool(name: string, tool: ToolsRecord[string]): void {
     this.registry.seed(name, tool);
+    // Record it here too: otherwise every later `useTools` sees a name it has never adopted and
+    // repeats `seed`'s stack work for it (a no-op, but the cost the identity check exists to avoid).
+    this.adopted.set(name, tool);
   }
 
   resolve(name: string): ResolvedAgentTool | undefined {
@@ -262,9 +284,5 @@ export class AgentToolService {
     if (!this.registry.unregisterOwner(name, ownerId)) return false;
     ctx.onToolsChanged?.();
     return true;
-  }
-
-  private seed(tools: ToolsRecord): void {
-    for (const [name, tool] of Object.entries(tools)) this.registry.seed(name, tool);
   }
 }

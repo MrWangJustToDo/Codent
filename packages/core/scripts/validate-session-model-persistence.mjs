@@ -227,5 +227,140 @@ await waitFor(
 );
 await retired.dispose();
 
+// ============================================================================
+// 4. A persisted model from ANOTHER models.json entry brings its own connection
+// ============================================================================
+//
+// `selectableModelIds` is the union across entries, so the persisted model can belong to entry B
+// while bootstrap registered entry A. The model was "offered", so it was adopted — and the request
+// then went to A's baseURL with a model A never advertised (404, or served by a gateway under A's
+// pricing). The TUI relinks the session model after a `/models` pick; ACP had no equivalent, so the
+// connection has to follow the model in core.
+{
+  const sourceManager = new AgentManager();
+  const sourceHost = createLocalAgentSessionHost({ manager: sourceManager });
+  const source = await sourceHost.create({ name: "entry-source", model: "model-a", modelStyle: "openai" });
+  const sourceAgent = sourceManager.getAgent(source.session.getSnapshot().agentId);
+  const sourceStore = sourceAgent.getSessionStore();
+  const sourceId = sourceAgent.getSessionData().id;
+  const record = sourceAgent.getSessionData();
+  record.model = "model-b";
+  await sourceStore.save(record);
+  sourceManager.releaseSessionOwnership(sourceId, sourceAgent.id);
+
+  const entries = {
+    entries: [
+      { type: "direct", style: "openai", baseURL: "http://entry-a/v1", apiKey: "key-a", models: ["model-a"] },
+      // A DIFFERENT style on purpose: the connection that serves the advertised model owns it, and the
+      // persisted style belongs to the entry the record was written with. Returning the requested style
+      // made the restore path write it back, so the record and the live config disagreed on every resume.
+      { type: "direct", style: "anthropic", baseURL: "http://entry-b/v1", apiKey: "key-b", models: ["model-b"] },
+    ],
+  };
+  const directProvider = { getConnection: async () => ({ mode: "direct", style: "openai", baseURL: "", apiKey: "" }) };
+
+  const crossManager = new AgentManager();
+  const crossEntry = await CodentAgent.create({
+    env: mockEnv,
+    provider: directProvider,
+    models: entries,
+    manager: crossManager,
+  });
+  const diagnostics = [];
+  // The manager's ROOT bus, subscribed before the resume: the adoption happens while the agent is
+  // being built, so a per-agent subscription would be too late.
+  crossManager.on("session:diagnostic", (event) => diagnostics.push(event.payload));
+  const resumed = await crossEntry.host.create({
+    name: "entry-resume",
+    model: "model-a",
+    modelStyle: "openai",
+    modelBaseURL: "http://entry-a/v1",
+    modelApiKey: "key-a",
+    resumeSessionId: sourceId,
+  });
+  const resumedAgent = crossManager.getAgent(resumed.session.getSnapshot().agentId);
+  assert.equal(resumed.session.getSnapshot().model, "model-b", "the persisted model is adopted");
+  assert.equal(
+    resumedAgent.config.modelBaseURL,
+    "http://entry-b/v1",
+    "…and the connection follows the entry that advertises it, not the bootstrap one"
+  );
+  assert.equal(resumedAgent.config.modelApiKey, "key-b", "including its key");
+  assert.equal(
+    resumedAgent.config.modelStyle,
+    "anthropic",
+    "…and its style, which overrides the style the record was saved with"
+  );
+  assert.equal(
+    resumedAgent.getSessionData().modelStyle,
+    "anthropic",
+    "the session record follows the adopted connection, so the next resume agrees instead of re-correcting"
+  );
+  assert.equal(
+    diagnostics.some((entry) => entry.details?.baseURL === "http://entry-b/v1"),
+    true,
+    "the adopted connection is reported, so a cross-entry resume is explainable"
+  );
+  await crossEntry.dispose();
+}
+
+// ============================================================================
+// 4b. Two advertisers, and a key that belongs to a host
+// ============================================================================
+//
+// `models.json` can list the same id under two entries (two gateways, or two styles). File order is
+// not a decision: the persisted style is the per-session fact that tells them apart, and ignoring it
+// silently switched a session to a gateway the user did not choose. The key case is worse — an entry
+// with no key adopted only the baseURL, so the PREVIOUS host's secret was sent to the new one.
+{
+  const entries = {
+    entries: [
+      { type: "direct", style: "openai", baseURL: "http://boot/v1", apiKey: "key-boot", models: ["model-a"] },
+      { type: "direct", style: "anthropic", baseURL: "http://a/v1", apiKey: "key-a", models: ["model-x"] },
+      { type: "direct", style: "openai", baseURL: "http://b/v1", apiKey: "key-b", models: ["model-x"] },
+      { type: "direct", style: "openai", baseURL: "http://c/v1", models: ["model-y"] },
+    ],
+  };
+  const manager = new AgentManager();
+  const runtime = await CodentAgent.create({
+    env: mockEnv,
+    provider: { getConnection: async () => ({ mode: "direct", style: "openai", baseURL: "", apiKey: "" }) },
+    models: entries,
+    manager,
+  });
+  const created = await runtime.host.create({
+    name: "advertisers",
+    model: "model-a",
+    modelStyle: "openai",
+    modelBaseURL: "http://boot/v1",
+    modelApiKey: "key-boot",
+  });
+  const agent = manager.getAgent(created.session.getSnapshot().agentId);
+
+  // (a) anthropic entry comes FIRST, so `advertisers[0]` would take it; the persisted style is openai.
+  const applied = agent.applyPersistedModel({ model: "model-x", modelStyle: "openai" });
+  assert.equal(applied.changed, true);
+  assert.equal(
+    agent.config.modelBaseURL,
+    "http://b/v1",
+    "the advertiser matching the persisted modelStyle wins over file order"
+  );
+  assert.equal(agent.config.modelApiKey, "key-b");
+  assert.equal(applied.modelStyle, "openai", "and the reported style is the one actually written");
+
+  // (b) an entry with NO key on a different host: the previous host's key must not travel with it.
+  agent.applyPersistedModel({ model: "model-y", modelStyle: "openai" });
+  assert.equal(agent.config.modelBaseURL, "http://c/v1", "the keyless entry is still adopted");
+  assert.equal(
+    agent.config.modelApiKey,
+    "",
+    "a key belongs to the host it authenticates — another host's secret is cleared, not sent"
+  );
+  await runtime.dispose();
+}
+
+// Let the last runtime's log sink drain before the workspace disappears (a retry against a removed
+// directory is a noisy ENOENT at exit, not a failure).
+await sleep(50);
 await fs.promises.rm(rootPath, TEMP_RM_OPTIONS);
 console.log("session-model-persistence validation passed");

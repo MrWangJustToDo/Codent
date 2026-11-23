@@ -5,6 +5,7 @@
  * readable and no single file sits at the line ceiling.
  */
 
+import type { SessionSaveReason } from "../../agent/persistence/session-sync-tracker.js";
 import type { McpConfigSourceKind, McpServerStatus } from "../mcp-status.js";
 import type { PlanPhase, SessionSwitchReason, SessionDiagnosticArea, ModeChangeField } from "./payload-primitives.js";
 
@@ -204,7 +205,9 @@ export type SessionEventPayloads = {
    * `written:false` without it means the write was refused (switch/closed) or failed.
    */
   "session:persist": {
-    reason: "user-message" | "pump-complete" | "force";
+    // `SessionSaveReason` (agent/persistence/session-sync-tracker) owns this union; the literal was a
+    // second copy that fell out of sync as soon as a new trigger (`client-tool-result`) was added.
+    reason: SessionSaveReason;
     messages: number;
     written: boolean;
     /** The fingerprint short-circuit: no write was attempted. */
