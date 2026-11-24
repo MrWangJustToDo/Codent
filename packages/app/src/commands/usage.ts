@@ -1,4 +1,4 @@
-import { parseUsageCommand } from "@codent/core";
+import { parseUsageCommand, truncateText } from "@codent/core";
 import { Box } from "ink";
 import { createElement } from "react";
 
@@ -87,7 +87,9 @@ function pct(part: number, total: number): string {
 function renderByModel(models: ModelUsageTotal[]): string[] {
   const nameWidth = Math.min(MODEL_NAME_MAX, Math.max(...models.map((m) => m.model.length)));
   const rows = models.map((m) => {
-    const name = m.model.length > nameWidth ? `${m.model.slice(0, nameWidth - 1)}…` : m.model.padEnd(nameWidth);
+    // `truncateText` owns the marker budget: it returns at most `nameWidth` characters INCLUDING the
+    // `…`, which is what keeps the token column where the widest name put it.
+    const name = truncateText(m.model, nameWidth, { marker: "…" }).padEnd(nameWidth);
     const unpriced = m.unpricedCalls > 0 ? ` (${m.unpricedCalls} unpriced)` : "";
     return `  ${name}${fmt(m.totalTokens).padStart(10)} tokens  ${formatCost(m.costUsd)}${unpriced}`;
   });
