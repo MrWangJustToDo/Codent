@@ -365,6 +365,59 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
     "the button is released after the path"
   );
 
+  // A host with a real drag event must use it for every step. `mouseDown` + plain `move` is the
+  // FALLBACK, and it is the shape that silently fails on a canvas: the application never sees
+  // `kCGEventLeftMouseDragged`, so a stroke that reports success leaves no mark. The fake above has
+  // no `dragMove`, which is why the assertions above (correctly) see `move`.
+  {
+    const dragCalls = [];
+    const { computer: dragging } = fakeComputer({
+      dragMove: async (x, y, button) => dragCalls.push(["dragMove", x, y, button]),
+    });
+    const dragTools = activate(dragging, { settleMs: 0 }).tools;
+    await dragTools
+      .get(COMPUTER_ACTION_TOOL)
+      .execute({ action: "drag", x: 0, y: 0, to_x: 30, to_y: 0, steps: 3 }, OPTS);
+    assert.deepEqual(
+      dragCalls.filter(([name]) => name === "dragMove"),
+      [
+        ["dragMove", 10, 0, "left"],
+        ["dragMove", 20, 0, "left"],
+        ["dragMove", 30, 0, "left"],
+      ],
+      "every interpolated step is a drag event when the host has one"
+    );
+  }
+
+  // The same gesture written one action at a time — `mouse_down` → `move` → `mouse_up` — is the
+  // hand-built drag, and it fails the same way: the button is what makes a move a DRAG, so `move`
+  // consults what the batch is holding instead of always posting a plain move. The hovers around it
+  // must stay plain moves, or the pointer would drag wherever it goes.
+  {
+    const dragCalls = [];
+    const { computer: dragging } = fakeComputer({
+      dragMove: async (x, y, button) => dragCalls.push(["dragMove", x, y, button]),
+    });
+    const dragTools = activate(dragging, { settleMs: 0 }).tools;
+    await dragTools.get(COMPUTER_ACTION_TOOL).execute(
+      {
+        actions: [
+          { action: "move", x: 5, y: 5 },
+          { action: "mouse_down", button: "left" },
+          { action: "move", x: 25, y: 5 },
+          { action: "mouse_up", button: "left" },
+          { action: "move", x: 40, y: 40 },
+        ],
+      },
+      OPTS
+    );
+    assert.deepEqual(
+      dragCalls,
+      [["dragMove", 25, 5, "left"]],
+      "only the move between mouse_down and mouse_up is a drag event"
+    );
+  }
+
   calls.length = 0;
   await write.execute({ action: "type", text: "hello" }, OPTS);
   assert.deepEqual(calls[0], ["type", "hello"]);

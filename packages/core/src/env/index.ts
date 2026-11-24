@@ -326,6 +326,20 @@ export interface CoreEnvComputer {
   ): Promise<void>;
   /** Move the pointer to the point. */
   move(x: number, y: number, options?: CoreEnvComputerActionOptions): Promise<void>;
+  /**
+   * Move the pointer to the point AS A DRAG of `button`.
+   *
+   * A drag is not "a held button plus a move": it is a distinct backend EVENT, and the event type is
+   * all some applications look at. A canvas editor (Freeform, most drawing tools), native
+   * drag-and-drop, and anything that greys out paint while "no button is down" ignore a plain move,
+   * so a stroke assembled from {@link move} between {@link mouseDown} and {@link mouseUp} leaves no
+   * mark on macOS even though every call succeeds. On the addon this is
+   * `CGEventCreateMouseEvent(kCGEventLeftMouseDragged)` versus `kCGEventMouseMoved`.
+   *
+   * Optional: a host whose backend has no drag event keeps composing one from `mouseDown` + `move`,
+   * which is the best it can do — `actions.ts` falls back to that.
+   */
+  dragMove?(x: number, y: number, button: CoreEnvMouseButton, options?: CoreEnvComputerActionOptions): Promise<void>;
   mouseDown(button: CoreEnvMouseButton, options?: CoreEnvComputerActionOptions): Promise<void>;
   /** Release a button. Gets no signal: it releases what an aborted action held down. */
   mouseUp(button: CoreEnvMouseButton): Promise<void>;

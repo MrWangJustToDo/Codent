@@ -48,6 +48,23 @@ export interface NodeComputerRobot {
   getScreenSize(): { width: number; height: number };
   getMousePos(): { x: number; y: number };
   moveMouse(x: number, y: number): void;
+  /**
+   * Move the pointer as a DRAG: the same destination, a different event type.
+   *
+   * robotjs posts `kCGEventLeftMouseDragged` here and `kCGEventMouseMoved` in `moveMouse`. That
+   * distinction is the whole gesture: an app that inspects the event type (canvas editors, native
+   * drag-and-drop, anything that asks "is a button down?") ignores a plain move, so a "drag" built
+   * out of `moveMouse` looks like the pointer teleporting and drops nothing. Required — every
+   * platform build of the addon exports it. Linux and Windows fall back to a plain move inside the
+   * addon (`mouse.c`), so this primitive is where macOS gets a real drag and nothing regresses
+   * elsewhere.
+   *
+   * The third argument is the addon's, not the typing's: `@jitsi/robotjs@0.6.24` ships an
+   * `index.d.ts` that declares `dragMouse(x, y)` alone, while `robotjs.cc` accepts 2–3 arguments and
+   * reads the button from the third. Do not trim the call to match the published typings — that
+   * silently turns a right-button drag into a left one.
+   */
+  dragMouse(x: number, y: number, button?: string): void;
   mouseClick(button?: string, double?: boolean): void;
   mouseToggle(down?: string, button?: string): void;
   scrollMouse(x: number, y: number): void;
@@ -578,6 +595,24 @@ export function createNodeComputer(options: CreateNodeComputerOptions = {}): Cor
     robot.moveMouse(clamp(point.x, 0, live.width - 1), clamp(point.y, 0, live.height - 1));
   };
 
+  /**
+   * The same mapping as {@link moveTo}, but posted as a drag event.
+   *
+   * `robot.moveMouse` posts `kCGEventMouseMoved`; a canvas editor watches the event TYPE to decide
+   * "is a stroke in progress?", so a drag built out of plain moves draws nothing on macOS even
+   * though it reports success. `dragMouse` posts `kCGEventLeftMouseDragged` (or the right/other
+   * variant), which is what the application is waiting for.
+   */
+  const dragTo = (
+    x: number,
+    y: number,
+    button: CoreEnvMouseButton,
+    live: { width: number; height: number } = liveScreen()
+  ) => {
+    const point = toScreen(x, y, live);
+    robot.dragMouse(clamp(point.x, 0, live.width - 1), clamp(point.y, 0, live.height - 1), toRobotButton(button));
+  };
+
   const captureFull = () => {
     const bitmap = robot.screen.capture();
     // Only a full frame is judged: a deliberately dark region (a zoom) is not a permission problem.
@@ -645,6 +680,13 @@ export function createNodeComputer(options: CreateNodeComputerOptions = {}): Cor
     async move(x, y, moveOptions) {
       moveOptions?.signal?.throwIfAborted();
       moveTo(x, y);
+    },
+
+    // The drag-event sibling of `move`. Present so a stroke/drag is posted as a real drag rather than
+    // as moves that happen to occur while a button is held.
+    async dragMove(x, y, button, dragOptions) {
+      dragOptions?.signal?.throwIfAborted();
+      dragTo(x, y, button);
     },
 
     async mouseDown(button, downOptions) {

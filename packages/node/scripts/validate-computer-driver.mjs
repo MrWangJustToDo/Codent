@@ -182,6 +182,10 @@ function fakeRobot(overrides = {}) {
     getScreenSize: () => SCREEN,
     getMousePos: () => ({ x: 640, y: 400 }),
     moveMouse: (x, y) => calls.push(["moveMouse", x, y]),
+    // A drag is a DIFFERENT event type from a move (robotjs posts kCGEventLeftMouseDragged vs
+    // kCGEventMouseMoved), which is the only thing a canvas app looks at. Recording it as its own
+    // call name is what lets the driver suite assert the two are not interchanged.
+    dragMouse: (...args) => calls.push(["dragMouse", ...args]),
     mouseClick: (button, double) => calls.push(["mouseClick", button, double]),
     mouseToggle: (down, button) => calls.push(["mouseToggle", down, button]),
     scrollMouse: (x, y) => calls.push(["scrollMouse", x, y]),
@@ -264,6 +268,24 @@ function fakeRobot(overrides = {}) {
 
   // Cursor position comes back in display space (the inverse mapping).
   assert.deepEqual(await computer.cursorPosition(), { x: 256, y: 160 });
+
+  // A drag step posts a DRAG event, not a move — and the coordinates go through the same
+  // display→screen mapping, so a stroke lands where the model aimed.
+  calls.length = 0;
+  await computer.dragMove(100, 50, "left");
+  assert.deepEqual(
+    calls,
+    [["dragMouse", 250, 125, "left"]],
+    "a drag step is a drag event at the scaled point, never a plain move"
+  );
+
+  // The button travels with the event: a right-button drag is a different CGEventType again.
+  calls.length = 0;
+  await computer.dragMove(0, 0, "right");
+  assert.deepEqual(calls, [["dragMouse", 0, 0, "right"]]);
+
+  // A button the backend does not have is refused here too, exactly like `click`.
+  await assert.rejects(() => computer.dragMove(1, 1, "back"), /no "back" mouse button/);
 
   // Scroll: pixels on macOS (a display-space delta scaled to the real screen), whole notches
   // elsewhere. Notches are LOGICAL units, so the same gesture must not scroll further just because

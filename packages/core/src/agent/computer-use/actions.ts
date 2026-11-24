@@ -271,6 +271,12 @@ function requireDragTarget(input: ComputerActionInput | ComputerActionEntry) {
  *
  * The intermediate points exist for hosts whose pointer teleports: a single jump is not a gesture,
  * and a drop target that tracks movement never sees one.
+ *
+ * Each step is posted as a DRAG event (`dragMove`) when the host has one, because a drag is not
+ * "a held button plus a move": applications that paint or accept drops treat a plain move as the
+ * pointer passing over, no matter that a button is down. A measured session drew in a canvas editor
+ * for 8 minutes with `mouseDown` + `move` and produced nothing — every call succeeded, and the app
+ * simply never saw a drag. Hosts without the primitive still compose it from `mouseDown` + `move`.
  */
 async function drag(
   computer: CoreEnvComputer,
@@ -285,9 +291,10 @@ async function drag(
   try {
     for (let step = 1; step <= steps; step++) {
       const ratio = step / steps;
-      await computer.move(Math.round(from.x + (to.x - from.x) * ratio), Math.round(from.y + (to.y - from.y) * ratio), {
-        signal,
-      });
+      const x = Math.round(from.x + (to.x - from.x) * ratio);
+      const y = Math.round(from.y + (to.y - from.y) * ratio);
+      if (computer.dragMove) await computer.dragMove(x, y, button, { signal });
+      else await computer.move(x, y, { signal });
       if (steps > 1 && step < steps) await delay(DRAG_STEP_MS, signal);
     }
   } finally {
@@ -361,7 +368,13 @@ async function dispatchAction(
     case "move": {
       const point = requirePoint(input, "move");
       assertInDisplay(point, computer.display, "move");
-      await computer.move(point.x, point.y, { signal });
+      // The same gesture written one action at a time (`mouse_down` → `move` → `mouse_up`) is the
+      // hand-built drag, so a move with a button held has to be the drag EVENT too — the button is
+      // what makes it one, and this is the same failure `drag` above documents. A move with nothing
+      // held stays a plain move (a hover that dragged would be worse than a stroke that did not).
+      const heldButton = held.buttons[held.buttons.length - 1];
+      if (heldButton && computer.dragMove) await computer.dragMove(point.x, point.y, heldButton, { signal });
+      else await computer.move(point.x, point.y, { signal });
       return `move ${point.x},${point.y}`;
     }
 
