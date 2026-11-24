@@ -152,8 +152,15 @@ const fakeSession = {
 
 const destroyedIds = [];
 let adapterExited = false;
+/** The lines the host is handed, so it can be the fallback owner of the same report. */
+let handedToHost = null;
 exitWithSummary({
-  adapter: { exit: () => (adapterExited = true) },
+  adapter: {
+    exit: (report) => {
+      adapterExited = true;
+      handedToHost = report ?? null;
+    },
+  },
   session: fakeSession,
   destroySession: (id) => {
     destroyedIds.push(id);
@@ -169,6 +176,29 @@ assert.ok(captured && captured.length > 0, "the summary must be captured from th
 assert.ok(
   captured.some((line) => line.includes("251.20k")),
   "the captured lines are the live reading, not the post-destroy empty one"
+);
+
+// One report, two owners with one rule between them: the frame paints it, and the host holds the
+// same lines for the case where that frame never reaches the user (an alternate screen, a renderer
+// gone). Suppressing either side — the old `printsExitReport` switch did — left the summary with a
+// single delivery path and a single way to lose it.
+assert.deepEqual(handedToHost, captured, "the host receives the same lines the frame paints");
+
+// ---------------------------------------------------------------------------
+// exitWithSummary — the commit handshake the host waits on
+// ---------------------------------------------------------------------------
+// The host does not unmount until the summary is both committed and painted (otherwise it released
+// an instance whose summary had not reached the tree, and the exit looked like it had nothing to
+// report). `ExitSummary` writes this flag from an effect, and it must survive a second exit chord:
+// resetting it would make the host wait for a paint that never comes — and then print a second copy
+// of a summary the user can already see.
+useAgent.getActions().markExitSummaryCommitted();
+assert.equal(useAgent.getState().exitSummaryCommitted, true, "the commit flag is readable by the host");
+useAgent.getActions().beginExit(["Session:   local-chat"]);
+assert.equal(
+  useAgent.getState().exitSummaryCommitted,
+  true,
+  "a second exit chord (Ctrl+C twice) must not clear the commit handshake"
 );
 
 console.log("exit-summary tests passed");

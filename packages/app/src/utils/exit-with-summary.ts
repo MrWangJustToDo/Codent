@@ -17,11 +17,16 @@ import type { AgentSession } from "@codent/core";
  * live session (`snap.usage`, `snap.activeSessionId`), and the destroy is what removes it; building it
  * afterwards would capture a torn-down agent.
  *
- * WHO SHOWS IT is the host's call, and it is declared rather than guessed (`printsExitReport`): a
- * host that prints the report itself after releasing the renderer gets the lines through
- * `adapter.exit` and nothing in the frame; every other host gets the `ExitSummary` row painted while
- * its teardown runs. Painting AND printing is not a harmless redundancy — the last frame survives the
- * unmount, so the user would read the same block twice.
+ * The summary is PAINTED (`ExitSummary`, mounted by `App` above every screen), and the same lines
+ * are handed to `adapter.exit` so a host whose frame cannot survive can put them on the terminal
+ * itself. Painting is what gets the placement right: the host has no idea where the frame ends —
+ * the cursor the renderer leaves behind is the input caret, mid-frame — so a report written there
+ * overwrote the frame's own tail (the input border and the footer).
+ *
+ * Exactly one of the two may reach the user. A host that prints must therefore know its frame is
+ * gone (the terminal hosts: they unmount, and an alternate screen discards what was painted into
+ * it); the CLI host waits for this paint before it releases the renderer and prints only when the
+ * painted frame did not survive — see `bootstrapCliHost`'s exit path.
  */
 export function exitWithSummary(options: {
   adapter: AgentAdapter;
@@ -31,9 +36,10 @@ export function exitWithSummary(options: {
   const { adapter, session, destroySession } = options;
 
   const lines = session ? buildLinesFromSession(session) : null;
-  // One owner per report: a host that prints it after tearing the UI down must not also get it
-  // painted into the last frame, or the block appears twice (the frame outlives the unmount).
-  useAgent.getActions().beginExit(adapter.printsExitReport ? null : lines);
+  // Painted by the frame, and also carried to the host: the host prints only when that frame is
+  // released without reaching the user (see the header). Both are handed the same lines, so the
+  // two can never disagree about what the session did.
+  useAgent.getActions().beginExit(lines);
 
   if (session) destroySession(session.id);
   adapter.exit(lines ?? undefined);

@@ -1,6 +1,5 @@
 import { ChatKeybindings } from "../components/ChatKeybindings.js";
 import { ConfigEditorOverlay } from "../components/ConfigEditorOverlay.js";
-import { ExitSummary } from "../components/ExitSummary.js";
 import { ExtensionPanel } from "../components/ExtensionPanel.js";
 import { FullBox } from "../components/FullBox.js";
 import { MessageViewWithCompact } from "../components/MessageListWithCompact.js";
@@ -170,9 +169,6 @@ export const Agent = () => {
           {headerReady && <MessageViewWithCompact messages={messages} />}
           {headerReady && <PlanReadyBanner />}
           {headerReady && <Footer status={status} queuedMessages={queuedMessages} saveError={saveError} />}
-          {/* Last region of the normal screen, below the footer: the session's outcome, shown
-            during the ~200ms between the quit and `process.exit`. */}
-          <ExitSummary />
         </InputScopeProvider>
       )}
     </FullBox>

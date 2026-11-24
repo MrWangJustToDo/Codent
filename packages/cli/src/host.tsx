@@ -28,6 +28,7 @@ import {
   initConfig,
   initHighlighter,
   configureEnv,
+  useAgent,
   useConfig,
   useSize,
   useWorkspaceInfo,
@@ -87,7 +88,16 @@ export interface CliHostOptions {
 const EXIT_TEARDOWN_TIMEOUT_MS = 2000;
 
 /**
- * Quiet window between releasing the renderer and printing the exit report.
+ * Upper bound on the wait for the frame that carries the exit summary.
+ *
+ * Not a sleep — a ceiling. The commit lands within a tick and the renderer paints within one
+ * `maxFps` slot (~33 ms at 30 fps), so this only fires when the summary cannot be shown at all
+ * (a screen that never mounts it, a renderer already gone); the host then prints the lines itself.
+ */
+const EXIT_SUMMARY_PAINT_MS = 400;
+
+/**
+ * Quiet window between releasing the renderer and touching the terminal again.
  *
  * With `renderProcess` the last frame's bytes are written by the renderer's worker, so a write
  * issued in the same tick can land in the middle of a row. Short: nothing else is painted after
@@ -102,6 +112,28 @@ function hideNativeCursor(): void {
   const stdout = process.stdout;
   if (stdout.isTTY) {
     stdout.write(HIDE_NATIVE_CURSOR);
+  }
+}
+
+/**
+ * Leave the cursor on a fresh line below everything the renderer painted.
+ *
+ * The renderer's own `done()` does exactly this (bottom row, then a newline), but the process
+ * worker it runs in is killed as the instance is destroyed, so the sequence is a race the host
+ * must not depend on. Without it the cursor is wherever the last frame left it — the input caret,
+ * mid-frame — and the shell prompt is drawn inside the transcript.
+ *
+ * Nothing is erased: the bottom row plus one newline scrolls the frame up by a row (into the
+ * terminal's own scrollback, where the transcript already lives), exactly like a normal frame.
+ */
+function parkCursorBelowFrame(): void {
+  const stdout = process.stdout;
+  const rows = stdout.isTTY ? (stdout.rows ?? 0) : 0;
+  if (rows < 1) return;
+  try {
+    stdout.write(`\x1b[${rows};1H\n`);
+  } catch {
+    // stdout already closed — nothing left to position
   }
 }
 
@@ -224,9 +256,60 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
    * The `process.once("exit")` restore below exists for paths that exit WITHOUT unmounting. When
    * the explicit path already ran, that restore is not a safety net — it is a duplicate, and the
    * screen-switch sequence it writes would be the last thing the process ever prints, right after
-   * the exit report.
+   * the frame it released and the cursor it parked.
    */
   let terminalRestored = false;
+  /** Set by the first `exit()`; every later chord is ignored (see the exit path). */
+  let exitStarted = false;
+  /**
+   * Resolves the exit path once the renderer has painted a frame, or `null` when nobody waits.
+   *
+   * The exit summary is a frame row (`ExitSummary`, mounted by `App`), so the host must let that
+   * frame land before it unmounts — otherwise the summary is released before it is ever drawn and
+   * the user sees an exit with no outcome. This is the signal, not a sleep: teardown blocks the
+   * event loop (LSP/MCP/extension shutdown all run sync-ish inside `destroy`), so a wait placed
+   * after it would resolve only once the window is gone.
+   *
+   * One slot, not a queue: the exit path runs once, and a second exit chord while the first is
+   * waiting finds the same waiter (armed already) instead of racing a second teardown.
+   */
+  let exitPaintWaiter: (() => void) | null = null;
+
+  /**
+   * `onRender` for every frame: keep the hardware cursor hidden, and hand the exit path its frame.
+   *
+   * Called after the renderer has computed and flushed a frame (`callOnRender` sits at the end of
+   * its render pass). A frame only counts for the exit summary once the tree carried it — the store
+   * write is a React render away, so the first frame after `exit()` can still belong to the pre-exit
+   * tree, and resolving on that one released an instance whose summary did not exist yet.
+   */
+  function framePainted(): void {
+    hideNativeCursor();
+    const waiter = exitPaintWaiter;
+    if (!waiter) return;
+    if (!useAgent.getReadonlyState().exitSummaryCommitted) return;
+    exitPaintWaiter = null;
+    waiter();
+  }
+
+  /**
+   * Wait for the frame that carries the exit summary, bounded by `EXIT_SUMMARY_PAINT_MS`.
+   *
+   * `false` means it never became a frame — the current screen does not mount `ExitSummary` — and
+   * the host is then the only one that can still put the lines in front of the user.
+   */
+  function waitForExitPaint(): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      const settle = (painted: boolean) => {
+        clearTimeout(timer);
+        if (exitPaintWaiter === onPaint) exitPaintWaiter = null;
+        resolve(painted);
+      };
+      const onPaint = () => settle(true);
+      const timer = setTimeout(() => settle(false), EXIT_SUMMARY_PAINT_MS);
+      exitPaintWaiter = onPaint;
+    });
+  }
 
   // Cosmetic host identity — purely display: help screen + OSC-0 terminal title.
   appConfig.productName = options.productName;
@@ -395,7 +478,7 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
         maxFps: 30,
         exitOnCtrlC: false,
         renderProcess: true,
-        onRender: hideNativeCursor,
+        onRender: framePainted,
         standardReactLayoutTiming: true,
       }
     );
@@ -429,30 +512,53 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
   }
 
   const adapter = new LocalAgentAdapter({
-    // The terminal host prints the report itself, once the renderer has released the screen —
-    // see `printsExitReport` on `AgentAdapter`.
-    printsExitReport: true,
     exit: (report) => {
+      // One exit, one teardown. `/quit` and Ctrl+C both land here and a user can hit Ctrl+C twice,
+      // which used to run the whole sequence twice: two destroys, two unmounts, and — now that the
+      // report has two possible owners — a second copy of a summary the frame already carries.
+      if (exitStarted) return;
+      exitStarted = true;
+      const lines = report && report.length > 0 ? report : null;
       // Teardown (`session:shutdown` → per-extension flush → deactivate → MCP/background kill) lives
       // behind `adapter.destroy()`; the app's unmount only fires it as `void`. Await it (bounded, so a
       // hung hook cannot keep the process alive) or the "guaranteed" exit flush is best-effort.
       void (async () => {
+        // The painted summary comes FIRST, before anything that can block or repaint.
+        //
+        // The app hands the lines to the frame (`beginExit`) and to `adapter.exit`, and the frame is
+        // the only placement that is actually right: the host has no idea where the frame ends — the
+        // cursor the renderer leaves is the input caret, mid-frame — so the report used to be
+        // written over the frame's own tail (the input's bottom border and the footer). Painting it
+        // as a frame row puts it below the footer by construction, and the renderer's scrollback math
+        // puts it in the transcript.
+        //
+        // Skipped when there is nothing to report (a `--help` exit, a session that never talked to a
+        // model): waiting would only delay the exit.
+        //
+        // Order matters: `destroy()` runs the LSP/MCP shutdown on the event loop, so a frame asked
+        // for after it never lands — the paint would still be pending when the instance is unmounted.
+        const summaryPainted = lines ? await waitForExitPaint() : false;
+
+        // Let the worker write it before anything kills the worker. `onRender` fires when the main
+        // process hands the frame to the render worker (`renderProcess`), not when those bytes reach
+        // the terminal, and `destroy()` below kills that worker — a frame still queued in it is lost
+        // with it, which is how a full-height frame painted "nothing" while a short one arrived.
+        if (summaryPainted) {
+          await new Promise<void>((resolve) => setTimeout(resolve, EXIT_REPORT_FLUSH_MS));
+        }
+
         await Promise.race([
           adapter.destroy().catch(() => {}),
           new Promise<void>((resolve) => setTimeout(resolve, EXIT_TEARDOWN_TIMEOUT_MS)),
         ]);
 
-        // Release the renderer FIRST, then print the report on the terminal it handed back.
+        // Release the renderer, then take the terminal back on our own terms.
         //
-        // The report used to be painted into the last frame (the app's `ExitSummary` row) and left
-        // there, on the assumption that the last frame survives the exit. It does not reach the
-        // user as the final screen: `unmount()` restores the terminal, and the process-exit
-        // restore below (which is there for paths that never unmount) then wrote a screen-switch
-        // sequence as the LAST bytes of the process — after the summary and after anything the
-        // frame printed. Printing the report here, with that restore suppressed, is what makes the
-        // report the final content rather than a row that the teardown erases a beat later.
+        // `unmount()` restores the terminal (leaves the alternate screen, shows the cursor), and the
+        // process-exit restore below — there for paths that never unmount — is suppressed through
+        // `terminalRestored` so it cannot write a screen-switch sequence over what we print here.
         //
-        // The workspace panel owns the alternate screen while it is up, and a report written into
+        // The workspace panel owns the alternate screen while it is up, and a summary painted into
         // it is discarded with it. Read the ownership BEFORE unmounting (the panel's own cleanup
         // clears the flag) and leave the screen explicitly, so the order is leave → print rather
         // than "leave, whenever the renderer gets to it, around the report".
@@ -473,7 +579,16 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
         // One quiet beat: with `renderProcess` the final byte of the last frame is written by the
         // renderer's worker, so a write issued in the same tick can be interleaved mid-row.
         setTimeout(() => {
-          if (report && report.length > 0) process.stdout.write(`\n${report.join("\n")}\n`);
+          // Two things have to hold once the renderer is gone, and neither is its job any more:
+          // the cursor must sit BELOW the frame it released (otherwise the shell prompt is drawn
+          // inside the transcript), and the summary must be on screen exactly once.
+          parkCursorBelowFrame();
+          // One owner per report. A painted summary is already in front of the user unless the
+          // frame that carried it is gone (the alternate screen was just discarded) or it never
+          // painted at all; only then does the host write the lines itself.
+          if (lines && !(summaryPainted && !ownsAlternateScreen)) {
+            process.stdout.write(`${lines.join("\n")}\n`);
+          }
           process.exit(0);
         }, EXIT_REPORT_FLUSH_MS);
       })();
@@ -533,8 +648,9 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
   // terminal that started with it off holding it on afterwards.
   process.once("exit", () => {
     if (!process.stdout.isTTY) return;
-    // The explicit exit path already released the renderer and printed the report there; adding
-    // this sequence after it would clear the screen the report was just written to.
+    // The explicit exit path already released the renderer and parked the cursor below the frame;
+    // adding this sequence after it would leave the screen-switch as the last bytes the process
+    // ever writes.
     if (terminalRestored) return;
     try {
       process.stdout.write(`${wheelModeReleaseSequence()}\x1b[?1049l\x1b[?25h`);

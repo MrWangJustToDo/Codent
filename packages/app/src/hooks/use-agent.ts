@@ -25,6 +25,16 @@ export const useAgent = createState(
      * is also what keeps `ExitSummary` from rendering an empty frame.
      */
     exitSummaryLines: null as string[] | null,
+    /**
+     * Set by `ExitSummary` once those lines are in the committed tree.
+     *
+     * The summary is a frame row, and a store write is a React render away from the tree, so a host
+     * that released the renderer on `exit()` alone unmounted the app before the block it was asked
+     * to show existed — the exit looked like it had nothing to report. The component writes this
+     * from an effect (which React runs after the commit) and the host waits for the frame after it;
+     * see `bootstrapCliHost`'s exit path.
+     */
+    exitSummaryCommitted: false,
   }),
   {
     withActions: (s) => ({
@@ -37,10 +47,17 @@ export const useAgent = createState(
       },
       /**
        * Announce that the host is about to exit, carrying the summary lines to paint.
-       * Idempotent: `/quit` and Ctrl+C both call it, and a user can hit Ctrl+C twice.
+       * Idempotent: `/quit` and Ctrl+C both call it, and a user can hit Ctrl+C twice. The commit
+       * flag is deliberately NOT reset here — it records that the frame already carried these lines,
+       * and clearing it on a second chord would make the host wait for a paint that never comes and
+       * print a second copy of a summary the user can already see.
        */
       beginExit: (lines: string[] | null) => {
         s.exitSummaryLines = lines;
+      },
+      /** Commit-time handshake for the host's exit path — written by `ExitSummary`. */
+      markExitSummaryCommitted: () => {
+        s.exitSummaryCommitted = true;
       },
     }),
 
