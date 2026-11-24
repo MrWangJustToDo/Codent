@@ -656,27 +656,95 @@ async function runActions(
         throw new Error(`Action #${index + 1} of ${batch.length} (${action}) failed${done}: ${errorMessage(error)}`);
       }
     }
-    // Count every type/wait entry that actually brought a modifier — from the call or on the entry
-    // itself. Counting only the inherited half made an entry-level value silently disappear; the note
-    // also has to fire without a call-level value (the entry's own is the only one there).
-    const ignoredEntries = batch.filter(
-      (entry) =>
-        (entry.action === "type" || entry.action === "wait") &&
-        ((entry.modifiers?.length ?? 0) > 0 || callModifiers.length > 0)
-    );
-    const ignoredModifiers = [
-      ...new Set([...callModifiers, ...ignoredEntries.flatMap((entry) => entry.modifiers ?? [])]),
-    ];
-    return (
-      summaries.join(" → ") +
-      (ignoredEntries.length > 0
-        ? ` (${ignoredModifiers.join("+")} ignored on ${ignoredEntries.length} ${
-            ignoredEntries.length === 1 ? "entry" : "entries"
-          } that cannot hold modifiers)`
-        : "")
-    );
+    // One note per step, scoped to that step, naming what it did not use.
+    //
+    // It used to read "Shift ignored on 1 entry that cannot hold modifiers", which a reader takes as
+    // "the modifier was dropped from this call" — while the click beside the `wait` had really been a
+    // Shift+click (the `Shift+click` prefix says so). A model reading only the note believes nothing
+    // was modified and retries the gesture. It also said nothing about a `keys`/`text` payload on an
+    // action that does not read it: a measured call put `keys: ["Meta","f"]` on a `click`, pressed no
+    // key at all, and was told only "click 152,44 left".
+    const notes: string[] = [];
+    for (let index = 0; index < batch.length; index += 1) {
+      const entry = batch[index]!;
+      const action = entry.action;
+      // `type` and `wait` cannot hold a key: `normalizeBatchEntry` drops the value before it runs, so
+      // name it here or it disappears without a trace.
+      if (action === "type" || action === "wait") {
+        const dropped = [...new Set([...callModifiers, ...(entry.modifiers ?? [])])];
+        if (dropped.length > 0) {
+          notes.push(`#${index + 1} ${action} ran without ${dropped.join("+")} (${action} cannot hold modifiers)`);
+        }
+      }
+      // Every payload field it CARRIED but the action never reads — see `payloadNotes`.
+      notes.push(...payloadNotes(entry, `#${index + 1} `));
+    }
+    return summaries.join(" → ") + (notes.length > 0 ? ` (${notes.join("; ")})` : "");
   }
-  return runWithModifiers(computer, input, held, signal);
+  const summary = await runWithModifiers(computer, input, held, signal);
+  // The same note on the call shape a model uses MOST: one action. The note was batch-only, so a
+  // single `{"action":"click","keys":["Meta","f"]}` — the measured call that motivated it — was
+  // still told only "click 152,44 left". No step prefix: there is only one step to name.
+  const notes = payloadNotes(input, "");
+  return notes.length > 0 ? `${summary} (${notes.join("; ")})` : summary;
+}
+
+/**
+ * The payload fields each action actually reads.
+ *
+ * A field the action does not consume is silently dropped by the driver — `click` ignores `keys`, and
+ * `type` ignores `x`. Without this table the batch summary cannot say so, and the model goes on
+ * believing it pressed a key it never pressed (a measured session sent `{"action":"click",
+ * "keys":["Meta","f"]}` three times and was told only "click 152,44 left").
+ */
+const ACTION_PAYLOAD_FIELDS: Record<ComputerAction, readonly string[]> = {
+  click: ["x", "y", "button"],
+  double_click: ["x", "y", "button"],
+  triple_click: ["x", "y", "button"],
+  move: ["x", "y"],
+  drag: ["x", "y", "to_x", "to_y", "button", "steps"],
+  scroll: ["x", "y", "delta_x", "delta_y"],
+  type: ["text"],
+  key: ["keys", "repeat"],
+  hold_key: ["keys", "ms"],
+  mouse_down: ["button"],
+  mouse_up: ["button"],
+  wait: ["ms"],
+};
+
+/** Where the reader's next move is not obvious, the fix to name when a field goes unused. */
+const UNUSED_FIELD_HINTS: Record<string, string | undefined> = {
+  keys: 'use "key" for keystrokes',
+  text: 'use "type" to enter text',
+};
+
+/**
+ * The note a call owes its reader about a payload field it CARRIED but the action never reads.
+ *
+ * Generic on purpose: a table of known mistakes only covers the pairs someone thought of, and the
+ * ones nobody thought of are exactly the ones that look like success. Shared by both call shapes — a
+ * batch prefixes the step (`#3 `), a single action has only one step to name. `modifiers` is not a
+ * payload field here: {@link runWithModifiers} consumes it for every action that can hold one, and a
+ * `type`/`wait` entry gets the dedicated "ran without" note instead.
+ */
+function payloadNotes(entry: ComputerActionInput | ComputerActionEntry, label: string): string[] {
+  const action = entry.action;
+  // The call shape that reaches here always carries an `action` (the schema makes it required in a
+  // batch and the only alternative arm of the union is `actions`), so this is a type guard, not a
+  // branch a reader has to reason about.
+  if (!action) return [];
+  const own = entry as unknown as Record<string, unknown>;
+  const dead = Object.keys(own).filter(
+    (field) =>
+      field !== "action" &&
+      field !== "actions" &&
+      field !== "modifiers" &&
+      own[field] !== undefined &&
+      !ACTION_PAYLOAD_FIELDS[action].includes(field)
+  );
+  if (dead.length === 0) return [];
+  const hint = dead.map((field) => UNUSED_FIELD_HINTS[field]).find((entryHint) => entryHint);
+  return [`${label}${action} does not use ${dead.join("/")}${hint ? ` (${hint})` : ""}`];
 }
 
 /**

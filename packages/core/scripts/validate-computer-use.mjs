@@ -545,7 +545,12 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
       ["keyUp", "Control"],
     ]
   );
-  assert.match(mixed.summary, /Control ignored on 2 entries that cannot hold modifiers/);
+  // The note is per step and names the step: "#1 type ran without Control". The click beside them
+  // says "Control+click", so the summary now shows WHERE the modifier went instead of only where it
+  // did not — reading it used to suggest no gesture was modified at all.
+  assert.match(mixed.summary, /#1 type ran without Control \(type cannot hold modifiers\)/);
+  assert.match(mixed.summary, /#3 wait ran without Control \(wait cannot hold modifiers\)/);
+  assert.match(mixed.summary, /Control\+click 3,4 left/, "the click that DID hold Control says so");
 
   // An entry's own modifiers win over the call-level ones.
   calls.length = 0;
@@ -575,17 +580,17 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
       ["click", 1, 1, "left", 1],
     ]
   );
-  assert.match(entryModifiers.summary, /Shift ignored on 1 entry that cannot hold modifiers/);
+  assert.match(entryModifiers.summary, /#1 type ran without Shift \(type cannot hold modifiers\)/);
 
   const waitModifiers = await write.execute({ actions: [{ action: "wait", ms: 1, modifiers: ["Shift"] }] }, OPTS);
-  assert.match(waitModifiers.summary, /Shift ignored on 1 entry that cannot hold modifiers/);
+  assert.match(waitModifiers.summary, /#1 wait ran without Shift \(wait cannot hold modifiers\)/);
 
   // The note fires without a call-level modifier, and names both sources when they differ.
   const unionModifiers = await write.execute(
     { modifiers: ["Control"], actions: [{ action: "type", text: "x", modifiers: ["Shift"] }] },
     OPTS
   );
-  assert.match(unionModifiers.summary, /Control\+Shift ignored on 1 entry that cannot hold modifiers/);
+  assert.match(unionModifiers.summary, /#1 type ran without Control\+Shift \(type cannot hold modifiers\)/);
 
   // An entry that carries its own modifiers still works (the pointer gesture holds them).
   calls.length = 0;
@@ -611,6 +616,44 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
     calls.filter(([name]) => name !== "screenshot"),
     [["press", ["Control", "a"]]]
   );
+
+  // A payload field the action does not read is NAMED, with the fix. A measured session sent
+  // `{"action":"click","keys":["Meta","f"]}` three times: no key was pressed, and the summary said
+  // only "click 152,44 left" — so the model kept believing the shortcut had fired.
+  calls.length = 0;
+  const unusedKeys = await write.execute({ actions: [{ action: "click", x: 1, y: 1, keys: ["Meta", "f"] }] }, OPTS);
+  assert.match(unusedKeys.summary, /#1 click does not use keys \(use "key" for keystrokes\)/);
+  assert.deepEqual(
+    calls.filter(([name]) => name === "press"),
+    [],
+    "and no key is actually pressed — the note describes what happened, it does not invent it"
+  );
+
+  // A coordinate on a `type` is the same class of mistake, and gets the same note without a hint.
+  const unusedPoint = await write.execute({ actions: [{ action: "type", text: "hi", x: 5, y: 6 }] }, OPTS);
+  assert.match(unusedPoint.summary, /#1 type does not use x\/y/);
+
+  // Fields an action DOES read produce no note at all.
+  const clean = await write.execute({ actions: [{ action: "click", x: 2, y: 3, button: "right" }] }, OPTS);
+  assert.equal(clean.summary.includes("does not use"), false, clean.summary);
+
+  // The call shape a model uses MOST is one action, and the note was batch-only — so the measured
+  // `{"action":"click","keys":["Meta","f"]}` above was still silent when sent on its own. Same
+  // note, no step number (there is only one step to name), and still no invented keypress.
+  calls.length = 0;
+  const singleUnused = await write.execute({ action: "click", x: 3, y: 4, keys: ["Meta", "f"] }, OPTS);
+  assert.match(singleUnused.summary, /click does not use keys \(use "key" for keystrokes\)/);
+  assert.equal(singleUnused.summary.includes("#1"), false, "a single action carries no step number");
+  assert.deepEqual(
+    calls.filter(([name]) => name === "press"),
+    []
+  );
+
+  const singlePoint = await write.execute({ action: "type", text: "hi", x: 5, y: 6 }, OPTS);
+  assert.match(singlePoint.summary, /type does not use x\/y/);
+
+  const singleClean = await write.execute({ action: "click", x: 2, y: 3, button: "right" }, OPTS);
+  assert.equal(singleClean.summary.includes("does not use"), false, singleClean.summary);
 
   // The schema refuses an empty batch, and accepts a one-entry one.
   assert.equal(write.inputSchema.safeParse({ actions: [] }).success, false);
