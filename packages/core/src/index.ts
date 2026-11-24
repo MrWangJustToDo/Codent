@@ -322,6 +322,7 @@ export {
   type ModeCommandIntent,
   type ModelsCommandIntent,
   type UsageCommandIntent,
+  type UsageCommandView,
 } from "./agent/commands/arguments.js";
 export { decodeModelChoice, encodeModelChoice } from "./agent/commands/arguments.js";
 export { resolveSessionRef, type SessionRefCandidate } from "./agent-session/session-reference.js";

@@ -131,23 +131,69 @@ assert.equal(
 // /usage
 // ============================================================================
 //
-// The catalog advertises `/usage [Nw]`, and the headless host used to dispatch `usage.history` with no
-// span at all — the argument never left the host. This is the grammar that closes that: both surfaces
-// ask core what the argument means instead of each carrying a regex.
+// The catalog advertises `/usage [report|calendar] [Nw]`, and the headless host used to dispatch
+// `usage.history` with no span at all — the argument never left the host. This is the grammar that
+// closes that: both surfaces ask core what the argument means instead of each carrying a regex.
 {
   const usageEntry = BUILTIN_COMMAND_CATALOG.find((entry) => entry.name === "usage");
   assert.ok(usageEntry, "/usage is a built-in");
   assert.match(usageEntry.usage, /\[Nw\]/, "the advertised form is the one the parser has to accept");
+  assert.match(
+    usageEntry.usage,
+    /\[report\|calendar\]/,
+    "both views are advertised — `calendar` is opt-in, and the menu needs a value for each row"
+  );
 }
 
-assert.deepEqual(parseUsageCommand(""), { kind: "history" }, "no argument means the surface's own default span");
-assert.deepEqual(parseUsageCommand("4w"), { kind: "history", weeks: 4 }, "`4w` is the documented form");
-assert.deepEqual(parseUsageCommand(" 12 W "), { kind: "history", weeks: 12 }, "case and spacing are tolerated");
-assert.deepEqual(parseUsageCommand("4weeks"), { kind: "history", weeks: 4 }, "the long word form too");
-assert.deepEqual(parseUsageCommand("0w"), { kind: "history", weeks: 1 }, "a zero span clamps to one week, not to none");
+assert.deepEqual(
+  parseUsageCommand(""),
+  { kind: "history", view: "report" },
+  "no argument is the report over the surface's own default span"
+);
+assert.deepEqual(
+  parseUsageCommand("report"),
+  { kind: "history", view: "report" },
+  "`report` names the default, because a menu row needs a value the parser accepts"
+);
+assert.deepEqual(
+  parseUsageCommand("calendar"),
+  { kind: "history", view: "calendar" },
+  "`calendar` is the opt-in view, at the surface's default span"
+);
+assert.deepEqual(
+  parseUsageCommand("4w"),
+  { kind: "history", view: "report", weeks: 4 },
+  "`4w` is the documented span form"
+);
+assert.deepEqual(
+  parseUsageCommand(" 12 W "),
+  { kind: "history", view: "report", weeks: 12 },
+  "case and spacing are tolerated"
+);
+assert.deepEqual(parseUsageCommand("4weeks"), { kind: "history", view: "report", weeks: 4 }, "the long word form too");
+assert.deepEqual(
+  parseUsageCommand("calendar 4w"),
+  { kind: "history", view: "calendar", weeks: 4 },
+  "the span applies to the calendar"
+);
+assert.deepEqual(
+  parseUsageCommand("4w CALENDAR"),
+  { kind: "history", view: "calendar", weeks: 4 },
+  "the two arguments are order-insensitive and case-insensitive"
+);
+assert.deepEqual(
+  parseUsageCommand("report 4w"),
+  { kind: "history", view: "report", weeks: 4 },
+  "a span reads the same for either view"
+);
+assert.deepEqual(
+  parseUsageCommand("0w"),
+  { kind: "history", view: "report", weeks: 1 },
+  "a zero span clamps to one week, not to none"
+);
 assert.deepEqual(
   parseUsageCommand("999w"),
-  { kind: "history", weeks: USAGE_HISTORY_MAX_WEEKS },
+  { kind: "history", view: "report", weeks: USAGE_HISTORY_MAX_WEEKS },
   "the span clamps to the store's year"
 );
 assert.deepEqual(
@@ -156,6 +202,16 @@ assert.deepEqual(
   "an unknown argument is the host's usage error, not a silent default"
 );
 assert.deepEqual(parseUsageCommand("4 square"), { kind: "invalid", value: "4 square" }, "trailing junk is not a span");
+assert.deepEqual(
+  parseUsageCommand("calendars"),
+  { kind: "invalid", value: "calendars" },
+  "the view word matches whole — a longer word is not the option"
+);
+assert.deepEqual(
+  parseUsageCommand("calendar report"),
+  { kind: "invalid", value: "calendar report" },
+  "two view words ask for both views — that is an error, not a tie-break"
+);
 
 // ============================================================================
 // offerableReasoningEfforts — what a MENU may offer (stricter than validation)

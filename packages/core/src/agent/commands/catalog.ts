@@ -110,8 +110,8 @@ export const BUILTIN_COMMAND_CATALOG: readonly BuiltinCommandInfo[] = [
   },
   {
     name: "usage",
-    description: "Show session token usage, cost, and a global activity graph",
-    usage: "/usage [Nw]",
+    description: "Show session token usage and cost; `calendar` draws the global activity graph",
+    usage: "/usage [report|calendar] [Nw]",
     scope: "both",
     command: "usage.history",
   },

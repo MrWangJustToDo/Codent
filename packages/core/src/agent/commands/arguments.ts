@@ -197,27 +197,56 @@ export function parseModelsCommand(rawArgs = ""): ModelsCommandIntent {
 export const USAGE_HISTORY_MAX_WEEKS = 52;
 
 /**
- * What `/usage <args>` asks for: a report over the last `weeks` weeks.
+ * Which half of `/usage` a surface should present.
+ *
+ * `report` is the numbers — what this session spent, which is what a user asking "what did that
+ * cost" wants and therefore the default. `calendar` is the opt-in global activity graph: a whole
+ * screen of contribution cells that a report reader did not ask for.
+ *
+ * It is a *view*, not a second command, because both read the same `usage.history` payload: a host
+ * that cannot draw (a text client) prints its report for either view.
+ */
+export type UsageCommandView = "report" | "calendar";
+
+/**
+ * What `/usage <args>` asks for: which view, over the last `weeks` weeks.
  *
  * `weeks` is omitted when the argument named none — the span is then the SURFACE's default (the TUI
  * sizes the heatmap to the terminal width, a headless host has no width to consult). No message text
  * here, same as the other intents.
  */
-export type UsageCommandIntent = { kind: "history"; weeks?: number } | { kind: "invalid"; value: string };
+export type UsageCommandIntent =
+  { kind: "history"; view: UsageCommandView; weeks?: number } | { kind: "invalid"; value: string };
 
 /**
- * Parse `/usage [Nw]` into an intent.
+ * The view word, matched as a whole word so `calendars` is not one.
  *
- * `4w` is the documented form; `4week` / `4weeks` read the same. A span outside 1…{@link
- * USAGE_HISTORY_MAX_WEEKS} is clamped rather than rejected, because "the last 0 weeks" and "the last
- * 300 weeks" are both a span the user meant, just out of range.
+ * `report` is a legal word even though it is also the default, because the TUI offers the two views
+ * as an option menu and a row needs a value core's parser accepts: a row whose value were `""` would
+ * execute `/usage ` with a trailing space (and `/usage report` reading as an error while
+ * `/usage calendar` reads fine is a grammar that only makes sense from the menu's side).
+ */
+const USAGE_VIEW_ARG = /\b(calendar|report)\b/gi;
+
+/**
+ * Parse `/usage [report|calendar] [Nw]` into an intent.
+ *
+ * `4w` is the documented span form; `4week` / `4weeks` read the same, and the view word may sit on
+ * either side of it. A span outside 1…{@link USAGE_HISTORY_MAX_WEEKS} is clamped rather than
+ * rejected, because "the last 0 weeks" and "the last 300 weeks" are both a span the user meant, just
+ * out of range. No view word means the report; `calendar` alone means "the calendar, at whatever span
+ * this surface can draw". Two view words is an error — the argument cannot ask for both.
  */
 export function parseUsageCommand(rawArgs = ""): UsageCommandIntent {
   const raw = rawArgs.trim();
-  if (raw === "") return { kind: "history" };
-  const match = /^(\d+)\s*(?:w|weeks?)$/i.exec(raw);
+  const words = raw.match(USAGE_VIEW_ARG) ?? [];
+  if (words.length > 1) return { kind: "invalid", value: raw };
+  const view = (words[0]?.toLowerCase() as UsageCommandView | undefined) ?? "report";
+  const rest = raw.replace(USAGE_VIEW_ARG, "").trim();
+  if (rest === "") return { kind: "history", view };
+  const match = /^(\d+)\s*(?:w|weeks?)$/i.exec(rest);
   if (!match) return { kind: "invalid", value: raw };
   const weeks = Number(match[1]);
   if (!Number.isFinite(weeks)) return { kind: "invalid", value: raw };
-  return { kind: "history", weeks: Math.min(USAGE_HISTORY_MAX_WEEKS, Math.max(1, weeks)) };
+  return { kind: "history", view, weeks: Math.min(USAGE_HISTORY_MAX_WEEKS, Math.max(1, weeks)) };
 }
