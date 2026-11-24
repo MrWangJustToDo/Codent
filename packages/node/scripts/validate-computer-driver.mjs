@@ -203,6 +203,9 @@ function fakeRobot(overrides = {}) {
       calls.push(["keyTap", ...args]);
     },
     typeString: (text) => calls.push(["typeString", text]),
+    // The paced spelling. Recorded under its own name so a case can assert WHICH one ran: the
+    // unpaced call is the one that loses characters (see TYPE_CHAR_GAP_MS in computer.ts).
+    typeStringDelayed: (text, cpm) => calls.push(["typeStringDelayed", text, cpm]),
     screen: {
       // The driver always captures the whole screen, so the region arguments are ignored here.
       // A bright frame on purpose: an all-black one trips the permission diagnostic.
@@ -505,10 +508,64 @@ function fakeRobot(overrides = {}) {
   });
   await assert.rejects(() => broken.press(["Control", "b"]), /bad key/);
 
-  // Typing goes through the OS's own typing (layout-aware), not synthesized key codes.
+  // Typing goes through the OS's own typing (layout-aware), not synthesized key codes — PACED.
+  // `typeString` posts every character with no sleep between them (it calls `typeStringDelayed(str, 0)`
+  // and the addon's `mspc` is then 0), and the window server drops some of a burst: a measured
+  // `type "WeChat"` into Spotlight delivered nothing while the call reported success.
   calls.length = 0;
   await computer.type("hello");
-  assert.deepEqual(calls, [["typeString", "hello"]]);
+  assert.deepEqual(calls, [["typeStringDelayed", "hello", 5000]], "12 ms per character, in the addon's cpm unit");
+  assert.equal(
+    calls.some(([name]) => name === "typeString"),
+    false,
+    "the unpaced path is not taken when the paced one exists"
+  );
+
+  // A host that supplies a robot WITHOUT the paced primitive still gets paced typing: the gap is
+  // enforced from here instead of one blocking native call. It is asserted because the optional
+  // signature must not quietly degrade to "the unpaced burst", which is the bug being fixed.
+  {
+    const { robot: unpaced, calls: unpacedCalls } = fakeRobot();
+    delete unpaced.typeStringDelayed;
+    const fallback = createNodeComputer({ robot: unpaced });
+    await fallback.type("hi");
+    assert.deepEqual(
+      unpacedCalls,
+      [
+        ["typeString", "h"],
+        ["typeString", "i"],
+      ],
+      "one character per call, so the gap is still enforced"
+    );
+  }
+
+  // Above the blocking budget the characters are paced from JS, and the loop YIELDS between them.
+  // `typeStringDelayed` is one synchronous call that never looks at the signal: pacing a long string
+  // there would hold the process for its whole length (past the action tool's 60 s timeout) and ignore
+  // an abort. Measured here by aborting mid-text and requiring the typing to stop there.
+  {
+    const { robot: paced, calls: pacedCalls } = fakeRobot();
+    const controller = new AbortController();
+    const longText = "a".repeat(2_000);
+    const typing = createNodeComputer({ robot: paced }).type(longText, { signal: controller.signal });
+    // Long enough for a few characters, far short of the 2,000 that an unabortable call would finish.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    controller.abort();
+    await assert.rejects(() => typing, /abort/i);
+    const typed = pacedCalls.filter(([name]) => name === "typeString").length;
+    assert.ok(typed > 0 && typed < longText.length, `stopped mid-text (typed ${typed} of ${longText.length})`);
+    assert.ok(
+      pacedCalls
+        .filter(([name]) => name === "typeString")
+        .every(([, text]) => typeof text === "string" && text.length === 1),
+      "one character per call — a whole-string burst would be unpaced again"
+    );
+    assert.equal(
+      pacedCalls.some(([name]) => name === "typeStringDelayed"),
+      false,
+      "long text is paced here, not in one blocking native call"
+    );
+  }
 
   // Zoom keeps native detail where it matters, capped so a 4K region does not become a 25 MB encode.
   const zoomed = readPng(await computer.zoom({ x: 0, y: 0, width: 1024, height: 576 }));
@@ -631,28 +688,28 @@ function fakeRobot(overrides = {}) {
     // plausible-looking garbage. Refusing is the contract; the message has to name the fix.
     await assert.rejects(() => computer.type("你好"), /xdotool/);
     assert.equal(
-      calls.some(([name]) => name === "typeString"),
+      calls.some(([name]) => name === "typeString" || name === "typeStringDelayed"),
       false,
       "robotics must not be handed text it would mangle"
     );
   } else if (process.platform === "linux") {
     await computer.type("你好");
     assert.equal(
-      calls.some(([name]) => name === "typeString"),
+      calls.some(([name]) => name === "typeString" || name === "typeStringDelayed"),
       false,
       "xdotool does the typing"
     );
   } else if (process.platform === "win32") {
     await computer.type("你好");
-    assert.deepEqual(calls.at(-1), ["typeString", "你好"], "Windows injects the code point directly");
+    assert.deepEqual(calls.at(-1), ["typeStringDelayed", "你好", 5000], "Windows injects the code point directly");
   }
   // macOS is asserted below through the injectable pasteboard writer: the real one would overwrite
   // this machine's clipboard (and is unreachable on a Linux CI).
 
-  // ASCII always takes the addon path, on every platform.
+  // ASCII always takes the addon path, on every platform — paced, never the unpaced burst.
   calls.length = 0;
   await computer.type("hello world");
-  assert.deepEqual(calls.at(-1), ["typeString", "hello world"]);
+  assert.deepEqual(calls.at(-1), ["typeStringDelayed", "hello world", 5000]);
 }
 
 // ---------------------------------------------------------------------------

@@ -78,6 +78,12 @@ export interface NodeComputerRobot {
    */
   keyTap(key: string, modifier?: string | string[]): void;
   typeString(text: string): void;
+  /**
+   * The paced spelling of {@link typeString}: `cpm` is characters per MINUTE, and the addon sleeps
+   * `60000 / cpm` ms after each character. `typeString` calls this with `cpm = 0`, which means no
+   * sleep at all — see {@link TYPE_CHAR_GAP_MS}.
+   */
+  typeStringDelayed?(text: string, cpm: number): void;
   /** Linux only: which X display to talk to. Absent on other platforms' builds. */
   setXDisplayName?(name: string): void;
   screen: {
@@ -324,6 +330,87 @@ function hasAstral(text: string): boolean {
 
 /** `xdotool type` remaps keysyms per character, so it types what robotjs cannot. */
 const XDOTOOL_TYPE_TIMEOUT_MS = 15_000;
+
+/**
+ * Gap between injected characters.
+ *
+ * Not a delay for its own sake, and the same reason core uses `REPEAT_KEY_GAP_MS` for `repeat`: the
+ * window server coalesces key events posted back-to-back, so an unpaced burst loses characters while
+ * every call reports success. A measured session typed "WeChat" into Spotlight and delivered
+ * nothing — the Return that followed opened the empty-query Tips article — while the non-ASCII path
+ * (one pasteboard write plus a single Cmd+V) arrived first time.
+ *
+ * The backend's `typeString` is the unpaced case by construction: it calls `typeStringDelayed(str, 0)`
+ * and `mspc = 60000 / cpm` is then 0, so its per-character `microsleep` never runs (robotjs
+ * `keypress.c:295` and `:324`). `typeStringDelayed` with a real rate is the paced spelling, and 12 ms
+ * is the gap `REPEAT_KEY_GAP_MS` picked for the same reason — the backend's own keyboard delay plus
+ * one event's flight time.
+ */
+const TYPE_CHAR_GAP_MS = 12;
+
+/** {@link TYPE_CHAR_GAP_MS} in the addon's unit: characters per minute. */
+const TYPE_CHARACTERS_PER_MINUTE = Math.round(60_000 / TYPE_CHAR_GAP_MS);
+
+/**
+ * How long the addon's own paced typing may hold the event loop in ONE call.
+ *
+ * `typeStringDelayed` is a single synchronous call: it sleeps `TYPE_CHAR_GAP_MS` per character with the
+ * loop held, and it never looks at the abort signal. A paragraph paced that way is fine (a few
+ * seconds); 5,000 characters would hold the process for a minute — past the action tool's 60 s
+ * timeout, so the call would be reported as failed while the native loop kept typing, and Esc would
+ * do nothing. Above this budget {@link typePaced} paces the characters itself, one at a time, so an
+ * abort lands between two of them.
+ *
+ * The budget is time, not a character limit: the point is how long the loop is held, and the per-char
+ * cost is what turns one into the other.
+ */
+const MAX_BLOCKING_TYPE_MS = 4_000;
+
+/** Characters the addon may pace without giving the loop back (see {@link MAX_BLOCKING_TYPE_MS}). */
+const MAX_BLOCKING_TYPE_CHARS = Math.floor(MAX_BLOCKING_TYPE_MS / TYPE_CHAR_GAP_MS);
+
+/** `setTimeout` as a promise that rejects on abort, so a paced burst stops when the call is cancelled. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason instanceof Error ? signal.reason : new Error("Aborted"));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    function onAbort() {
+      clearTimeout(timer);
+      reject(signal?.reason instanceof Error ? signal.reason : new Error("Aborted"));
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/**
+ * Type `text` so the window server sees separate keystrokes (see {@link TYPE_CHAR_GAP_MS}).
+ *
+ * Short text goes to the addon's own paced spelling: one call, no per-character hop through JS. Long
+ * text is paced from here instead — that call blocks the loop for `characters × TYPE_CHAR_GAP_MS`
+ * with no way to stop it, and text long enough to matter is exactly where the action tool's timeout
+ * and the user's Esc both have to land in the middle (see {@link MAX_BLOCKING_TYPE_MS}).
+ */
+async function typePaced(robot: NodeComputerRobot, text: string, signal?: AbortSignal): Promise<void> {
+  if (robot.typeStringDelayed && text.length <= MAX_BLOCKING_TYPE_CHARS) {
+    robot.typeStringDelayed(text, TYPE_CHARACTERS_PER_MINUTE);
+    return;
+  }
+  // One character per call: `typeString` posts a single `unicodeTap` and sleeps nothing
+  // (`keypress.c`), so the gap between characters is ours to enforce — and to interrupt.
+  let first = true;
+  for (const char of text) {
+    if (!first) await sleep(TYPE_CHAR_GAP_MS, signal);
+    first = false;
+    signal?.throwIfAborted();
+    robot.typeString(char);
+  }
+}
 
 /** A pasteboard write talks to the window server; a hung one must not hang the turn. */
 const PASTEBOARD_TIMEOUT_MS = 5_000;
@@ -772,7 +859,9 @@ export function createNodeComputer(options: CreateNodeComputerOptions = {}): Cor
             `the wrong character. Type ASCII/BMP text instead, or paste it.`
         );
       }
-      robot.typeString(text);
+      // Paced, not `typeString`: the unpaced call posts every character with no sleep between them
+      // and the window server drops some (see `typePaced` / {@link TYPE_CHAR_GAP_MS}).
+      await typePaced(robot, text, typeOptions?.signal);
     },
   } satisfies CoreEnvComputer;
 }
