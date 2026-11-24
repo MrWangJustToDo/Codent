@@ -392,3 +392,40 @@ console.log("nested-command-menu: ok");
   assert.equal(state().visible, false, "an edited path closes instead of retreating");
   assert.equal(state().mode, "commands", "the menu is gone, not filtered");
 }
+
+// ---------------------------------------------------------------------------
+// 16. A built-in whose second level is a VIEW, not a typed argument (`/usage`)
+//
+// `/usage` used to be `immediate`, so selecting it ran the report and the calendar was reachable
+// only by knowing the word. Both views are rows now, and each row's value is what core's
+// `parseUsageCommand` reads — which is why the parser accepts `report` explicitly rather than
+// inferring the default from an absent argument: a menu row cannot have an empty value and still
+// execute `/usage` with no argument.
+// ---------------------------------------------------------------------------
+{
+  reset("/usage ");
+  assert.equal(state().mode, "options", "`/usage` opens its view menu instead of executing");
+  assert.deepEqual(labels(), ["report", "calendar"], "the two views, and nothing else");
+
+  select("calendar");
+  assert.deepEqual(
+    autocomplete.accept("/usage "),
+    { type: "execute", value: "/usage calendar" },
+    "the calendar row executes a value the parser reads as the calendar view"
+  );
+
+  reset("/usage ");
+  select("report");
+  assert.deepEqual(
+    autocomplete.accept("/usage "),
+    { type: "execute", value: "/usage report" },
+    "the default row names itself, so no row depends on an empty argument"
+  );
+
+  // Hand-typed words still filter the same level: the menu is a shortcut over the grammar, not a
+  // second way to spell it.
+  reset("/usage cal");
+  assert.deepEqual(labels(), ["calendar"], "the typed prefix filters the view rows");
+}
+
+console.log("nested-command-menu validation passed");

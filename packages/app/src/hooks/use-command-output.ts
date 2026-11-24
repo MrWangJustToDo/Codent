@@ -33,6 +33,18 @@ export const useCommandOutput = createState(
         // Start at the top so help / shortcuts open from the beginning.
         state.scrollOffset = 0;
       },
+      /**
+       * Show a rendered block with no text at all (e.g. `/usage calendar` draws only the graph).
+       *
+       * Distinct from `show(title, "")`, which keeps a blank text row: an empty `lines` array is what
+       * makes {@link CommandOutput} skip its list — and its title — entirely.
+       */
+      showNode: (node: ReactNode) => {
+        state.title = "";
+        state.lines = [];
+        state.node = node;
+        state.scrollOffset = 0;
+      },
       dismiss: () => {
         state.lines = null;
         state.title = "";

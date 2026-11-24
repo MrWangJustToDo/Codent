@@ -53,6 +53,7 @@ export const INPUT_HINTS: readonly string[] = [
   "/settings sets theme, density, diff renderer, thinking line and model config",
   "/resume continues a previous session · /compact compresses context",
   "/usage shows token usage and cost · /new starts a new session",
+  "/usage calendar draws the activity graph (e.g. /usage calendar 26w)",
   "/rename retitles this session",
 ];
 

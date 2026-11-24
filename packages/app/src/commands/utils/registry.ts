@@ -104,7 +104,13 @@ function handleResult(result: CommandResult, ctx: CommandContext, commandName: s
     return;
   }
 
-  if (!result.message) return;
+  // A result may be a BLOCK with no text — `/usage calendar` draws the graph and nothing else.
+  // Returning early on the missing message used to drop the node with it, so the command looked
+  // like a no-op.
+  if (!result.message) {
+    if (result.node) useCommandOutput.getActions().showNode(result.node);
+    return;
+  }
 
   if (result.message.includes("\n")) {
     useCommandOutput.getActions().show(`/${commandName}`, result.message, result.node);
