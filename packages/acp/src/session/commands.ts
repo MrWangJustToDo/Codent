@@ -169,13 +169,20 @@ export async function dispatchSlashCommand(
     case "usage.history": {
       const intent = parseUsageCommand(parsed.raw);
       if (intent.kind === "invalid") {
-        return { handled: true, message: `Unknown /usage argument "${intent.value}". Usage: /usage [Nw]` };
+        return {
+          handled: true,
+          message: `Unknown /usage argument "${intent.value}". Usage: /usage [report|calendar] [Nw]`,
+        };
       }
       const history = await session.dispatch({
         type: "usage.history",
         ...(intent.weeks !== undefined ? { weeks: intent.weeks } : {}),
       });
       if (!history.ok) return finish(history);
+      // `intent.view` is the TUI's presentation choice and is deliberately not honoured here: a text
+      // client cannot draw the calendar, so `calendar` prints the same report — which already carries
+      // the activity window it asked for. Printing nothing would make the command look broken.
+      //
       // `usage.history` answers with the raw aggregate (weeks/daily/models) for a panel to draw; a text
       // client gets the same numbers as a report. Before this, `/usage` returned no text at all — and
       // `[Nw]` was never even sent to the command.

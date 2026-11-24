@@ -3,9 +3,9 @@
  *
  * The TUI renders the same numbers as a React tree (bars, heatmap, per-model table) fed from the
  * config store; an ACP client only ever receives text chunks, so this module is the report in a
- * client's vocabulary. It is deliberately NOT shared with the app: what `/usage [Nw]` *means* is
- * core's (`parseUsageCommand`), while how a surface draws it is the surface's — and the app's
- * version cannot be shared anyway, because it is a component reading `useConfig`.
+ * client's vocabulary. It is deliberately NOT shared with the app: what `/usage [report|calendar] [Nw]`
+ * *means* is core's (`parseUsageCommand`), while how a surface draws it is the surface's — and the
+ * app's version cannot be shared anyway, because it is a component reading `useConfig`.
  *
  * The two formatters are local for the same reason `formatCost`/`formatCompactNumber` are local to
  * the app: they are this surface's presentation. They differ on purpose — the app's compact number

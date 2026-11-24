@@ -393,8 +393,8 @@ await client.connectWith(app, async (cx) => {
     );
   }
 
-  // `/usage [Nw]` is the advertised argument form, so it has to reach the command — it used to be
-  // dropped (every call asked for the 12-week default whatever the client typed).
+  // `/usage [report|calendar] [Nw]` is the advertised argument form, so it has to reach the command —
+  // it used to be dropped (every call asked for the 12-week default whatever the client typed).
   // A built-in this client cannot run must say so instead of becoming a prompt: `handled: false` fell
   // through to `send`, so a client typing `/help` (a TUI panel) asked the MODEL for help.
   for (const uiOnly of ["/help", "/settings", "/quit", "/fork"]) {
@@ -419,6 +419,16 @@ await client.connectWith(app, async (cx) => {
     "an unknown /usage argument reports usage and dispatches nothing",
     badUsage.commands.length === 0 && /Usage: \/usage/.test(badUsage.message),
     `${JSON.stringify(badUsage.commands)} ${badUsage.message}`
+  );
+
+  // `calendar` picks a VIEW, which a text client cannot draw: it must still answer with the report
+  // (silence would read as a broken command), and the view word must not leak into the span.
+  const calendarUsage = await run("/usage calendar");
+  check(
+    "/usage calendar still answers a text client",
+    calendarUsage.commands.some((command) => command.type === "usage.history" && command.weeks === undefined) &&
+      /Session lifetime/.test(calendarUsage.message),
+    `${JSON.stringify(calendarUsage.commands)} ${calendarUsage.message || "<<silent>>"}`
   );
 });
 
