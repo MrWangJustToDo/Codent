@@ -643,6 +643,18 @@ const OPTS = { toolCallId: "call_1", abortSignal: undefined };
   );
   assert.match(repeated.summary, /press a ×3/);
 
+  // ...and the presses are SPACED OUT. Posting them back-to-back lets the window server coalesce
+  // them (a measured `repeat: 8` Escape arrived as two), so the wall-clock cost of a repeat is part
+  // of the contract: N presses must take at least (N-1) gaps.
+  {
+    const started = Date.now();
+    await write.execute({ action: "key", keys: ["Escape"], repeat: 5 }, OPTS);
+    assert.ok(
+      Date.now() - started >= 4 * 12,
+      "repeated presses are spaced out, not posted in one burst (which the window server coalesces)"
+    );
+  }
+
   // `hold_key` holds for `ms` and always releases — including when the run is cancelled mid-hold.
   calls.length = 0;
   const held = await write.execute({ action: "hold_key", keys: ["Shift"], ms: 1 }, OPTS);

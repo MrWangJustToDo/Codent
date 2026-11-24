@@ -79,6 +79,17 @@ const MAX_DRAG_STEPS = 60;
 const DRAG_STEP_MS = 12;
 
 /**
+ * Gap between repeated `key` presses.
+ *
+ * Not a delay for its own sake: the window server coalesces keyboard events posted back-to-back, so
+ * `repeat` lost presses (and a burst lost characters) while every call reported success. 12 ms is
+ * the backend's default keyboard delay plus one event's flight time — long enough to be a separate
+ * keystroke, and cheap: the backend already sleeps its own 10 ms per press, so `repeat: 100` costs
+ * about two seconds.
+ */
+const REPEAT_KEY_GAP_MS = 12;
+
+/**
  * One action. Shared by the top-level call and each element of a batch.
  *
  * `action` is optional at the top level only (a batch call carries `actions` instead); inside a
@@ -417,7 +428,16 @@ async function dispatchAction(
         throw new Error('"key" needs keys, e.g. ["Control", "c"].');
       }
       const repeat = input.repeat ?? 1;
-      for (let index = 0; index < repeat; index += 1) await computer.press(input.keys, { signal });
+      for (let index = 0; index < repeat; index += 1) {
+        // Space repeated presses out. A backend that posts events with no wait between them gets
+        // them COALESCED by the window server: a measured `repeat: 8` Escape arrived as two, and a
+        // burst of character taps lost roughly one key in three — both reported success, which is
+        // the failure mode that makes a model retry the wrong thing. The gap is the backend's own
+        // keyboard delay (robotjs defaults to 10 ms) plus one event, so the cost is ~12 ms per
+        // repeat and the gesture survives.
+        if (index > 0) await delay(REPEAT_KEY_GAP_MS, signal);
+        await computer.press(input.keys, { signal });
+      }
       return repeat > 1 ? `press ${input.keys.join("+")} ×${repeat}` : `press ${input.keys.join("+")}`;
     }
 
