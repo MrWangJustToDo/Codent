@@ -23,6 +23,11 @@ import { textOf, thoughtOf } from "./message-text.js";
 import type { SessionUpdate } from "../wire/types.js";
 import type { UIMessage } from "@tanstack/ai";
 
+/** Core's mark for "this assistant message opens a turn with no user message" (see `markTurnStart`). */
+function isTurnStartMessage(message: UIMessage): boolean {
+  return (message.metadata as { turnStart?: unknown } | undefined)?.turnStart === true;
+}
+
 /**
  * Project a user message as an inter-session `session_message` instead of `user_message_chunk`.
  *
@@ -100,6 +105,11 @@ export class MessageProjection {
         continue;
       }
       if (message.role !== "assistant") continue;
+      // A promptless turn (a background completion waking the session) has no user message to
+      // delimit it. Core marks the run's first assistant message instead; without honouring it the
+      // wake's output shared the previous turn's `messageId` — appended to the answer the client had
+      // already rendered, and never a new (running) turn on its side.
+      if (isTurnStartMessage(message)) this.turnId = undefined;
       this.turnId ??= message.id;
       this.turnIds.set(message.id, this.turnId);
     }

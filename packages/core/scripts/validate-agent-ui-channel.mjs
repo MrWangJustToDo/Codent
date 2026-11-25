@@ -731,4 +731,56 @@ assert.match(failErrorMessages[1].parts[0].content, /boom/);
   assert.match(text, /continued/, "a late chunk from the abandoned run must not finalize the new message");
 }
 
+// --- a promptless turn (background wake) opens a TURN with no user message -------------
+//
+// Core marks the run's first assistant message. Hosts that group a stream into turns by user
+// message (ACP's `messageId`) key off it: without the mark the wake's output was appended to the
+// answer the client already had, and no new (running) turn ever appeared there.
+{
+  const textRun = (id, text) =>
+    (async function* () {
+      yield { type: EventType.RUN_STARTED, threadId: "t-wake", runId: "r-wake", timestamp: Date.now() };
+      yield {
+        type: EventType.TEXT_MESSAGE_START,
+        messageId: id,
+        role: "assistant",
+        threadId: "t-wake",
+        runId: "r-wake",
+      };
+      yield { type: EventType.TEXT_MESSAGE_CONTENT, messageId: id, delta: text, threadId: "t-wake", runId: "r-wake" };
+      yield { type: EventType.TEXT_MESSAGE_END, messageId: id, threadId: "t-wake", runId: "r-wake" };
+      yield {
+        type: EventType.RUN_FINISHED,
+        threadId: "t-wake",
+        runId: "r-wake",
+        timestamp: Date.now(),
+        finishReason: "stop",
+        model: "mock",
+      };
+    })();
+
+  const wakeChannel = new AgentUIChannel();
+  // A wake has no user message: the previous turn's ANSWER is still the last message when it starts,
+  // so the mark must land on the run's own first message, never on that answer.
+  const seeded = await wakeChannel.consumeRun({ stream: textRun("prev-1", "previous answer") });
+  assert.equal(seeded.find((message) => message.id === "prev-1")?.metadata?.turnStart, undefined, "seed: no mark");
+  wakeChannel.markTurnStart();
+  const wakeRun = await wakeChannel.consumeRun({ stream: textRun("wake-1", "job finished") });
+  assert.equal(
+    wakeRun.find((message) => message.id === "prev-1")?.metadata?.turnStart,
+    undefined,
+    "the previous answer is NOT the boundary"
+  );
+  const wake = wakeRun.find((message) => message.id === "wake-1");
+  assert.equal(wake?.metadata?.turnStart, true, "the run's own first message opens the turn");
+
+  const afterRuns = await wakeChannel.consumeRun({ stream: textRun("after-1", "next") });
+  const after = afterRuns.find((message) => message.id === "after-1");
+  assert.equal(after?.metadata?.turnStart, undefined, "the mark is one-shot (a later run is not armed)");
+
+  const plainChannel = new AgentUIChannel();
+  const [plain] = await plainChannel.consumeRun({ stream: textRun("plain-1", "normal") });
+  assert.equal(plain.metadata?.turnStart, undefined, "an unarmed run carries no boundary");
+}
+
 console.log("agent-ui-channel validation passed");

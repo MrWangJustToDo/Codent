@@ -2,7 +2,7 @@
  * TanStack StreamProcessor wrapper for subagent preview and non-useChat consumers.
  */
 
-import { StreamProcessor, normalizeToolResult } from "@tanstack/ai";
+import { StreamProcessor } from "@tanstack/ai";
 
 import { deliverContained } from "../../utils/contained-report.js";
 import { generateId } from "../../utils/generate-id.js";
@@ -19,6 +19,15 @@ import { agentStreamKey, type AgentStreamHub } from "../stream-hub";
 import { BEGIN_SUMMARY_TOOL_NAME } from "../subagent/begin-summary-tool.js";
 import { getBuiltinToolPresentation } from "../tools/presentation/builtin.js";
 import { computeToolDisplay } from "../tools/presentation/compute-display.js";
+
+import {
+  attachResultToLastCall,
+  hasDuplicateToolCall,
+  patchLastToolCall,
+  type PatchableMessage,
+  type PatchableToolCallPart,
+} from "./duplicate-tool-calls.js";
+import { withTurnStartMark } from "./turn-start-marker.js";
 
 import type { AgentEventBus } from "../agent-event-bus";
 import type { ToolDisplayPayload, ToolPresentation } from "../tools/presentation/types.js";
@@ -193,6 +202,8 @@ export class AgentUIChannel {
   private streamRunSeq = 0;
   /** Active agent-loop turn assistant message (per-turn streaming scope). */
   private currentTurnMessageId?: string;
+  /** The next materialized assistant message OPENS a turn (a wake has no user message). */
+  private pendingTurnStart = false;
   /** Monotonic revision bumped on every messages change (wire projection cache). */
   private revision = 0;
 
@@ -443,6 +454,16 @@ export class AgentUIChannel {
     return !this.summaryHub || this.summaryHub.isCurrentGeneration(this.summaryGeneration);
   }
 
+  /**
+   * Arm the next assistant message as a turn boundary (a turn with no user message).
+   *
+   * Called at the run boundary, before the first chunk; one-shot, so a multi-phase turn does not
+   * split its own answer. See {@link TurnStartMarker} for why the mark exists at all.
+   */
+  markTurnStart(): void {
+    this.pendingTurnStart = true;
+  }
+
   /** Process a single stream chunk (for incremental bridge during the managed run). */
   processChunk(chunk: StreamChunk, generation = this.sessionGeneration): void {
     // A run from the session being left must not append after clear/restore. The
@@ -543,6 +564,7 @@ export class AgentUIChannel {
       for await (const chunk of throwOnRunError(options.stream)) {
         if (isStale()) return finishStale();
         this.processChunk(chunk, generation);
+        this.stampPendingTurnStart();
       }
       // A clear/restore during the stream invalidates finalization too: finalizeStream
       // would strip/attach rows on the transcript that has just replaced this run's.
@@ -555,8 +577,22 @@ export class AgentUIChannel {
       // after a normal/finishStale finalize, and never touches a newer run's channel.
       finalizeOwned();
       // Do not clear a newer run's summary subscription (same generation, different run).
-      if (ownsStream()) this.endSummaryStream(generation);
+      if (ownsStream()) {
+        // An armed mark that never found a message (the turn produced nothing) must not leak onto
+        // the next run's first message.
+        this.pendingTurnStart = false;
+        this.endSummaryStream(generation);
+      }
     }
+  }
+
+  /** Stamp the run's first assistant message for an armed turn (see {@link TurnStartMarker}). */
+  private stampPendingTurnStart(): void {
+    if (!this.pendingTurnStart) return;
+    const next = withTurnStartMark(this.getMessages(), this.historicalMessageIds);
+    if (!next) return;
+    this.pendingTurnStart = false;
+    this.processor.setMessages(next);
   }
 
   private beginSummaryStream(options: ConsumeRunOptions): void {
@@ -691,133 +727,6 @@ function attachMissingToolDisplays(
     const display = computeToolDisplay(part.name, part.output, input, resolveToolPresentation);
     return display ? { ...part, display } : undefined;
   });
-}
-
-/** Structural view of a tool-call part for the display patchers (UI parts carry extra fields). */
-interface PatchableToolCallPart {
-  type?: string;
-  id?: string;
-  name?: string;
-  state?: string;
-  output?: unknown;
-  arguments?: unknown;
-  input?: unknown;
-  display?: ToolDisplayPayload;
-}
-
-interface PatchableMessage {
-  parts?: PatchableToolCallPart[];
-}
-
-/** True when more than one part carries this tool-call id (a reused provider id). */
-function hasDuplicateToolCall(messages: readonly PatchableMessage[], toolCallId: string): boolean {
-  let seen = 0;
-  for (const message of messages) {
-    for (const part of message.parts ?? []) {
-      if (part?.type !== "tool-call" || part.id !== toolCallId) continue;
-      seen += 1;
-      if (seen > 1) return true;
-    }
-  }
-  return false;
-}
-
-/** Patch the LAST part carrying `toolCallId` (the live call when provider ids are reused). */
-function patchLastToolCall<M extends PatchableMessage>(
-  messages: M[],
-  toolCallId: string,
-  patch: Record<string, unknown>
-): M[] | null {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const parts = messages[i]?.parts;
-    if (!parts?.length) continue;
-    for (let j = parts.length - 1; j >= 0; j--) {
-      const part = parts[j];
-      if (part?.type !== "tool-call" || part.id !== toolCallId) continue;
-      const nextParts = [...parts];
-      nextParts[j] = { ...part, ...patch } as PatchableToolCallPart;
-      const next = [...messages];
-      next[i] = { ...messages[i], parts: nextParts } as M;
-      return next;
-    }
-  }
-  return null;
-}
-
-/**
- * Settle the LAST call carrying `toolCallId`, in the message that owns it.
- *
- * Mirrors both halves of the SDK's `addToolResult`: the call's `state`/`output` and a `tool-result`
- * part in the SAME message (the model wire reads `tool-result`; a call-only patch would settle the
- * UI and leave the model without an answer).
- */
-function attachResultToLastCall<M extends PatchableMessage>(
-  messages: M[],
-  toolCallId: string,
-  output: unknown,
-  error?: string
-): M[] | null {
-  let messageIndex = -1;
-  let partIndex = -1;
-  for (let i = messages.length - 1; i >= 0 && messageIndex < 0; i--) {
-    const parts = messages[i]?.parts;
-    if (!parts?.length) continue;
-    for (let j = parts.length - 1; j >= 0; j--) {
-      const part = parts[j];
-      if (part?.type === "tool-call" && part.id === toolCallId) {
-        messageIndex = i;
-        partIndex = j;
-        break;
-      }
-    }
-  }
-  if (messageIndex < 0) return null;
-
-  const message = messages[messageIndex]!;
-  const parts = [...(message.parts ?? [])];
-  const call = parts[partIndex]!;
-  parts[partIndex] = {
-    ...call,
-    output: error ? { error } : output,
-    state: error ? "error" : "complete",
-  };
-  const content = normalizeToolResult(output);
-  const resultIndex = parts.findIndex((part) => part?.type === "tool-result" && part.id === toolCallId);
-  // Mirror the SDK's `updateToolResultPart`: an EXISTING result keeps the fields this function does
-  // not own (`name`, `id`, `metadata`) and the new state replaces the rest — including clearing a
-  // stale `error` when the call now succeeds.
-  const existing = resultIndex >= 0 ? (parts[resultIndex] as Record<string, unknown>) : undefined;
-  const resultPart = {
-    ...(existing ?? {}),
-    type: "tool-result",
-    toolCallId,
-    content,
-    state: error ? "error" : "complete",
-  } as unknown as Record<string, unknown>;
-  if (error) resultPart.error = error;
-  else delete resultPart.error;
-  // A CONTROL outcome left on metadata outlives the result it described. The SDK strips it whenever
-  // the result completes without a new outcome (`withoutStaleToolResultOutcome`), because the wire
-  // reader treats `metadata.tanstack.toolResultOutcome` as the verdict — a kept `"denied"` would make
-  // a now-complete result project as an error. Same rule, same place.
-  if (!error) {
-    const metadata = (resultPart as { metadata?: Record<string, unknown> }).metadata;
-    const tanstack = metadata?.tanstack as Record<string, unknown> | undefined;
-    if (metadata && tanstack && "toolResultOutcome" in tanstack) {
-      const { toolResultOutcome: _staleOutcome, ...restTanstack } = tanstack;
-      const nextMetadata = { ...metadata };
-      if (Object.keys(restTanstack).length > 0) nextMetadata.tanstack = restTanstack;
-      else delete nextMetadata.tanstack;
-      if (Object.keys(nextMetadata).length > 0) resultPart.metadata = nextMetadata;
-      else delete resultPart.metadata;
-    }
-  }
-  if (resultIndex >= 0) parts[resultIndex] = resultPart as unknown as PatchableToolCallPart;
-  else parts.push(resultPart as unknown as PatchableToolCallPart);
-
-  const next = [...messages];
-  next[messageIndex] = { ...message, parts } as M;
-  return next;
 }
 
 /**

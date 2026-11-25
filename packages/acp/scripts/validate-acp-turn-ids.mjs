@@ -87,4 +87,48 @@ const chunksOf = (c) =>
   c.stop();
 }
 
+// --- a promptless turn (background wake) opens its own ACP message ---------------------
+//
+// A wake has no user message: the transcript still ends on the previous assistant answer. Core marks
+// the run's first assistant message (`metadata.turnStart`). Without honouring it the wake's output
+// was appended to the answer the client already rendered — and no new turn, so no running state,
+// appeared on its side.
+{
+  const wakeMessages = [
+    { id: "u-1", role: "user", parts: [{ type: "text", content: "first" }] },
+    { id: "s-1", role: "assistant", parts: [{ type: "text", content: "first answer" }] },
+    {
+      id: "s-2",
+      role: "assistant",
+      metadata: { turnStart: true },
+      parts: [{ type: "text", content: "job finished" }],
+    },
+  ];
+  const c = capture();
+  c.push("messages", wakeMessages);
+  const chunks = chunksOf(c);
+  check(
+    "a wake turn gets its OWN messageId, not the previous answer's",
+    chunks.at(-1)?.[1] === "s-2",
+    JSON.stringify(chunks.map(([, id, text]) => [id, text]))
+  );
+  check(
+    "…while the previous answer keeps its id and content",
+    chunks[0]?.[1] === "s-1" && chunks[0]?.[2] === "first answer",
+    JSON.stringify(chunks.map(([, id, text]) => [id, text]))
+  );
+  c.stop();
+
+  // The replay reads the same mark: a restored thread must not merge them either.
+  const r = capture();
+  r.projector.replayFrom({ ...snapshot(), messages: wakeMessages });
+  const replayed = chunksOf(r);
+  check(
+    "a replay also gives the wake its own id",
+    replayed.at(-1)?.[1] === "s-2",
+    JSON.stringify(replayed.map(([, id]) => id))
+  );
+  r.stop();
+}
+
 finish(checker.failures);

@@ -13,6 +13,7 @@ export {
 export { AgentLog, MAX_PENDING_LOG_ENTRIES } from "../agent/agent-log/agent-log.js";
 export { logEntrySchema, logCategorySchema } from "../agent/log/schemas.js";
 export { AgentUIChannel } from "../agent/ui/ui-channel.js";
+export { withTurnStartMark } from "../agent/ui/turn-start-marker.js";
 export { findToolCallPart, shouldSuppressReplayedToolChunk } from "../agent/stream/suppress-replayed-tool-chunks.js";
 export { shouldSuppressStaleTextChunk } from "../agent/stream/suppress-stale-text-chunks.js";
 export { shouldSuppressMessagesSnapshot } from "../agent/stream/suppress-messages-snapshot.js";

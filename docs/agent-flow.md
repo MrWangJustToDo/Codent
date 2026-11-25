@@ -399,6 +399,12 @@ registry.finish()  → notifyChange([job.id])        registry.ts:507
 唤醒轮还会**跳过 post-run memory extraction**（`RunCoordinator.promptlessTurn`）：没有用户输入可记，
 通知+汇报不值得再花一次 LLM 调用去写记忆。
 
+唤醒轮**没有用户消息**，所以宿主的"按用户消息分轮"会失效：ACP 的 `messageId` 是"一轮一个"，
+它会把唤醒轮的输出并进上一轮那个已经渲染完的回答里（客户端看起来就是"没有新一轮在跑"）。
+core 因此在回合边界给该轮**首条 assistant 消息**打 `metadata.turnStart`（`ui/turn-start-marker.ts`，
+由 `run-lifecycle` 在 `forcedNewTurn` 时 `markTurnStart()` 布防）：消息级标记，重放同样生效。
+TUI 不受影响——它读状态快照，不做分组。
+
 ---
 
 ## 4. 并发与顺序

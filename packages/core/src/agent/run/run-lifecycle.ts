@@ -72,6 +72,10 @@ export async function prepareManagedAgentForRun(
   // said to remember, and the notification + reply are not worth a side query).
   if (forcedNewTurn) {
     host.run.setPromptlessTurn(true);
+    // This turn has no user message, so the transcript still ends on the previous assistant message.
+    // Mark the boundary for hosts that group a stream by user message (ACP's `messageId`) — without
+    // it the wake's output is appended to the answer the client already has.
+    host.getUI?.()?.markTurnStart();
   }
   if (!isToolContinuation || host.getStreamStartedAt() === 0) {
     host.setStreamStartedAt(Date.now());

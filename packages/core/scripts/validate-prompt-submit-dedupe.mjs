@@ -19,10 +19,11 @@ const userMessages = [
   { id: "u1", role: "user", parts: [{ type: "text", content: "explain the build" }] },
 ];
 
-function fakeHost({ promptRowsAlreadyEmitted }) {
+function fakeHost({ promptRowsAlreadyEmitted, forcedNewTurn = false }) {
   const events = [];
   let collected = null;
   let markConsumed = false;
+  let turnStarts = 0;
   const host = {
     id: "agent-1",
     parentId: undefined,
@@ -35,7 +36,7 @@ function fakeHost({ promptRowsAlreadyEmitted }) {
     },
     getStatus: () => "idle",
     setStatus: () => {},
-    consumePrepareAsNewTurn: () => false,
+    consumePrepareAsNewTurn: () => forcedNewTurn,
     consumePrepareAsContinuation: () => false,
     consumePreparePromptRowsEmitted: () => {
       if (markConsumed) return false;
@@ -47,13 +48,18 @@ function fakeHost({ promptRowsAlreadyEmitted }) {
     setCurrentRunId: () => {},
     takePendingWakeCause: () => undefined,
     getCompaction: () => ({ resetReactiveCompactRetries: () => {} }),
-    getUI: () => ({ getMessages: () => userMessages }),
+    getUI: () => ({
+      getMessages: () => userMessages,
+      markTurnStart: () => {
+        turnStarts += 1;
+      },
+    }),
     collectExtensionPromptHooks: async (prompt) => {
       collected = prompt;
     },
     emitEvent: (type, payload) => events.push({ type, payload }),
   };
-  return { host, events, getCollected: () => collected };
+  return { host, events, getCollected: () => collected, getTurnStarts: () => turnStarts };
 }
 
 // 1. A normal turn writes exactly one prompt row, and runs the extension hooks.
@@ -92,6 +98,26 @@ function fakeHost({ promptRowsAlreadyEmitted }) {
     events.filter((event) => event.type === "prompt:submit").length,
     1,
     "the mark is one-shot: the next turn reports its prompt normally"
+  );
+}
+
+// 4. A promptless turn (background wake): no prompt row to write, but the turn boundary is marked.
+//
+// The transcript ends on the previous ASSISTANT message, so hosts that group a stream by user message
+// had no boundary to key on; the run marks it once, before the first chunk, and only for this turn.
+{
+  const { host, events, getTurnStarts } = fakeHost({ promptRowsAlreadyEmitted: false, forcedNewTurn: true });
+  await prepareManagedAgentForRun(host, { messages: userMessages });
+  assert.equal(
+    events.filter((event) => event.type === "prompt:submit").length,
+    0,
+    "a turn with no prompt writes no prompt:submit row"
+  );
+  assert.equal(getTurnStarts(), 1, "…and it arms the channel's turn marker exactly once");
+  assert.equal(
+    events.filter((event) => event.type === "run:wake").length,
+    1,
+    "the wake is still explained on the timeline"
   );
 }
 
