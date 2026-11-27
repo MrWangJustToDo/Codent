@@ -42,10 +42,14 @@ const MAX_RETRY_BACKOFF_MS = 32000;
 /** Base delay for exponential backoff (kept high enough that attempt gaps are perceptible). */
 const BASE_RETRY_DELAY_MS = 2000;
 /**
- * Max number of *error* recovery attempts (reactive compact, multimodal strip,
- * transient backoff). Output-truncation continuations keep their own budget
- * (`MAX_TRUNCATION_CONTINUATIONS` + 1) and do not consume this one — see
- * `handleMaxTokensTruncation().countsAsRecoveryAttempt`.
+ * Max number of recovery attempts per run: reactive compact, multimodal strip, transient backoff AND
+ * max-tokens continuations share it.
+ *
+ * A continuation is a real model call, so it consumes one (`countsAsRecoveryAttempt: true` from
+ * `handleMaxTokensTruncation`, which is the implementation's answer and the one to trust): otherwise
+ * a run that truncated a few times would still hold three transient backoffs while an upstream 429 is
+ * most likely. Consequence, stated so it is not rediscovered: three continuations in one turn spend
+ * the error budget too.
  */
 const MAX_RECOVERY_ATTEMPTS = 3;
 
@@ -185,6 +189,10 @@ function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 export async function* runStreamWithRecovery(options: RecoveryOptions): AsyncIterable<StreamChunk> {
+  // The transcript this run owns. A recovery step awaits (the reactive-compact summarizer can take
+  // seconds), and a session switch can commit inside that window: the channel then belongs to a NEW
+  // transcript, whose own last row must not be mistaken for this attempt's aborted prefix.
+  const ownsTranscript = options.managed.getUI?.()?.getSessionGeneration?.();
   // Strip the capability state of any previous turn before the first wire build, so
   // a strip armed by an earlier run cannot leak into this one.
   options.managed.run.resetWireOverride();
@@ -325,15 +333,14 @@ export async function* runStreamWithRecovery(options: RecoveryOptions): AsyncIte
     // preview so the task panel does not keep stale tools/summary across retries.
     // Max-tokens continuation appends to the same turn — do not reset UI.
     if (!truncationDetected) {
-      prepareRestartStyleRetry(options);
+      prepareRestartStyleRetry(options, ownsTranscript);
     }
 
     const delay = retryDelayMs(recoveryAttempts, retryAfterSeconds);
 
-    // Truncation labels itself from its own state: the shared `recoveryAttempts`
-    // counter is not advanced by that branch, so reading it here reported
-    // "attempt 1" for the escalation and the first continuations, then
-    // "attempt 4/3" on the last one.
+    // Truncation labels itself from its own state, so the escalation and each continuation report
+    // their own `n/max` instead of reusing the error-retry label (they do consume that shared budget,
+    // but they are not the same sequence the user is watching).
     const progress = truncationDetected
       ? readTruncationProgress(truncation)
       : { attempt: recoveryAttempts + 1, maxAttempts: MAX_RECOVERY_ATTEMPTS };
@@ -365,11 +372,13 @@ export async function* runStreamWithRecovery(options: RecoveryOptions): AsyncIte
  * Before a full stream restart: clear the attempt-scoped UI state + error status, and throw away
  * any pre-forked `task` runs the dead attempt started.
  *
- * The UI reset is display-only ({@link AgentUIChannel.resetRetryUiState} — the retry re-streams the
- * summary banner). It deliberately does NOT touch the message history, for either profile: that
- * history IS the wire (see `getModelVisibleMessages` / the compaction middleware), so discarding it
- * would delete the very progress the retry exists to resume. The root never discarded it; making
- * the subagent discard it is what turned a network blip into a full re-exploration.
+ * The UI reset is attempt-scoped ({@link AgentUIChannel.resetRetryUiState} — the retry re-streams the
+ * summary banner, and drops the failed attempt's trailing TEXT-ONLY assistant message so the aborted
+ * prefix is not duplicated into the retried answer / the session file / the next turn's wire). It
+ * deliberately does NOT touch the tool-bearing history, for either profile: that history IS the wire
+ * (see `getModelVisibleMessages` / the compaction middleware), so discarding it would delete the very
+ * progress the retry exists to resume. The root never discarded it; making the subagent discard it is
+ * what turned a network blip into a full re-exploration.
  *
  * The discard belongs HERE rather than on `RUN_STARTED` (where it used to be): that event fires
  * once per model *iteration*, so it aborted a pre-fork the tool phase was about to join on
@@ -378,10 +387,15 @@ export async function* runStreamWithRecovery(options: RecoveryOptions): AsyncIte
  *
  * Wire `messages` stay as set by the recovery strategy (may be capability-stripped).
  */
-function prepareRestartStyleRetry(options: RecoveryOptions): void {
+function prepareRestartStyleRetry(options: RecoveryOptions, ownsTranscript?: number): void {
   // Optional-chained like the `log` / `setRetry` / `statusController` reads below: this helper is
   // driven by hosts whose only guarantee is that a run reached the recovery loop.
-  options.managed.getUI?.()?.resetRetryUiState();
+  const ui = options.managed.getUI?.();
+  // Only when the channel still belongs to this run. `ownsTranscript` is the generation captured when
+  // the run started; a session switch during `attemptErrorRecovery`'s await replaces the transcript,
+  // and resetting then would act on the NEW session's last row (delete it, and suppress its id). A
+  // fake channel without the accessor compares `undefined` to `undefined` — same transcript.
+  if (ui && ui.getSessionGeneration?.() === ownsTranscript) ui.resetRetryUiState();
   // Report the orphans the same way the run boundaries do — this is the restart case, and it
   // is the one that makes an eager run look abandoned. `run-start` names it: the attempt is
   // being replaced by a fresh stream whose tool calls carry new ids.

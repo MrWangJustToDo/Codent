@@ -10,7 +10,7 @@ import { parseToolInput } from "../../utils/parse-tool-arguments.js";
 import { applyToolApprovalDecision, applyToolDenialReason, approvalStamp } from "../stream/apply-tool-denial-reason.js";
 import { stripEmptyAssistantShells } from "../stream/empty-assistant-shell.js";
 import { type TaskSummaryStreamState } from "../stream/extract-assistant-text.js";
-import { isToolCallPart } from "../stream/message-parts.js";
+import { isToolCallPart, isToolPart } from "../stream/message-parts.js";
 import { throwOnRunError } from "../stream/stream-errors.js";
 import { shouldSuppressMessagesSnapshot } from "../stream/suppress-messages-snapshot.js";
 import { shouldSuppressReplayedToolChunk } from "../stream/suppress-replayed-tool-chunks.js";
@@ -19,6 +19,7 @@ import { agentStreamKey, type AgentStreamHub } from "../stream-hub";
 import { BEGIN_SUMMARY_TOOL_NAME } from "../subagent/begin-summary-tool.js";
 import { getBuiltinToolPresentation } from "../tools/presentation/builtin.js";
 import { computeToolDisplay } from "../tools/presentation/compute-display.js";
+import { isContextUIMessage } from "../turn-context/turn-context-message.js";
 
 import {
   attachResultToLastCall,
@@ -181,13 +182,15 @@ export class AgentUIChannel {
   private onUpdate?: (messages: TanStackUIMessage[]) => void;
   private summaryStreamState: TaskSummaryStreamState = { summaryPhaseUnlocked: false };
   /**
-   * Message ids that existed before the current run started. Late/replayed
-   * TEXT chunks referencing these must be dropped (see shouldSuppressStaleTextChunk):
-   * TanStack >= 0.53 `resumeAssistantState` would otherwise reopen the completed
-   * assistant row and append to it. Refreshed at every run boundary
-   * (consumeRun / setMessages / clearMessages), never mid-run.
+   * Message ids whose TEXT must be suppressed: the run-boundary snapshot (ids that already existed
+   * when the run started) plus any failed-attempt id dropped mid-run. Late/replayed TEXT chunks
+   * referencing these must be dropped (see shouldSuppressStaleTextChunk): TanStack >= 0.53
+   * `resumeAssistantState` would otherwise reopen the completed assistant row and append to it.
+   * Refreshed at every run boundary (consumeRun / setMessages / clearMessages); the ONE mid-run
+   * addition is `discardFailedAttemptText`, so a late chunk from the dead attempt cannot recreate the
+   * row that was just removed.
    */
-  private historicalMessageIds: ReadonlySet<string> = new Set();
+  private historicalMessageIds: Set<string> = new Set();
   /**
    * Session generation. `clearMessages` (and a restore, through
    * {@link advanceSessionGeneration}) advances it so a run that started before a
@@ -395,14 +398,18 @@ export class AgentUIChannel {
   /**
    * Reset the ATTEMPT-scoped UI state before a restart-style stream retry.
    *
-   * Never the message history. The history is not a preview: `compaction.onConfig` re-projects the
-   * wire from this channel on every attempt, so dropping rows here did not clear "stale work" — it
-   * deleted the model's context and forced the retry to redo it. That is exactly what happened to
-   * subagents (this method was called for them and nobody else): a task that had completed five
+   * Not the message history — with one exception, {@link discardFailedAttemptText}: the history is
+   * not a preview. `compaction.onConfig` re-projects the wire from this channel on every attempt, so
+   * dropping rows here did not clear "stale work" — it deleted the model's context and forced the
+   * retry to redo it. That is exactly what happened to subagents: a task that had completed five
    * tool calls before a network drop came back as a fresh exploration, while a root agent, which
-   * never had this reset, resumed from the same five results.
+   * never had this reset, resumed from the same five results. A trailing text-only assistant message
+   * is the one row that is genuinely attempt-scoped: it is an answer the retry re-streams from the
+   * start, and keeping it duplicated the aborted prefix into the retried turn, the session file and
+   * every later wire.
    *
    * What IS attempt-scoped, and therefore reset here:
+   * - the failed attempt's trailing text-only assistant message (see above);
    * - the summary text streamed into the task / compact banner — the retry re-streams it from the
    *   start, so keeping the old text would splice two attempts into one line;
    * - the phase unlock that gates that text;
@@ -412,6 +419,7 @@ export class AgentUIChannel {
    * still owns that lifecycle.
    */
   resetRetryUiState(): void {
+    this.discardFailedAttemptText();
     this.currentTurnMessageId = undefined;
 
     if (this.summaryHub && !this.summaryGenerationCurrent()) {
@@ -448,6 +456,79 @@ export class AgentUIChannel {
     }
 
     this.summaryStreamState = { summaryPhaseUnlocked: false };
+  }
+
+  /**
+   * Drop the failed attempt's trailing TEXT-ONLY assistant message, then arm a fresh one.
+   *
+   * The retry restarts the model call from the run-boundary wire, so text streamed before the
+   * failure is not progress: keeping it left the aborted prefix at the head of the retried answer —
+   * in the channel, in the persisted transcript, and (on every later turn) in the wire. Two shapes
+   * are deliberately NOT dropped:
+   *
+   * - a message carrying a tool call (its parts and results are the progress the retry resumes
+   *   from, which is the case the "never touch the history" rule was written for);
+   * - a message that predates this run. `resetRetryUiState` is also reached on a channel whose tail
+   *   already holds a finished answer (a wake turn runs with the previous assistant message last; a
+   *   switch can hand a new transcript to a stale retry), and deleting that row is not "discarding
+   *   an abandoned attempt" — it rewrites the user's transcript, which then breaks the store's
+   *   append-only path and rewrites the whole session file. The run-boundary snapshot is exactly
+   *   "ids that existed before this run", so it answers this without new state.
+   *
+   * The dead attempt's id is added to that snapshot afterwards: its late chunks must be suppressed
+   * rather than recreate the row we just removed. (A retry always carries a fresh id — the engine
+   * generates one per request — so this cannot swallow the retry's own text.)
+   *
+   * A reactive-compact retry is not covered, by design: it appends the new SUMMARY (a `user` row)
+   * before the restart, so the tail is not an assistant row and there is nothing to drop — the
+   * pre-cut rows it kept are the checkpoint's, not an abandoned attempt's.
+   *
+   * ONE consequence worth knowing: if the aborted prefix was already persisted (a turn-context or
+   * background injection calls `persistUIMessagesNow`), removing it from the channel makes the next
+   * write a non-prefix change, so `SessionStore` rewrites the whole `session.jsonl` instead of
+   * appending. That is a cost, not a correctness problem — the duplicate row is gone from the file.
+   */
+  private discardFailedAttemptText(): void {
+    this.dropTrailingAttemptText();
+    // The retry's first chunk must start a NEW assistant message; the processor keeps its active id
+    // across attempts, so without this the retried text appends to the aborted one (or, when the
+    // aborted row was dropped, to whatever part still holds the id).
+    this.processor.prepareAssistantMessage();
+  }
+
+  /**
+   * The drop half of {@link discardFailedAttemptText}: find the attempt's trailing text row and
+   * remove it, restoring the one fact that must survive — the wake-turn marker.
+   */
+  private dropTrailingAttemptText(): void {
+    const messages = this.getMessages();
+    // Walk back past synthetic `<ctx kind=…>` user rows. A middleware may append one AFTER the
+    // aborted text (the failed attempt's own `onConfig` runs after its stream starts), and stopping at
+    // it would leave the prefix in place. The CONTENT predicate is the shared one (`isContextUIMessage`
+    // — the same test compaction and the turn-context readers use); an id-shape test would miss a row
+    // restored from an older id form, which is exactly the row this has to walk past.
+    let index = messages.length - 1;
+    while (index >= 0) {
+      const message = messages[index];
+      if (message.role === "assistant") break;
+      if (isContextUIMessage(message)) {
+        index -= 1;
+        continue;
+      }
+      return;
+    }
+    const target = messages[index];
+    if (!target || this.historicalMessageIds.has(target.id) || target.parts.some((part) => isToolPart(part))) {
+      return;
+    }
+    this.processor.setMessages([...messages.slice(0, index), ...messages.slice(index + 1)]);
+    this.historicalMessageIds.add(target.id);
+    // A wake turn's first output carries `metadata.turnStart` (a turn with no user message). Dropping
+    // it without moving the mark forward would fold the retry's answer into the PREVIOUS turn on a
+    // host that groups by that mark (ACP's one-id-per-turn). `consumeRun`'s tail clears a mark that
+    // never lands, so re-arming cannot leak.
+    const marked = (target.metadata as { turnStart?: boolean } | undefined)?.turnStart === true;
+    if (marked) this.pendingTurnStart = true;
   }
 
   private summaryGenerationCurrent(): boolean {

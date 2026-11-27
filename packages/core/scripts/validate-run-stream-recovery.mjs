@@ -445,9 +445,11 @@ assert.deepEqual(subOut, ["TEXT_MESSAGE_CONTENT", "RUN_FINISHED"]);
 
 // --- the root takes the SAME attempt-scoped reset: no profile asymmetry -----------
 //
-// The reset is display-only, so applying it to the root changes nothing about its wire. This
-// assertion pins the unification: the subagent-only branch is what made a `task` restart while the
-// root resumed, and a gate that only covered the subagent side would let it come back unnoticed.
+// The reset drops the failed attempt's trailing TEXT-ONLY row, so on the root it changes the wire
+// exactly as it does for a subagent — the tool-bearing row below survives, which is the part that
+// must not differ by profile. This assertion pins the unification: the subagent-only branch is what
+// made a `task` restart while the root resumed, and a gate that only covered the subagent side would
+// let it come back unnoticed.
 attempts = 0;
 recoveryRetryCalls = 0;
 const rootChannel = new CountingChannel({
@@ -491,6 +493,60 @@ assert.equal(attempts, 2);
 assert.equal(rootChannel.resetCalls, 1, "the root gets the same attempt-scoped reset as a subagent");
 assert.equal(rootChannel.getMessages().length, 2, "and keeps its history too");
 assert.equal(recoveryRetryCalls, 1, "root still clears error status via onRecoveryRetry");
+
+// --- a session switch during the failed attempt SUPPRESSES the UI reset ------------
+//
+// The reset deletes the failed attempt's trailing text row. A recovery step can await (the
+// reactive-compact summarizer takes seconds), and a switch can commit inside that window: the channel
+// then belongs to a NEW transcript, whose own last row must not be deleted (nor its id suppressed).
+// The guard is the session generation captured when the run started.
+{
+  const switchedChannel = new CountingChannel({
+    initialMessages: [
+      {
+        id: "switched-prompt",
+        role: "user",
+        parts: [{ type: "text", content: "check the repo" }],
+        createdAt: new Date(),
+      },
+    ],
+  });
+  let switchedAttempts = 0;
+  const switchedManaged = {
+    run: makeRunCoordinatorStub(),
+    usage: null,
+    emitDiagnostic() {},
+    setError() {},
+    setRetry() {},
+    emitEvent() {},
+    getUI: () => switchedChannel,
+    statusController: { onRecoveryRetry() {} },
+  };
+  const switchedStream = async function* () {
+    switchedAttempts += 1;
+    if (switchedAttempts === 1) {
+      // A session switch commits while this attempt is failing.
+      switchedChannel.advanceSessionGeneration();
+      throw new RateLimitError();
+    }
+    yield { type: "TEXT_MESSAGE_CONTENT", delta: "ok" };
+    yield { type: "RUN_FINISHED", finishReason: "stop" };
+  };
+  for await (const chunk of runStreamWithRecovery({
+    managed: switchedManaged,
+    manager: {},
+    getMessages: () => switchedChannel.getMessages(),
+    run: () => switchedStream(),
+  })) {
+    void chunk;
+  }
+  assert.equal(switchedAttempts, 2, "the retry still happens");
+  assert.equal(
+    switchedChannel.resetCalls,
+    0,
+    "a retry whose transcript was replaced does not reset (or delete from) the new session"
+  );
+}
 
 // --- abort during retry backoff returns promptly and does not retry ---
 

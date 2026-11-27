@@ -138,182 +138,188 @@ export function buildAgentRunner(
   const emitEvent = createEmitTelemetryFn(managed);
   const midIterationMax = config.maxIterations ?? DEFAULT_AGENT_MAX_ITERATIONS;
 
-  const middleware = sortMiddlewaresByPhase([
-    createStatusMiddleware({
-      status: statusController,
-      getRunToken: () => run.getRunToken(),
-      onApprovalRequested: (approvalId, toolCallId) => {
-        approvals.upsert({ id: approvalId, toolCallId, status: "pending" });
-      },
-    }),
-    createApprovalResumeMiddleware({
-      getApprovals: () => approvals.toArray(),
-      getMessages: () => deps.getUIChannel()?.getMessages() ?? [],
-      isClientTool: (toolName) => deps.isClientTool(toolName),
-      emitEvent,
-    }),
-    createLifecycleMiddleware({
-      usage: usage,
-      getPricing: () => usage.getPricing(),
-      // Per-user-turn identity: a retried attempt keeps the same id, so `firstOutput` is not
-      // reported twice when the engine is re-entered.
-      getRunToken: () => deps.getCurrentRunId?.() ?? null,
-      onThinking: (info) => emitEvent("agent:thinking", info),
-      emitEvent,
-      recordUsage: (input) => usageHistory.record({ agentId: deps.agentId, ...input }),
-      maxIterations: midIterationMax,
-      onIteration: deps.setIterationProgress,
-    }),
-    createCompactionMiddleware({
-      agentId: deps.agentId,
-      manager: deps.manager,
-      getCompactionConfig: deps.getCompactionConfig,
-      getCoreEnv: () => deps.coreEnv,
-      // Read live so late-arriving ModelInfo (models.dev lookup) stays in sync
-      // with ManagedAgent.getMessagesForLLM's keep-policy resolution.
-      getContextWindow: () => deps.getModelInfo()?.contextWindow,
-      getUIChannel: deps.getUIChannel,
-      getUsage: () => usage,
-      getTodoManager: deps.getTodoManager,
-      shouldTriggerAutoCompact: deps.shouldTriggerAutoCompact,
-      compactions: deps.compactions,
-      emitEvent,
-      getWireProjectionCache: deps.getWireProjectionCache,
-    }),
-    createToolCompactMiddleware({
-      getCompactionConfig: deps.getCompactionConfig,
-      getToolCompactCache: deps.getToolCompactCache,
-      getManagedAgent: () => managed,
-      emitEvent,
-    }),
-    // Extension message transformers. Sits after `compaction` (that projection rebuilds the wire
-    // from the channel, discarding earlier edits) and after `tool-compact` (the stage that
-    // projects a tool result through its own `toModelOutput`: running before it meant a
-    // transformer's rewrite of a tool message was re-projected over on the same call).
-    createMessageTransformMiddleware({
-      agentId: deps.agentId,
-      getExtensionRunner: deps.getExtensionRunner,
-      getUsage: () => usage,
-      // Read live, not captured: a rejection can widen the run's drop set mid-run.
-      getWireDropPartTypes: () => run.getWireDropPartTypes(),
-      getAbortSignal: () => run.currentAbortController?.signal,
-    }),
-    // Per-run wire overrides that must outlive the channel projection (capability
-    // strip + `max_tokens` continuation). Sits after `tool-compact` — the stage that
-    // turns a tool result into real content parts, so the strip can reach tool media
-    // at all — and after `message-transform`, so a strip cannot hide the real media
-    // part from an extension transformer.
-    createWireRecoveryMiddleware({
-      getRun: () => run,
-      // Read live: a restore can report misses while the agent stays alive (mid-session switch).
-      hasUnhydratedMedia: deps.hasUnhydratedMedia,
-    }),
-    createTurnContextMiddleware({
-      getFrozenSystemPrompt: deps.getFrozenSystemPrompt,
-      getSections: () => deps.getDynamicTurnContextSections(),
-      getUIChannel: () => deps.getUIChannel() ?? undefined,
-      persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
-      getManagedAgent: () => managed,
-      emitEvent,
-      // Subagents get the parent's agent doc (their own is not loaded).
-      getProjectInstructions: () => {
-        if (!parentId) return undefined;
-        return deps.manager.getAgent(parentId)?.getAgentDocContent() || undefined;
-      },
-    }),
-    // Subagent step budget: one gentle reminder at 80%, so the child can wrap up before the cap.
-    createStepBudgetMiddleware({
-      isSubagent: () => Boolean(parentId),
-      getMaxIterations: () => midIterationMax,
-      getUIChannel: () => deps.getUIChannel() ?? undefined,
-      persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
-    }),
-    createExtensionsMiddleware({
-      getExtensionRunner: deps.getExtensionRunner,
-      getToolBeforeHooks: deps.getToolBeforeHooks,
-      // Session identity from the same accessor the event envelope uses: a subagent resolves the
-      // parent session it was spawned in (not its agent id), and a root falls back to the
-      // pre-adoption `initialSessionId`. This is what keeps `tool:before:*` agreeing with the
-      // `agent:tool-start` envelope for the same call.
-      getSessionId: () => deps.getEventSessionId(),
-      emitEvent,
-      getAbortSignal: () => run.currentAbortController?.signal,
-      // A pre-forked `task` emits its own start on admission; skip the eager one so a
-      // queued run does not time while it waits for a concurrency slot.
-      isTaskToolStartDeferred: (toolCallId) => peekTaskPreforkCoordinator(managed)?.has(toolCallId) === true,
-      // The approval decision (and the command-safety analysis behind it) was computed from the
-      // ORIGINAL input before this hook, and an eagerly started `task` subagent already began on
-      // it. Neither can honour a rewritten argument list after the fact.
-      isApprovalGated: (toolName) => deps.isToolNeedsApproval(toolName),
-      // Name equality is not identity: an extension may shadow `task`, and the deferred-start /
-      // argument-rewrite rules describe the built-in implementation on the original input.
-      isBuiltinTool: (toolName) => deps.isBuiltinTool(toolName),
-      onArgRewriteRefused: (toolName) => {
-        emitEvent("session:diagnostic", {
-          area: "extension",
-          message: "Ignored an extension argument rewrite on a gated tool call",
-          level: "warn",
-          details: { toolName },
-        });
-      },
-      onToolSettled: (toolCallId) => deps.streamHub.endCommand(toolCallId),
-    }),
-    // TanStack batches TOOL_CALL_END until all tools finish; mirror each result into UI early.
-    createEarlyToolResultUiMiddleware({
-      getUIChannel: deps.getUIChannel,
-    }),
-    // Pre-start task subagents while args stream so parallel task calls run concurrently.
-    createTaskPreforkMiddleware({
-      getManagedAgent: () => managed,
-      manager: deps.manager,
-      emitEvent,
-      getUIChannel: () => deps.getUIChannel() ?? undefined,
-    }),
-    createPlanModeMiddleware({
-      getModeState: () => deps.getModeState(),
-      resolveToolPresentation: deps.resolveToolPresentation,
-      isBuiltinTool: (toolName) => deps.isBuiltinTool(toolName),
-    }),
-    // Condition + counter reminder: the todo list has gone stale for too many rounds. Reads
-    // its round/episode state back from the window (no in-memory schedule).
-    createTodoReminderMiddleware({
-      getTodoManager: deps.getTodoManager,
-      getUIChannel: () => deps.getUIChannel() ?? undefined,
-      persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
-      emitEvent,
-    }),
-    // Condition + counter reminder: identical tool-call loops. Same scan model as the todo nag.
-    createRepeatReminderMiddleware({
-      getUIChannel: () => deps.getUIChannel() ?? undefined,
-      persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
-      emitEvent,
-    }),
-    // Background class: one trunk for both kinds — the `<background_jobs>` pointer (hash-admitted
-    // against the wire, commands only) and one-shot completion pushes, both persisted so they
-    // survive across turns.
-    createBackgroundMiddleware({
-      getUIChannel: () => deps.getUIChannel() ?? undefined,
-      persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
-      persistNow: (next) => deps.persistUIMessagesNow(next),
-      getBackgroundWork: () => deps.getBackgroundWork(),
-      getCommandService: () => deps.getCommandService(),
-      getParentId: () => parentId,
-      isAgentDestroyed: () => deps.isDestroyed(),
-      isSessionSwitching: () => deps.isSessionSwitching(),
-      emitEvent,
-      emitDiagnostic: (area, message, options) =>
-        emitEvent("session:diagnostic", {
-          area,
-          message,
-          ...(options?.level ? { level: options.level } : {}),
-          ...(options?.error ? { error: options.error } : {}),
-        }),
-    }),
-    createPromptCacheMiddleware({
-      getModelStyle: () => config.modelStyle,
-      getPromptCacheKey: () => resolvePromptCacheKey(session.getSessionData()?.id, deps.agentId),
-    }),
-  ]);
+  const middleware = sortMiddlewaresByPhase(
+    [
+      createStatusMiddleware({
+        status: statusController,
+        getRunToken: () => run.getRunToken(),
+        onApprovalRequested: (approvalId, toolCallId) => {
+          approvals.upsert({ id: approvalId, toolCallId, status: "pending" });
+        },
+      }),
+      createApprovalResumeMiddleware({
+        getApprovals: () => approvals.toArray(),
+        getMessages: () => deps.getUIChannel()?.getMessages() ?? [],
+        isClientTool: (toolName) => deps.isClientTool(toolName),
+        emitEvent,
+      }),
+      createLifecycleMiddleware({
+        usage: usage,
+        getPricing: () => usage.getPricing(),
+        // Per-user-turn identity: a retried attempt keeps the same id, so `firstOutput` is not
+        // reported twice when the engine is re-entered.
+        getRunToken: () => deps.getCurrentRunId?.() ?? null,
+        onThinking: (info) => emitEvent("agent:thinking", info),
+        emitEvent,
+        recordUsage: (input) => usageHistory.record({ agentId: deps.agentId, ...input }),
+        maxIterations: midIterationMax,
+        onIteration: deps.setIterationProgress,
+      }),
+      createCompactionMiddleware({
+        agentId: deps.agentId,
+        manager: deps.manager,
+        getCompactionConfig: deps.getCompactionConfig,
+        getCoreEnv: () => deps.coreEnv,
+        // Read live so late-arriving ModelInfo (models.dev lookup) stays in sync
+        // with ManagedAgent.getMessagesForLLM's keep-policy resolution.
+        getContextWindow: () => deps.getModelInfo()?.contextWindow,
+        getUIChannel: deps.getUIChannel,
+        getUsage: () => usage,
+        getTodoManager: deps.getTodoManager,
+        shouldTriggerAutoCompact: deps.shouldTriggerAutoCompact,
+        compactions: deps.compactions,
+        emitEvent,
+        getWireProjectionCache: deps.getWireProjectionCache,
+      }),
+      createToolCompactMiddleware({
+        getCompactionConfig: deps.getCompactionConfig,
+        getToolCompactCache: deps.getToolCompactCache,
+        getManagedAgent: () => managed,
+        emitEvent,
+      }),
+      // Extension message transformers. Sits after `compaction` (that projection rebuilds the wire
+      // from the channel, discarding earlier edits) and after `tool-compact` (the stage that
+      // projects a tool result through its own `toModelOutput`: running before it meant a
+      // transformer's rewrite of a tool message was re-projected over on the same call).
+      createMessageTransformMiddleware({
+        agentId: deps.agentId,
+        getExtensionRunner: deps.getExtensionRunner,
+        getUsage: () => usage,
+        // Read live, not captured: a rejection can widen the run's drop set mid-run.
+        getWireDropPartTypes: () => run.getWireDropPartTypes(),
+        getAbortSignal: () => run.currentAbortController?.signal,
+      }),
+      // Per-run wire overrides that must outlive the channel projection (capability
+      // strip + `max_tokens` continuation). Sits after `tool-compact` — the stage that
+      // turns a tool result into real content parts, so the strip can reach tool media
+      // at all — and after `message-transform`, so a strip cannot hide the real media
+      // part from an extension transformer.
+      createWireRecoveryMiddleware({
+        getRun: () => run,
+        // Read live: a restore can report misses while the agent stays alive (mid-session switch).
+        hasUnhydratedMedia: deps.hasUnhydratedMedia,
+      }),
+      createTurnContextMiddleware({
+        getFrozenSystemPrompt: deps.getFrozenSystemPrompt,
+        getSections: () => deps.getDynamicTurnContextSections(),
+        getUIChannel: () => deps.getUIChannel() ?? undefined,
+        persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
+        getManagedAgent: () => managed,
+        emitEvent,
+        // Subagents get the parent's agent doc (their own is not loaded).
+        getProjectInstructions: () => {
+          if (!parentId) return undefined;
+          return deps.manager.getAgent(parentId)?.getAgentDocContent() || undefined;
+        },
+      }),
+      // Subagent step budget: one gentle reminder at 80%, so the child can wrap up before the cap.
+      createStepBudgetMiddleware({
+        isSubagent: () => Boolean(parentId),
+        getMaxIterations: () => midIterationMax,
+        getUIChannel: () => deps.getUIChannel() ?? undefined,
+        persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
+      }),
+      createExtensionsMiddleware({
+        getExtensionRunner: deps.getExtensionRunner,
+        getToolBeforeHooks: deps.getToolBeforeHooks,
+        // Session identity from the same accessor the event envelope uses: a subagent resolves the
+        // parent session it was spawned in (not its agent id), and a root falls back to the
+        // pre-adoption `initialSessionId`. This is what keeps `tool:before:*` agreeing with the
+        // `agent:tool-start` envelope for the same call.
+        getSessionId: () => deps.getEventSessionId(),
+        emitEvent,
+        getAbortSignal: () => run.currentAbortController?.signal,
+        // A pre-forked `task` emits its own start on admission; skip the eager one so a
+        // queued run does not time while it waits for a concurrency slot.
+        isTaskToolStartDeferred: (toolCallId) => peekTaskPreforkCoordinator(managed)?.has(toolCallId) === true,
+        // The approval decision (and the command-safety analysis behind it) was computed from the
+        // ORIGINAL input before this hook, and an eagerly started `task` subagent already began on
+        // it. Neither can honour a rewritten argument list after the fact.
+        isApprovalGated: (toolName) => deps.isToolNeedsApproval(toolName),
+        // Name equality is not identity: an extension may shadow `task`, and the deferred-start /
+        // argument-rewrite rules describe the built-in implementation on the original input.
+        isBuiltinTool: (toolName) => deps.isBuiltinTool(toolName),
+        onArgRewriteRefused: (toolName) => {
+          emitEvent("session:diagnostic", {
+            area: "extension",
+            message: "Ignored an extension argument rewrite on a gated tool call",
+            level: "warn",
+            details: { toolName },
+          });
+        },
+        onToolSettled: (toolCallId) => deps.streamHub.endCommand(toolCallId),
+      }),
+      // TanStack batches TOOL_CALL_END until all tools finish; mirror each result into UI early.
+      createEarlyToolResultUiMiddleware({
+        getUIChannel: deps.getUIChannel,
+      }),
+      // Pre-start task subagents while args stream so parallel task calls run concurrently.
+      createTaskPreforkMiddleware({
+        getManagedAgent: () => managed,
+        manager: deps.manager,
+        emitEvent,
+        getUIChannel: () => deps.getUIChannel() ?? undefined,
+      }),
+      createPlanModeMiddleware({
+        getModeState: () => deps.getModeState(),
+        resolveToolPresentation: deps.resolveToolPresentation,
+        isBuiltinTool: (toolName) => deps.isBuiltinTool(toolName),
+      }),
+      // Condition + counter reminder: the todo list has gone stale for too many rounds. Reads
+      // its round/episode state back from the window (no in-memory schedule).
+      createTodoReminderMiddleware({
+        getTodoManager: deps.getTodoManager,
+        getUIChannel: () => deps.getUIChannel() ?? undefined,
+        persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
+        emitEvent,
+      }),
+      // Condition + counter reminder: identical tool-call loops. Same scan model as the todo nag.
+      createRepeatReminderMiddleware({
+        getUIChannel: () => deps.getUIChannel() ?? undefined,
+        persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
+        emitEvent,
+      }),
+      // Background class: one trunk for both kinds — the `<background_jobs>` pointer (hash-admitted
+      // against the wire, commands only) and one-shot completion pushes, both persisted so they
+      // survive across turns.
+      createBackgroundMiddleware({
+        getUIChannel: () => deps.getUIChannel() ?? undefined,
+        persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
+        persistNow: (next) => deps.persistUIMessagesNow(next),
+        getBackgroundWork: () => deps.getBackgroundWork(),
+        getCommandService: () => deps.getCommandService(),
+        getParentId: () => parentId,
+        isAgentDestroyed: () => deps.isDestroyed(),
+        isSessionSwitching: () => deps.isSessionSwitching(),
+        emitEvent,
+        emitDiagnostic: (area, message, options) =>
+          emitEvent("session:diagnostic", {
+            area,
+            message,
+            ...(options?.level ? { level: options.level } : {}),
+            ...(options?.error ? { error: options.error } : {}),
+          }),
+      }),
+      createPromptCacheMiddleware({
+        getModelStyle: () => config.modelStyle,
+        getPromptCacheKey: () => resolvePromptCacheKey(session.getSessionData()?.id, deps.agentId),
+      }),
+      // Same sink as the canonical-order assertion below: an undeclared phase sorts to the end, which
+      // only fails loudly if `assertCanonicalMiddlewareOrder` happens to notice. The supplier's default
+      // is a no-op, so leaving it out silently disabled the check this parameter exists for.
+    ],
+    (message) => emitEvent("session:diagnostic", { area: "middleware", message })
+  );
   assertCanonicalMiddlewareOrder(middleware, (message: string) =>
     emitEvent("session:diagnostic", { area: "middleware", message })
   );

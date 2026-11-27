@@ -1,4 +1,4 @@
-import { buildSystemPromptWithTurnContext } from "../../agent/prompt/frozen-system-prompt.js";
+import { systemPromptsFromFrozen } from "../../agent/prompt/frozen-system-prompt.js";
 import { buildProjectInstructionsSection } from "../../agent/turn-context/prompt-builder.js";
 import { captureSessionStaleness } from "../../agent/turn-context/session-staleness.js";
 import {
@@ -73,7 +73,7 @@ export function createTurnContextMiddleware(deps: TurnContextMiddlewareDeps): Ch
   return defineMiddleware("context-transform", {
     name: "turn-context",
     onConfig: async (_ctx, config) => {
-      const systemPrompts = buildSystemPromptWithTurnContext(deps.getFrozenSystemPrompt());
+      const systemPrompts = systemPromptsFromFrozen(deps.getFrozenSystemPrompt());
       const result: Partial<typeof config> = systemPrompts ? { systemPrompts } : {};
 
       const managed = deps.getManagedAgent();

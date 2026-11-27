@@ -86,17 +86,14 @@ export function sortMiddlewaresByPhase<T extends { name?: string; phase?: Middle
   middlewares: T[],
   warn: (message: string) => void = () => {}
 ): T[] {
-  return [...middlewares].sort((a, b) => {
-    const rankA = a.phase ? MIDDLEWARE_PHASE_RANK[a.phase] : Number.NaN;
-    const rankB = b.phase ? MIDDLEWARE_PHASE_RANK[b.phase] : Number.NaN;
-    if (Number.isNaN(rankA)) {
-      warn(`middleware "${a.name ?? "?"}" has no phase declaration — it will not be phase-sorted`);
+  // Report once per middleware, BEFORE sorting. A comparator runs O(n log n) times, so warning from
+  // inside it wrote the same diagnostic repeatedly once a real sink was attached.
+  for (const middleware of middlewares) {
+    if (!middleware.phase) {
+      warn(`middleware "${middleware.name ?? "?"}" has no phase declaration — it will not be phase-sorted`);
     }
-    if (Number.isNaN(rankB)) {
-      warn(`middleware "${b.name ?? "?"}" has no phase declaration — it will not be phase-sorted`);
-    }
-    const left = Number.isNaN(rankA) ? Number.MAX_SAFE_INTEGER : rankA;
-    const right = Number.isNaN(rankB) ? Number.MAX_SAFE_INTEGER : rankB;
-    return left - right;
-  });
+  }
+  const rankOf = (middleware: T): number =>
+    middleware.phase ? MIDDLEWARE_PHASE_RANK[middleware.phase] : Number.MAX_SAFE_INTEGER;
+  return [...middlewares].sort((a, b) => rankOf(a) - rankOf(b));
 }

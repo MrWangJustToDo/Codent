@@ -12,6 +12,7 @@ import {
   createRunCommandTool,
   createToolCompactMiddleware,
   createWriteFileTool,
+  defineClientTool,
   getToolMetadata,
   ToolCompactCache,
   toolCompactCacheKey,
@@ -550,6 +551,36 @@ assert.doesNotMatch(errorText, /Overwrote file: undefined/);
   assert.ok(Array.isArray(projected?.content), "the projection is a text content part, not the marker JSON");
   assert.equal(projectedText.includes("argumentsIncomplete"), false, "marker bookkeeping never reaches the model");
   assert.equal(projectedText.includes("interrupted"), false);
+}
+
+// A CLIENT tool can declare `toModelOutput` too. Its result is supplied by the host (`addToolResult`),
+// and the model should not read the host's bookkeeping fields (`durationMs`, `cachedOutputPath`), so
+// the seam must be the same one server tools use — the tool object's own metadata.
+{
+  const clientTool = defineClientTool({
+    name: "ask_probe",
+    description: "probe client tool",
+    toModelOutput: ({ output }) => `answer: ${String(output.answer)}`,
+  });
+
+  const out = await applyToolCompact(
+    [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [{ id: "call-client", type: "function", function: { name: "ask_probe", arguments: "{}" } }],
+      },
+      {
+        role: "tool",
+        toolCallId: "call-client",
+        content: JSON.stringify({ answer: "yes", durationMs: 12, cachedOutputPath: null }),
+      },
+    ],
+    { config: {}, registry: { get: () => getToolMetadata(clientTool)?.toModelOutput }, cache: new ToolCompactCache() }
+  );
+  const projectedText = JSON.stringify(out.find((m) => m.role === "tool" && m.toolCallId === "call-client")?.content);
+  assert.match(projectedText, /answer: yes/, "a client tool's projection reaches the model wire");
+  assert.equal(projectedText.includes("durationMs"), false, "…and the host bookkeeping it dropped stays gone");
 }
 
 console.log("tool-compact validation passed");

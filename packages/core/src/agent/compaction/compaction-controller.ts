@@ -183,46 +183,55 @@ export class CompactionController {
   /** Terminal outcome: emit the completion/failure line and restore the status this lease took. */
   finish(lease: CompactionLease, outcome: CompactionOutcome): boolean {
     if (!this.isCurrent(lease)) return false;
-    if (outcome.status === "completed") {
-      // A successful compaction of ANY kind invalidates the retry floor a failed auto attempt armed
-      // (see `clearAutoRetryFloor`). Owned here so a new kind cannot forget it, and applied before the
-      // status write: a throwing host writer must not leave the floor armed after a real checkpoint.
-      this.clearAutoRetryFloor();
-      if (lease.kind === "reactive") {
-        this.deps.emitEvent("compaction:reactive-complete", {
-          originalCount: outcome.originalCount,
-          compactedCount: outcome.compactedCount,
-          tokensBefore: outcome.tokensBefore,
-          tokensAfter: outcome.tokensAfter,
-        });
-      } else if (lease.kind === "manual") {
-        this.deps.emitEvent("compaction:manual-complete", {
-          tokensBefore: outcome.tokensBefore,
-          tokensAfter: outcome.tokensAfter,
-        });
-      } else {
-        this.deps.emitEvent("compaction:auto-complete", {
-          tokensBefore: outcome.tokensBefore,
-          tokensAfter: outcome.tokensAfter,
-        });
+    try {
+      if (outcome.status === "completed") {
+        // A successful compaction of ANY kind invalidates the retry floor a failed auto attempt armed
+        // (see `clearAutoRetryFloor`). Owned here so a new kind cannot forget it, and applied before the
+        // status write: a throwing host writer must not leave the floor armed after a real checkpoint.
+        this.clearAutoRetryFloor();
+        if (lease.kind === "reactive") {
+          this.deps.emitEvent("compaction:reactive-complete", {
+            originalCount: outcome.originalCount,
+            compactedCount: outcome.compactedCount,
+            tokensBefore: outcome.tokensBefore,
+            tokensAfter: outcome.tokensAfter,
+          });
+        } else if (lease.kind === "manual") {
+          this.deps.emitEvent("compaction:manual-complete", {
+            tokensBefore: outcome.tokensBefore,
+            tokensAfter: outcome.tokensAfter,
+          });
+        } else {
+          this.deps.emitEvent("compaction:auto-complete", {
+            tokensBefore: outcome.tokensBefore,
+            tokensAfter: outcome.tokensAfter,
+          });
+        }
+      } else if (outcome.status === "failed") {
+        if (lease.kind === "reactive") {
+          this.deps.emitEvent("compaction:reactive-error", {
+            error: outcome.error,
+          });
+        } else if (lease.kind === "manual") {
+          this.deps.emitEvent("compaction:manual-error", {
+            error: outcome.error,
+          });
+        } else {
+          this.deps.emitEvent("compaction:auto-error", {
+            error: outcome.error,
+          });
+        }
       }
-    } else if (outcome.status === "failed") {
-      if (lease.kind === "reactive") {
-        this.deps.emitEvent("compaction:reactive-error", {
-          error: outcome.error,
-        });
-      } else if (lease.kind === "manual") {
-        this.deps.emitEvent("compaction:manual-error", {
-          error: outcome.error,
-        });
-      } else {
-        this.deps.emitEvent("compaction:auto-error", {
-          error: outcome.error,
-        });
-      }
+      this.restoreStatus(lease.kind, outcome);
+    } finally {
+      // The lease must never outlive the workflow. EVERY host writer in this method can throw:
+      // `restoreStatus` calls `transition` / `setStatus` / `setError`, and the outcome events resolve
+      // through the bus (observer throws are contained there, but `resolveMeta` and the sink are not
+      // observer calls). Leaving `active` set strands the phase on a finished workflow — `isRunning()`
+      // stays true, so `/compact` is refused and the queue drain never runs. Same rule the retry floor
+      // already follows in `begin`.
+      this.active = null;
     }
-    this.restoreStatus(lease.kind, outcome);
-    this.active = null;
     return true;
   }
 
@@ -234,8 +243,12 @@ export class CompactionController {
    */
   release(lease: CompactionLease): void {
     if (!this.isCurrent(lease)) return;
-    this.restoreStatus(lease.kind);
-    this.active = null;
+    try {
+      this.restoreStatus(lease.kind);
+    } finally {
+      // See `finish`: a throwing host writer must not strand the lease on a finished workflow.
+      this.active = null;
+    }
   }
 
   /**

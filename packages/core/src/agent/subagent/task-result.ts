@@ -187,7 +187,12 @@ export async function finalizeSubagentTask(input: FinalizeSubagentTaskInput): Pr
       (error) =>
         subagentManaged.emitEvent(
           "subagent:progress-summary-error",
-          { subagentId, parentAgentId, error },
+          {
+            subagentId,
+            parentAgentId,
+            ...(parentTaskToolCallId ? { parentTaskToolCallId } : {}),
+            error,
+          },
           { parentId: parentAgentId }
         ),
       abortSignal

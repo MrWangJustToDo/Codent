@@ -66,6 +66,10 @@ export class AgentToolService {
   /**
    * Bind the live record. Its identity is stable for the lifetime of an agent; replacing it after
    * tools have been registered would discard extension stacks and owner/rank information.
+   *
+   * Callers must pass the agent's LIVE record (`getTools()`), never a filtered copy: the pruning below
+   * removes every adopted entry whose name the record does not carry, which is only correct when the
+   * record is the whole truth.
    */
   useTools(tools: ToolsRecord): ToolsRecord {
     if (this.registry.getToolsRecord() !== tools) {
@@ -89,6 +93,14 @@ export class AgentToolService {
       if (this.adopted.get(name) === tool) continue;
       this.registry.seed(name, tool);
       this.adopted.set(name, tool);
+    }
+    // Drop names the record no longer carries. An unloaded extension tool loses its record entry,
+    // but this map kept holding the tool object — and with it the `execute` and
+    // `getExtensionContext` closures that reach back into the runner and the extension module. A
+    // process that toggles extensions repeatedly grew one entry per name it had ever registered.
+    // The loop above walks the live record, so this prune is exhaustive by construction.
+    for (const name of this.adopted.keys()) {
+      if (!Object.hasOwn(tools, name)) this.adopted.delete(name);
     }
     return this.registry.getToolsRecord();
   }

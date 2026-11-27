@@ -17,15 +17,22 @@
 /**
  * What a tool does, in one bucket.
  *
- * `edits` is **load-bearing beyond display**: plan mode withholds exactly the tools that declare it
- * (`agent/plan/plan-tools.ts`), so moving a tool into `edits` restricts it while planning and moving
- * one out makes it available there. `validate:plan-tool-boundary` asserts that boundary, so a change
- * here is a boundary change rather than a display tweak.
+ * `edits` is **load-bearing beyond display**: plan mode withholds every tool that declares it, and
+ * treats a tool with no category at all as editing (fail closed). So moving a tool into `edits`
+ * restricts it while planning, and REMOVING the category is as strict as declaring `edits` — it never
+ * makes a tool available. `validate:plan-tool-boundary` asserts that boundary, so a change here is a
+ * boundary change rather than a display tweak.
  */
 export type ToolActivityCategory = "reads" | "edits" | "searches" | "commands" | "tasks" | "other";
 
 export interface ToolPresentation {
-  /** Fold bucket for activity summaries (`"other"` when unset). */
+  /**
+   * Tool activity class: the fold bucket in activity summaries (`"other"` when unset).
+   *
+   * This is ALSO a safety declaration, not only a display hint: plan mode withholds a tool whose
+   * category is `"edits"` and treats an absent category as editing (fail closed) — see
+   * `isWorkspaceEditingTool`. An extension tool that edits the workspace must declare it.
+   */
   category?: ToolActivityCategory;
   /** Completed rows of this tool never fold in compact display (structured / interactive results). */
   keepRow?: boolean;

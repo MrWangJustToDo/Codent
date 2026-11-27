@@ -138,6 +138,15 @@ export type SubagentEventPayloads = {
   "subagent:progress-summary-error": {
     subagentId?: string;
     parentAgentId?: string;
+    /**
+     * The parent's `task` tool call this run belongs to.
+     *
+     * Every per-subagent lifecycle payload carries it (the queue/pre-fork snapshots do not name one
+     * subagent, so they are not this case), and the log appends `[task …]` from it; omitting it here
+     * left the one failure row that cannot be aggregated by task (only by `subagentId`, which needs a
+     * lookup).
+     */
+    parentTaskToolCallId?: string;
     error?: string;
   };
 };

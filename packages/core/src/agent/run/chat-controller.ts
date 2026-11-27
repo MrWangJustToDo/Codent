@@ -52,19 +52,20 @@ import type { QueuedMessageContent, QueuedMessagesSnapshot } from "../../runtime
 import type { SessionSaveReason } from "../persistence/session-sync-tracker.js";
 import type { ContentPart, UIMessage } from "@tanstack/ai";
 
-const MAX_TOOL_PHASES = 40;
 /**
  * Model/tool phases for ONE user prompt, across every chained pump.
  *
- * `MAX_TOOL_PHASES` bounds a single pump, and the `keepPumping` hand-off deliberately starts a new
- * one without finalizing the turn (a long tool loop is not a turn end). Nothing bounded the chain:
- * a degenerate response — a batch whose tool calls never settle, a stream that ends before its tools
- * — handed off forever, each pump with a fresh `maxIterations` allowance, so one prompt could spend
- * an unbounded number of paid calls while `agent:iteration` restarted at 1/max every time. This is
- * the ceiling for the whole prompt; `MAX_TOOL_PHASES * 4` keeps every legitimate long turn that the
- * previous per-pump cap already admitted.
+ * The `keepPumping` hand-off deliberately starts a new pump without finalizing the turn (a long tool
+ * loop is not a turn end), and nothing bounded the chain: a degenerate response — a batch whose tool
+ * calls never settle, a stream that ends before its tools — handed off forever, each pump with a
+ * fresh `maxIterations` allowance, so one prompt could spend an unbounded number of paid calls while
+ * `agent:iteration` restarted at 1/max every time.
+ *
+ * There is no separate per-pump cap: the loop below spends THIS budget, and a chained pump continues
+ * against what the prompt has left. The value is the old per-pump ceiling (40) × 4, which is what
+ * keeps every legitimate long turn the previous per-pump cap already admitted.
  */
-const MAX_TURN_TOOL_PHASES = MAX_TOOL_PHASES * 4;
+const MAX_TURN_TOOL_PHASES = 160;
 /** Reported when {@link MAX_TURN_TOOL_PHASES} is exhausted (a failed turn, not a silent halt). */
 const TURN_PHASE_BUDGET_MESSAGE =
   "Stopped this turn after its tool-phase budget was exhausted. Send another message to continue.";
@@ -400,6 +401,31 @@ export class AgentChatController {
   }
 
   /**
+   * Release the pump-admission depth for a run that was invalidated from OUTSIDE this controller.
+   *
+   * `interruptCurrentRun` is the single owner of "invalidate the token AND reset the depth"; a host
+   * that calls `ManagedAgent.abort()` directly used to get only the first half. The stale pump's
+   * `finally` skips its decrement (its token is no longer current), so `pumpDepth` stayed > 0 for
+   * the life of the agent: `isPumpLive()` true, every later message parked in the steer queue that
+   * only a pump drains, and `/compact` / `/clone` refused as "agent is running", recoverable only by
+   * an Esc that also discards the user's queued input. Idempotent by construction (assignment, and
+   * the stale pump cannot double-count), so the existing owner can keep calling it.
+   *
+   * `pumpBaselines` is released here too, because they belong to the same invalidated run. The one
+   * consumer that must still SEE them is `interruptCurrentRun`, which therefore snapshots them
+   * BEFORE calling `abort()` — that order is the invariant (a read after the abort saw `null` and
+   * silently demoted the most common turn ending, a user abort, to the status-only finalize).
+   *
+   * A pump that is QUEUED but has not started is not covered (`runPending()` still reports true).
+   * That is the narrow residual of a direct external abort; the in-repo callers are the destroy path
+   * (already `destroyed`, so the pump early-returns) and the no-chat fallback in session dispatch.
+   */
+  releaseRunBookkeeping(): void {
+    this.pumpBaselines = null;
+    this.pumpDepth = 0;
+  }
+
+  /**
    * Deny every pending approval and refresh the derived count.
    *
    * The turn that asked is gone (Esc, teardown, a stream failure), so the question must not outlive
@@ -428,14 +454,21 @@ export class AgentChatController {
     // agents, which `onUserCancel` does not touch, still reported. The exact inverse of the intent:
     // the log bridge never wrote its abort row and `agent:abort` observers (memory selection
     // discard) never ran on a real cancel.
+    // Snapshot the pump's baselines BEFORE the abort. `abort()` releases the run's bookkeeping —
+    // including these — and this method is the only consumer that still needs them (the invalidated
+    // pump skips its own outcome path, so this is what keeps an Esc a first-class turn outcome with
+    // its `turn:summary`). Reading them after the abort was the regression.
+    const baselines = this.pumpBaselines;
     this.managed.abort(reason, { userCancel: options.userCancel ?? true });
     this.managed.statusController.onUserCancel();
-    // Single owner of token invalidation + depth reset. The stale pump's finally
-    // skips decrement when its token is not current (it holds a captured token),
-    // so a subsequent sendMessage/forceSubmit is neither deferred by the stale
-    // pump's queue logic nor desynchronized by its unwinding decrement.
+    // The same idempotent helper the host-facing `abort()` calls (the call above already ran it):
+    // token invalidation and the depth reset cannot split, whether the stop starts here or in
+    // `ManagedAgent.abort()`. Keeping the local call means a future refactor of `abort()` cannot
+    // silently drop the reset for this path. The stale pump's `finally` skips its decrement because
+    // its captured token is no longer current, so a subsequent sendMessage/forceSubmit is neither
+    // deferred by the stale pump's queue logic nor desynchronized by its unwinding decrement.
     this.managed.run.invalidateCurrentRun();
-    this.pumpDepth = 0;
+    this.releaseRunBookkeeping();
     // Immediately clear loading tool rows; stream teardown may still finalize later. A pending
     // `ask_user` is preserved: it is a question addressed to the user, not work this abort owns,
     // and cancelling it here would make the park below a no-op (and discard the question).
@@ -463,7 +496,6 @@ export class AgentChatController {
     // a failed run parked on `ask_user` PROJECTS as `awaiting_user`, so the old
     // `getStatus() === "error"` test called it a cancel.
     const kind = deriveCancelVerdict(this.managed.getAgentState());
-    const baselines = this.pumpBaselines;
     if (baselines) {
       this.pumpBaselines = null;
       this.managed.runFinalizer.finalizeChat({
@@ -1110,8 +1142,8 @@ export class AgentChatController {
     // later message queued with nothing to drain it — and surfaced as an unhandled rejection from
     // `enqueueRunOnce` (which callers fire with `void`). The catch then finalizes as `error`.
     try {
-      // A chain pump continues the SAME prompt: its per-pump phase cap resets, but the turn's
-      // budget must not. Read (and clear) the mark before the admission check below, which can
+      // A chain pump continues the SAME prompt: each `chat()` gets a fresh `maxIterations`
+      // allowance, but the TURN's tool-phase budget must not reset. Read (and clear) the mark before the admission check below, which can
       // return — a refused chain pump must not leave the mark for the next real turn.
       const chained = this.pendingContinuesTurn;
       this.pendingContinuesTurn = false;
@@ -1277,8 +1309,9 @@ export class AgentChatController {
           waitingForUser = hasPendingInteraction(messages, this.classifyClientTool);
         }
 
-        // Phase cap or early stream end while tools/model still need work — chain
-        // another pump without finalizing the turn (avoids stale "running" + trapped queues).
+        // The stream ended while the tools/model still need work (an early end, not the budget —
+        // that path cleared `keepPumping` above): chain another pump without finalizing the turn
+        // (avoids stale "running" + trapped queues).
         if (keepPumping && outcomeKind === "finished") {
           this.managed.statusController.reconcileWithPolicy(messages, "during-run");
           this.persistMessages("pump-complete");

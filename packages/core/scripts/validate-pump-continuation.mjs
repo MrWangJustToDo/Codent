@@ -213,6 +213,32 @@ assert.equal(shouldDeferMidRunQueue({ pumpDepth: 0, status: "idle" }), false, "i
   assert.match(interrupt, /usageBefore: baselines\.usage/, "the summary uses the pump's usage baseline");
   assert.match(interrupt, /costBefore: baselines\.cost/, "…cost baseline");
   assert.match(interrupt, /toolCallsBefore: baselines\.toolCalls/, "…tool-call baseline");
+
+  // The release helper runs from `abort()` — i.e. BEFORE this read. It may reset the depth, but it
+  // must not clear `pumpBaselines`, or the branch above is dead code and every Esc silently drops its
+  // `turn:summary` again (the regression this assertion exists for).
+  const releaseStart = src.indexOf("releaseRunBookkeeping(): void {");
+  assert.ok(releaseStart !== -1, "releaseRunBookkeeping is present");
+  const release = src.slice(releaseStart, src.indexOf("}", releaseStart) + 1);
+  assert.match(release, /this\.pumpDepth = 0/, "the release resets the pump depth");
+  assert.match(release, /this\.pumpBaselines = null/, "…and releases the baselines with the invalidated run");
+
+  // Ordering is the invariant: because the abort releases them, the finalize path must have
+  // snapshotted the baselines FIRST. Reading after the abort silently dropped every Esc's
+  // `turn:summary` (the invalidated pump skips its own outcome path), so both halves are asserted.
+  const snapshotAt = interrupt.indexOf("const baselines = this.pumpBaselines;");
+  const abortAt = interrupt.indexOf("this.managed.abort(");
+  assert.ok(snapshotAt !== -1, "interruptCurrentRun snapshots the baselines");
+  assert.ok(abortAt !== -1 && snapshotAt < abortAt, "…before abort(), which releases them");
+
+  // …and the host-facing `abort()` must actually reach the release helper. Without this call the
+  // original bug is back (depth stuck > 0 ⇒ `isPumpLive()` true forever, input parked in a queue no
+  // pump drains), and nothing else in the suite would notice.
+  const managedSrc = readFileSync(fileURLToPath(new URL("../src/managers/managed-agent.ts", import.meta.url)), "utf8");
+  const abortStart = managedSrc.indexOf("abort(reason?: string");
+  assert.ok(abortStart !== -1, "ManagedAgent.abort is present");
+  const abortBody = managedSrc.slice(abortStart, abortStart + 4000);
+  assert.match(abortBody, /releaseRunBookkeeping\(\)/, "abort() releases the pump bookkeeping it invalidates");
 }
 
 // ---------------------------------------------------------------------------

@@ -73,8 +73,14 @@ const RETAINED_CHANNEL_EVENT = (() => {
 
 type ChannelPayload<C extends AgentSessionChannel> = Extract<AgentSessionEvent, { channel: C }>["payload"];
 
-/** One warning per channel per process for a retained declaration with no provider. */
-const warnedRetainedChannels = new Set<AgentSessionChannel>();
+/**
+ * One warning per (agent, channel) for a retained declaration with no provider.
+ *
+ * Keyed by the agent, not by the channel alone: provider registration is per agent, so a
+ * process-wide "already warned" set let the first agent's transient miss mask every later agent's
+ * real wiring bug. A `WeakMap` keeps that bookkeeping from outliving the agents it describes.
+ */
+const warnedRetainedChannels = new WeakMap<object, Set<AgentSessionChannel>>();
 /**
  * Lifecycle payloads that must not cross the wire verbatim.
  *
@@ -296,11 +302,15 @@ class LocalAgentSessionImpl implements AgentSession {
           // no value yet (only the former is a wiring bug). `session:jobs` shipped the first shape
           // before it gained its provider; this warning is the regression net for the declaration,
           // not a detector for "projection returned null".
-          if (!bus.hasRetained(type, { includeParents: false }) && !warnedRetainedChannels.has(channel)) {
-            warnedRetainedChannels.add(channel);
-            console.warn(
-              `[agent-session] channel "${channel}" is declared retained ("${type}") but no provider is registered; subscribers receive no initial frame`
-            );
+          if (!bus.hasRetained(type, { includeParents: false })) {
+            const warned = warnedRetainedChannels.get(this.managed) ?? new Set<AgentSessionChannel>();
+            if (!warned.has(channel)) {
+              warned.add(channel);
+              warnedRetainedChannels.set(this.managed, warned);
+              console.warn(
+                `[agent-session] channel "${channel}" is declared retained ("${type}") but no provider is registered; subscribers receive no initial frame`
+              );
+            }
           }
           continue;
         }

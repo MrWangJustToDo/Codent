@@ -9,9 +9,10 @@
  * 1. `runnerConfigKey` includes `planMode.getPhase()`, and `onPhaseChange` calls
  *    `invalidateRunner()`. So the phase flip to `retro` **invalidates the cached
  *    runner**.
- * 2. `AgentChatController.pumpToolPhases` loops `MAX_TOOL_PHASES` times, each
- *    iteration resolving the runner through `ensureAgentRunner`. The next iteration
- *    therefore rebuilds with the retro tool set, where `complete_plan` is present.
+ * 2. `AgentChatController.pumpToolPhases` resolves the runner through
+ *    `ensureAgentRunner` on every iteration (its loop is bounded by the turn's
+ *    remaining `MAX_TURN_TOOL_PHASES` budget). The next iteration therefore rebuilds
+ *    with the retro tool set, where `complete_plan` is present.
  * 3. `notifyChange()` (called by `maybeEnterRetro`) already fires `onPhaseChange`,
  *    so the invalidation happens without any extra hook.
  *

@@ -19,7 +19,7 @@ import {
   buildFrozenSystemPrompt,
   buildModeInactivePrompt,
   buildProjectInstructionsSection,
-  buildSystemPromptWithTurnContext,
+  systemPromptsFromFrozen,
   buildTurnContextSections,
   summarizeGitStatus,
   contextAttributesFromText,
@@ -52,10 +52,10 @@ const frozen = buildFrozenSystemPrompt({
 });
 assert.ok(frozen?.includes("<SYSTEM_PROMPT_DYNAMIC_BOUNDARY>"));
 
-const withDynamic = buildSystemPromptWithTurnContext(frozen);
-assert.deepEqual(withDynamic, [frozen]);
-assert.ok(!withDynamic?.[0]?.includes("<ctx kind="));
-assert.deepEqual(buildSystemPromptWithTurnContext(undefined), undefined);
+const systemPrompts = systemPromptsFromFrozen(frozen);
+assert.deepEqual(systemPrompts, [frozen]);
+assert.ok(!systemPrompts?.[0]?.includes("<ctx kind="));
+assert.deepEqual(systemPromptsFromFrozen(undefined), undefined);
 assert.ok(SYSTEM_PROMPT_DYNAMIC_BOUNDARY.includes("DYNAMIC"));
 
 // ---------------------------------------------------------------------------

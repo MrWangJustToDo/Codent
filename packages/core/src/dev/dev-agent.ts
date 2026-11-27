@@ -280,7 +280,7 @@ export {
 } from "../agent/prompt/instruction-files.js";
 export { loadAgentDoc } from "../agent/prompt/agent-doc-loader.js";
 export { toolsToArray } from "../agent/tools/catalog/tool-set.js";
-export { defineServerTool, getToolMetadata } from "../agent/tools/runtime/define-tool.js";
+export { defineClientTool, defineServerTool, getToolMetadata } from "../agent/tools/runtime/define-tool.js";
 export { createSessionSearchTool } from "../agent/tools/builtin/session/search-tool.js";
 export { createSessionReadTool } from "../agent/tools/builtin/session/read-tool.js";
 export {

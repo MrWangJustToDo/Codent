@@ -198,4 +198,62 @@ for (const [label, result] of [
   assert.equal(refusedEnd.data?.cancelled, false, "without pretending it was a cancel");
 }
 
+// ---------------------------------------------------------------------------
+// `tool:after` / `tool:error` carry the PARSED arguments, like `tool:before`
+// ---------------------------------------------------------------------------
+// They used to forward the raw JSON string, so an extension that read `event.payload.args.path` got
+// `undefined` from after/error and an object from before — the same field, two shapes, no type to say
+// so. A truncated argument payload stays the raw string (that is all the information there is).
+{
+  /** @type {any} */
+  let afterEvent;
+  /** @type {any} */
+  let errorEvent;
+  const hookRunner = {
+    getEventBus: () => ({
+      hasInterceptors: () => true,
+      intercept: async (event) => {
+        if (String(event.type).startsWith("tool:after:")) afterEvent = event;
+        if (String(event.type).startsWith("tool:error:")) errorEvent = event;
+      },
+    }),
+  };
+  const hooked = createExtensionsMiddleware({
+    getExtensionRunner: () => hookRunner,
+    getSessionId: () => "session-1",
+    emitEvent: () => {},
+  });
+  const toolCall = { function: { arguments: JSON.stringify({ path: "a.ts", limit: 5 }) } };
+  const args = { path: "a.ts", limit: 5 };
+
+  await hooked.onAfterToolCall?.(undefined, {
+    ok: true,
+    toolName: "read_file",
+    duration: 3,
+    result: { content: "ok" },
+    toolCall,
+  });
+  assert.deepEqual(afterEvent?.payload.args, args, "tool:after sees parsed args, not the JSON string");
+
+  await hooked.onAfterToolCall?.(undefined, {
+    ok: false,
+    toolName: "read_file",
+    duration: 3,
+    error: new Error("boom"),
+    toolCall,
+  });
+  assert.deepEqual(errorEvent?.payload.args, args, "tool:error sees the same shape");
+
+  // A truncated argument payload has no parseable object: keeping the raw string is the only honest
+  // answer, and it is what the old shape looked like for every call.
+  await hooked.onAfterToolCall?.(undefined, {
+    ok: true,
+    toolName: "read_file",
+    duration: 3,
+    result: { content: "ok" },
+    toolCall: { function: { arguments: '{"path":"a.ts"' } },
+  });
+  assert.equal(afterEvent?.payload.args, '{"path":"a.ts"', "a truncated payload stays the raw string");
+}
+
 console.log("extensions-middleware validation passed");

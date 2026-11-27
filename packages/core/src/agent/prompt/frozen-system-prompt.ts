@@ -48,9 +48,16 @@ export function buildFrozenSystemPrompt(input: SystemPromptInput): string | unde
 }
 
 /**
- * Frozen system prompt only (dynamic context is injected as synthetic user messages
- * by the turn-context middleware).
+ * The frozen system prompt as the runner's `systemPrompts` array — the only system text there is.
+ *
+ * Dynamic context is injected as synthetic user messages by the turn-context middleware, so this is
+ * deliberately NOT an assembly step. The middleware re-publishes the value on every `onConfig`
+ * because the runner is built with a build-time snapshot (`buildAgentRunner` reads it once): this is
+ * the live read, so a `resetSystemPrompt()` / rebuilt instruction file reaches the next model call
+ * even when the cached runner is reused. In the steady state the value is byte-identical, which is
+ * what keeps the prompt-cache prefix stable. It used to be named
+ * `buildSystemPromptWithTurnContext`, which claimed an assembly that no longer exists.
  */
-export function buildSystemPromptWithTurnContext(frozen: string | undefined): string[] | undefined {
+export function systemPromptsFromFrozen(frozen: string | undefined): string[] | undefined {
   return frozen ? [frozen] : undefined;
 }

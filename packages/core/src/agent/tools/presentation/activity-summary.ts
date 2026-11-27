@@ -117,6 +117,10 @@ export function emptyToolActivityCounts(): ToolActivityCounts {
 /**
  * Map a tool name to a summary bucket: display metadata registered by the tool
  * (extensions / custom tools) wins over the built-in table, then `"other"`.
+ *
+ * `"other"` here is a DISPLAY default, not a safety answer. Plan mode reads the raw declaration and
+ * treats an absent category as workspace-editing (fail closed), so the two deliberately disagree for
+ * an undeclared tool — do not "fix" this by sharing one resolver.
  */
 export function getToolActivityBucket(
   toolName: string,

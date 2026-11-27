@@ -14,7 +14,7 @@ import {
   applyAnthropicToolCacheBreakpoint,
   buildAnthropicCachedSystemPrompts,
   buildFrozenSystemPrompt,
-  buildSystemPromptWithTurnContext,
+  systemPromptsFromFrozen,
   createPromptCacheMiddleware,
   resolvePromptCacheKey,
   shouldApplyAnthropicCacheBreakpoints,
@@ -56,7 +56,7 @@ const frozen = buildFrozenSystemPrompt({
   config: { systemPrompt: "You are helpful." },
   agentDocContent: "",
 });
-const system = buildSystemPromptWithTurnContext(frozen);
+const system = systemPromptsFromFrozen(frozen);
 assert.ok(system?.[0]);
 assert.equal(system[0], frozen);
 assert.ok(!system[0].includes("<ctx kind="));

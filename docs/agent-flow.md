@@ -294,9 +294,10 @@ run 结束 `finalizeStream()` 去掉尾部空 shell 并补 tool display (`ui-cha
    `await applyCommandSafetyPolicy()`（对 `run_command` 的命令安全策略，`:542`）。
 7. `after` 再次检查 pending → break；`shouldKeepPumping`（工具还要续 / 队列有货）否则 break。
 
-`MAX_TOOL_PHASES = 40`（`:32`）。触顶后若仍需要跑，会**不 finalize** 地再排一个 pump（`:570-575`）：
-`reconcileWithPolicy(during-run)` → persist → `enqueueRunOnce()` → return。这样不会留下僵死的 `running`，
-也不会把队列困在没人 drain 的 turn 里。
+`MAX_TURN_TOOL_PHASES = 160`（每次用户 prompt 的总预算，跨所有链式 pump；不再有 per-pump 上限）。
+预算耗尽记为失败 turn（`TURN_PHASE_BUDGET_MESSAGE`），走下方共享尾部；若流提前结束而工具仍需要跑，
+会**不 finalize** 地再排一个 pump（`reconcileWithPolicy(during-run)` → persist → `enqueueRunOnce()` → return），
+这样不会留下僵死的 `running`，也不会把队列困在没人 drain 的 turn 里。
 
 队列语义（一次说清）：
 

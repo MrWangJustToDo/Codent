@@ -19,6 +19,30 @@ export interface ToolMetadata {
 
 const toolMetadata = new WeakMap<object, ToolMetadata>();
 
+/** The declaration-time `toModelOutput` signature (typed input/output, no raw contract). */
+type ToolModelOutputFn<TInput extends SchemaInput, TOutput extends SchemaInput> = (
+  ctx: ToModelOutputContext & { input: InferSchemaType<TInput>; output: InferSchemaType<TOutput> }
+) => Promise<ModelToolContent> | ModelToolContent;
+
+/**
+ * Adapt a declaration-time handler to the contract the registry calls.
+ *
+ * Shared by {@link defineServerTool} and {@link defineClientTool} so a client tool can compress its
+ * wire result like any other tool — the omission meant `ask_user`, the one structured client tool, was
+ * the only built-in without a projection, and an extension could not add one either.
+ */
+function wrapModelOutput<TInput extends SchemaInput, TOutput extends SchemaInput>(
+  fn: ToolModelOutputFn<TInput, TOutput> | undefined
+): ToModelOutputFn | undefined {
+  if (!fn) return undefined;
+  return (ctx) =>
+    fn({
+      toolCallId: ctx.toolCallId,
+      input: ctx.input as InferSchemaType<TInput>,
+      output: ctx.output as InferSchemaType<TOutput>,
+    });
+}
+
 /** Read the agent-local metadata attached by {@link defineServerTool} / {@link defineClientTool}. */
 export function getToolMetadata(tool: unknown): ToolMetadata | undefined {
   return typeof tool === "object" && tool !== null ? toolMetadata.get(tool) : undefined;
@@ -107,9 +131,7 @@ export function defineServerTool<
    * random truncation, wall-clock state) would silently change the wire prefix
    * and invalidate prompt cache for restored sessions.
    */
-  toModelOutput?: (
-    ctx: ToModelOutputContext & { input: InferSchemaType<TInput>; output: InferSchemaType<TOutput> }
-  ) => Promise<ModelToolContent> | ModelToolContent;
+  toModelOutput?: ToolModelOutputFn<TInput, TOutput>;
   /**
    * How this tool is presented: fold category, keep-row / detailed / client-side
    * flags, header summary, input label, and the result-text renderer (`text`).
@@ -122,14 +144,7 @@ export function defineServerTool<
    */
   present?: ToolPresentation;
 }): ServerTool<TInput, TOutput, TName> {
-  const modelOutput: ToModelOutputFn | undefined = config.toModelOutput
-    ? (ctx) =>
-        config.toModelOutput!({
-          toolCallId: ctx.toolCallId,
-          input: ctx.input as InferSchemaType<TInput>,
-          output: ctx.output as InferSchemaType<TOutput>,
-        })
-    : undefined;
+  const modelOutput: ToModelOutputFn | undefined = wrapModelOutput<TInput, TOutput>(config.toModelOutput);
 
   const serverTool = toolDefinition({
     name: config.name,
@@ -190,6 +205,11 @@ export function defineClientTool<
   needsApproval?: boolean;
   /** See {@link defineServerTool} `lazy` — lazy client tools are discovered on demand. */
   lazy?: boolean;
+  /**
+   * See {@link defineServerTool} `toModelOutput` — the model-facing projection of the result the host
+   * supplied through `addToolResult`. Omitted, the whole output object goes on the wire.
+   */
+  toModelOutput?: ToolModelOutputFn<TInput, TOutput>;
   /** See {@link defineServerTool} `present` — how the tool is displayed. */
   present?: ToolPresentation;
 }): ClientTool<TInput, TOutput, TName> {
@@ -202,8 +222,10 @@ export function defineClientTool<
     lazy: config.lazy,
   }).client() as ClientTool<TInput, TOutput, TName>;
 
+  const modelOutput = wrapModelOutput<TInput, TOutput>(config.toModelOutput);
   toolMetadata.set(clientTool, {
     ...(config.present ? { present: config.present } : {}),
+    ...(modelOutput ? { toModelOutput: modelOutput } : {}),
     approval: resolveApprovalRequirement(clientTool),
   });
   return clientTool;

@@ -247,6 +247,8 @@ export function parseUsageCommand(rawArgs = ""): UsageCommandIntent {
   const match = /^(\d+)\s*(?:w|weeks?)$/i.exec(rest);
   if (!match) return { kind: "invalid", value: raw };
   const weeks = Number(match[1]);
-  if (!Number.isFinite(weeks)) return { kind: "invalid", value: raw };
+  // A pathologically long digit run parses to `Infinity`; the clamp below turns that into the maximum
+  // (the documented shape: out-of-range is clamped, not rejected). An explicit guard here would only
+  // re-state the clamp with a different answer.
   return { kind: "history", view, weeks: Math.min(USAGE_HISTORY_MAX_WEEKS, Math.max(1, weeks)) };
 }

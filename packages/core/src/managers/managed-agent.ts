@@ -259,7 +259,13 @@ export type ManagedAgentConfig<T = ManagedAgent> = AgentConfig & {
    */
   compaction?: CompactionConfigInput;
   /**
-   * Post-construction hook (`buildManagedAgent` calls `config.setUp(instance)`).
+   * Constructor hook (`ManagedAgent` calls `config.setUp(instance)` at the end of its constructor and
+   * returns the result).
+   *
+   * It runs BEFORE the object graph is wired — `buildManagedAgent` builds the toolset, attaches the
+   * event bus and binds the log sink AFTER construction — so a hook cannot use tools or emit events.
+   * (The log seam itself is live: entries written here are retained in the pending buffer and drained
+   * into the first sink.) It is a construction-time replacement seam (and has no producer today).
    *
    * TODO(core-init): nothing in the repo sets it — no host, manager path, or validator. It works
    * when passed; it simply has no producer, so a customisation here is unreachable from every
@@ -1132,14 +1138,29 @@ export class ManagedAgent {
   }
 
   /**
-   * Legacy status writer (compaction's `compacting` value and host compatibility).
+   * Legacy status writer (host compatibility, plus `compaction-start`'s `compacting` phase when a host
+   * supplies no transition function).
    *
    * `@internal` — new writers use {@link transitionStatus}. Rebuilding the axes from a projection is
    * lossy by nature (it cannot see `resumeRun`/`resumeOutcome` behind a live compaction lease), so
-   * a destroyed agent — the one state that must never be resurrected — refuses it outright.
+   * a destroyed agent — the one state that must never be resurrected — refuses it outright, and
+   * `compacting` is accepted only from `compaction-start` (the lease has already been claimed).
    */
   setStatus(status: AgentStatus, event?: AgentStateEventType): void {
     if (this.destroyed) return;
+    // `compacting` is a LEASE state, not a projection a legacy writer may invent. The phase is
+    // ended only by the lease owner (`finish` / `release` / `cancel`), and every recovery path is
+    // lease-preconditioned — `begin()` supersedes only when an active lease exists, `stop()` has no
+    // run to interrupt, and `isParkedStatus("compacting")` is false. A write that named the phase
+    // without a claim therefore produced an agent nothing could un-stick except `/new` / `/resume`.
+    // `compaction-start` is the one sanctioned writer: the controller has already taken the lease.
+    if (status === "compacting" && event !== "compaction-start") {
+      this.emitDiagnostic("session", "Ignored a status write outside the compaction lease", {
+        level: "warn",
+        data: { status, event: event ?? null, reason: "compacting requires a claimed lease" },
+      });
+      return;
+    }
     // Two refusals, both "the projection is lossy" artifacts rather than policy:
     //
     // 1. A live compaction lease owns `run`, `outcome` and the three `resume*` fields, and
@@ -2045,10 +2066,16 @@ export class ManagedAgent {
   /**
    * Messages sent to the LLM after in-chain compaction summary projection.
    *
-   * Projects through {@link projectWireFromChannel} — the **same** function the
-   * compaction middleware uses per model call — so a manual `/compact`, a reactive
-   * compact, or memory extraction sees exactly the window the model receives. Keeping
-   * a second implementation here is what would let the two drift.
+   * Projects through {@link projectWireFromChannel} — the **same** function the compaction middleware
+   * uses per model call — so a manual `/compact`, a reactive compact, or memory extraction sees the
+   * same compaction WINDOW (summary + keep policy) the model is built from. Keeping a second
+   * implementation here is what would let the two drift.
+   *
+   * It is the window BEFORE the wire-only stages: `tool-compact` (`toModelOutput`),
+   * `message-transform` and `wire-recovery` run inside the chat pipeline and are not applied here.
+   * That is deliberate for a summarizer (it wants the untruncated result) but it means a transformer
+   * that redacts or replaces content for the model does not affect these readers — the same narrower
+   * view `ctx.getMessages()` documents.
    */
   getMessagesForLLM(canon?: ModelMessage[]): ModelMessage[] {
     // An explicit base (a pre-projected chain) bypasses the channel entirely.
@@ -3131,6 +3158,11 @@ export class ManagedAgent {
     // the command-safety round trip (a real CoreEnv call on a remote workspace), and could enter
     // another `executeStream`.
     this.run.invalidateCurrentRun();
+    // Invalidate alone was only half of the stop. The controller's pump depth is released by the
+    // same step that invalidates the token (`interruptCurrentRun`), so a caller that reached this
+    // method directly left `pumpDepth > 0` with no pump to decrement it — the agent then read as
+    // "running" forever and every later message parked in a queue nothing drains.
+    this.chatController?.releaseRunBookkeeping();
     this.cascadeAbortToChildren(reason);
     // A cancelled tool may never reach `onAfterToolCall`, so its command preview has no chance
     // to be marked ended. Settle every command stream here; completed previews remain available
@@ -3555,8 +3587,15 @@ export class ManagedAgent {
     return this.toolFacet.registerToolOutputDecorator(toolName, fn, ownerId, options);
   }
 
-  /** Remove every decorator belonging to an owner (extension disable/destroy). */
-  removeToolOutputDecoratorOwner(ownerId = this.id): void {
+  /**
+   * Remove every decorator belonging to an owner (extension disable/destroy).
+   *
+   * `ownerId` is required on purpose. The default used to be this agent's bare id, which never matches
+   * an EXTENSION's decorators: those are registered under
+   * `scopeExtensionOwnerId(agentId, extensionId)`. A caller that relied on the default therefore
+   * removed nothing and still looked successful.
+   */
+  removeToolOutputDecoratorOwner(ownerId: string): void {
     this.toolFacet.removeToolOutputDecoratorOwner(ownerId);
   }
 

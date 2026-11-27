@@ -166,6 +166,36 @@ for (const expected of ["write_file", "edit_file", "delete_file", "code_rewrite"
     true,
     "the unknown-effect rule is the same one the exclusion set uses"
   );
+
+  // A declaration WITHOUT `category` is not evidence of read-only. `present` is field-wise optional
+  // and `category` is documented as a fold bucket, so `present: { keepRow: true }` is a shape authors
+  // actually write; testing `category === "edits"` alone let it run during planning (fail open).
+  assert.equal(
+    isWorkspaceEditingTool("ext_declared_no_category", () => ({ keepRow: true })),
+    true,
+    "a declaration without a category is unknown-effect, not read-only"
+  );
+  assert.equal(
+    isWorkspaceEditingTool("ext_declared_reads", () => ({ category: "reads" })),
+    false,
+    "a read-only declaration is honoured"
+  );
+  assert.equal(
+    isWorkspaceEditingTool("ext_declared_edits", () => ({ category: "edits" })),
+    true,
+    "an editing declaration is withheld"
+  );
+  // …and the two paths the model actually meets agree with the classifier (offered set / call denied).
+  assert.equal(
+    isPlanModeForbiddenTool("ext_declared_no_category", () => ({ keepRow: true })),
+    true,
+    "a category-less declaration is withheld from the offered set too"
+  );
+  assert.match(
+    getPlanModeToolBlockReason(restricting, "ext_declared_no_category", {}, () => ({ keepRow: true })) ?? "",
+    /blocked while planning/i,
+    "a category-less declaration is refused if the call arrives anyway"
+  );
 }
 
 // ============================================================================

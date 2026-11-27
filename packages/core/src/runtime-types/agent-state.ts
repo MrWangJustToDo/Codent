@@ -302,10 +302,10 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
     case "pause":
       // A wait cannot be established while compaction owns the run: the restore guard is the
       // compaction lease, and a wait would change the projection out from under it.
+      // (`destroyed` is already rejected for every event but `teardown` at the top of this function,
+      // so a lifecycle check here would be unreachable.)
       if (state.run === "compacting") reject("pause requires no active compaction", event, options);
-      if (state.lifecycle !== "busy" && state.lifecycle !== "ready") {
-        reject(`pause requires a live agent, got ${state.lifecycle}`, event, options);
-      }
+
       // An APPROVAL wait belongs to the run that asked for it. A late `onToolPhaseComplete` (a retry,
       // a pump unwinding after an abort) used to pause a turn that had already settled: the
       // projection kept reporting error/aborted while `isActiveState` became true forever. A QUESTION

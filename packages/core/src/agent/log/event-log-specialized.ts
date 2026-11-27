@@ -51,13 +51,19 @@ function entry(
  * new category cannot be accepted by the sink but silently downgraded to `hooks` here. */
 const LOG_CATEGORIES: readonly LogCategory[] = logCategorySchema.options as readonly LogCategory[];
 
-/** Last `session:mcp` snapshot written per log.
+/** Last `session:mcp` snapshot written per log, and which LEVELS of it were actually emitted.
  *
  * The event is RETAINED — a snapshot re-published whenever an extension's state changes — but its
- * rule cell is a specialized handler, not `false`. Logging it verbatim therefore wrote the SAME
- * fact once per extension transition (one measured session had 33 identical "No MCP servers
- * configured" rows, seven of them inside 40ms). A snapshot is news only when it changed. */
-const lastMcpSnapshot = new WeakMap<AgentLog, string>();
+ * rule cell is a specialized handler, not `false`. Logging it verbatim therefore wrote the SAME fact
+ * once per extension transition (one measured session had 33 identical "No MCP servers configured"
+ * rows, seven of them inside 40ms). A snapshot is news only when it changed.
+ *
+ * The memo is level-aware in BOTH directions. Tracking the level at write time alone made a level
+ * change re-emit rows that were already written (debug → info duplicated every info row), while
+ * consuming the signature before the level check made `AGENT_LOG_LEVEL=warn` swallow the rows for
+ * good. Recording the LEVELS actually emitted answers both: a hidden row is retried when it becomes
+ * visible, and a visible one is never emitted twice for the same snapshot. */
+const lastMcpSnapshot = new WeakMap<AgentLog, { signature: string; written: Set<LogLevel> }>();
 
 function logSessionMcp(log: AgentLog, event: AgentEvent): void {
   const configSourceKind = p(event).configSourceKind as McpConfigSourceKind | undefined;
@@ -70,46 +76,52 @@ function logSessionMcp(log: AgentLog, event: AgentEvent): void {
     configLoadedFrom ?? null,
     [...servers].sort((a, b) => a.name.localeCompare(b.name)),
   ]);
-  if (lastMcpSnapshot.get(log) === signature) return;
-  lastMcpSnapshot.set(log, signature);
 
+  const rows: Array<{ level: LogLevel; message: string }> = [];
   // The source is the answer to "why did my mcp.json not apply?", so a session-options session
   // says so explicitly — without it the absence of a config path reads as "no config found".
   if (configSourceKind === "session-options") {
-    entry(
-      log,
-      event,
-      "info",
-      "system",
-      "MCP config: supplied by the session's create options (config file not consulted)"
-    );
+    rows.push({
+      level: "info",
+      message: "MCP config: supplied by the session's create options (config file not consulted)",
+    });
   } else if (configLoadedFrom) {
-    entry(log, event, "info", "system", `MCP config: ${configLoadedFrom}`);
+    rows.push({ level: "info", message: `MCP config: ${configLoadedFrom}` });
   }
   if (servers.length === 0) {
-    entry(log, event, "debug", "system", "No MCP servers configured");
-    return;
+    rows.push({ level: "debug", message: "No MCP servers configured" });
+  } else {
+    for (const server of servers) {
+      if (server.status === "connected") {
+        // `name/transport` is the shape the MCP diagnostics have always used, and it is what makes
+        // "which server, over which transport" answerable from one line. It lives HERE (event →
+        // single policy) rather than as a second `ctx.logger` row in the extension.
+        rows.push({
+          level: "info",
+          message: `MCP server: ${server.name}/${server.transport} (${server.toolCount ?? 0} tools)`,
+        });
+      } else if (server.status === "disabled") {
+        // A deliberate `enabled: false` is not a failure. Logging it as one put a false "MCP server
+        // failed" line in every session's agent.log for a server the user switched off on purpose.
+        rows.push({ level: "debug", message: `MCP server disabled: ${server.name}` });
+      } else {
+        rows.push({ level: "warn", message: `MCP server failed: ${server.name} — ${server.error ?? "unknown"}` });
+      }
+    }
   }
 
-  for (const server of servers) {
-    if (server.status === "connected") {
-      // `name/transport` is the shape the MCP diagnostics have always used, and it is what makes
-      // "which server, over which transport" answerable from one line. It lives HERE (event →
-      // single policy) rather than as a second `ctx.logger` row in the extension.
-      entry(
-        log,
-        event,
-        "info",
-        "system",
-        `MCP server: ${server.name}/${server.transport} (${server.toolCount ?? 0} tools)`
-      );
-    } else if (server.status === "disabled") {
-      // A deliberate `enabled: false` is not a failure. Logging it as one put a false "MCP server
-      // failed" line in every session's agent.log for a server the user switched off on purpose.
-      entry(log, event, "debug", "system", `MCP server disabled: ${server.name}`);
-    } else {
-      entry(log, event, "warn", "system", `MCP server failed: ${server.name} — ${server.error ?? "unknown"}`);
-    }
+  const previous = lastMcpSnapshot.get(log);
+  const written = previous?.signature === signature ? previous.written : new Set<LogLevel>();
+  const pending = rows.filter((row) => log.isLevelEnabled(row.level) && !written.has(row.level));
+  for (const row of pending) {
+    entry(log, event, row.level, "system", row.message);
+    written.add(row.level);
+  }
+  // Record even when nothing was written: the signature is what stops a re-published snapshot from
+  // being re-evaluated forever, and `written` is empty in that case, so a later level that reveals a
+  // row still emits it exactly once.
+  if (pending.length > 0 || previous?.signature !== signature) {
+    lastMcpSnapshot.set(log, { signature, written });
   }
 }
 

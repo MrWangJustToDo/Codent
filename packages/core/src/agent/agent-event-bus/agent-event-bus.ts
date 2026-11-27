@@ -63,7 +63,7 @@ class EventBusScopeNode {
 // ============================================================================
 
 /** Match an interceptor key against a concrete event name (`prefix:*` supported). */
-function interceptorMatches(pattern: string, name: string): boolean {
+export function interceptorMatches(pattern: string, name: string): boolean {
   if (pattern === name) return true;
   if (pattern.endsWith("*")) return name.startsWith(pattern.slice(0, -1));
   return false;

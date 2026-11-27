@@ -10,8 +10,9 @@ import type { ToolsRecord } from "../tools/catalog/tool-set.js";
  * Tools withheld while planning or ready that do NOT write the workspace, each with its reason.
  *
  * The workspace-mutating half is DERIVED from the tool's own declaration
- * ({@link isWorkspaceEditingTool}, i.e. `present.category === "edits"`) rather than listed here, so an
- * editing tool cannot become available in plan mode by arriving under a name nobody remembered to add:
+ * ({@link isWorkspaceEditingTool} — `present.category === "edits"`, or no category at all) rather than
+ * listed here, so an editing tool cannot become available in plan mode by arriving under a name
+ * nobody remembered to add:
  * `code_rewrite` was exactly that — a built-in that edits in place with `dry_run: false` and appeared
  * on no list. What remains below needs a different rule, and each entry says which:
  *
@@ -34,6 +35,12 @@ export const PLAN_MODE_EXCLUDED_NON_EDIT_TOOL_NAMES: ReadonlySet<string> = new S
  * planning/ready. Plan mode is a safety boundary, so unknown effects fail closed; an extension
  * that is genuinely read-only declares its presentation (and therefore becomes visible to the UI
  * as well).
+ *
+ * **A declaration without `category` is also undeclared for this question.** `present` is field-wise
+ * optional, and `category` was documented as a fold bucket only — which is how a third-party tool ends
+ * up declaring `present: { keepRow: true }` and nothing else. Testing
+ * `presentation.category === "edits"` alone made that shape read as read-only and bypass the
+ * boundary — the opposite of the rule above, with the same consequence.
  */
 export function isWorkspaceEditingTool(toolName: string, resolve = getBuiltinToolPresentation): boolean {
   // The engine's synthesized discovery tool is not a tool of this workspace at all: it is not in
@@ -44,7 +51,9 @@ export function isWorkspaceEditingTool(toolName: string, resolve = getBuiltinToo
   if (toolName === DISCOVERY_TOOL_NAME) return false;
   const presentation = resolve(toolName);
   if (!presentation) return true;
-  return presentation.category === "edits";
+  // An absent `category` is "undeclared effects", not "read-only": the field is optional on
+  // extension tools and was documented as a fold bucket, so its absence carries no evidence.
+  return presentation.category === undefined || presentation.category === "edits";
 }
 
 /** Plan authoring tools — only offered while planning/ready. */

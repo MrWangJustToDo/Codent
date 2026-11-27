@@ -443,7 +443,8 @@ Rules that keep `packages/core` internally consistent. Deviations need a reason 
   mandatory to say why not: the `/* eslint-disable max-lines */` at the top of such a file must
   be paired with a written justification naming what the file composes and which parts were
   extracted instead — the current members are `agent/extension/runner.ts`,
-  `managers/managed-agent.ts` and `agent/run/chat-controller.ts`, and
+  `managers/managed-agent.ts`, `agent/run/chat-controller.ts`,
+  `managers/services/session-service.ts` and `agent/log/event-log-rules.ts`, and
   their headers name what was split out — and `validate:file-size` fails an allowlisted file that
   drops back under the ceiling so the list cannot go stale. The guard scans **every** package's
   source with the same metric as ESLint (non-blank lines) — `src` when the package has one, the
@@ -973,9 +974,13 @@ via `AgentStreamHub` (`reset` / `append` / `end` on key `task:${toolCallId}`) in
 `SummaryStreamView` — not UIMessage diffs or the command stream sink (those remain for `run_command`).
 On restart-style stream recovery (429 / capability sanitize), `AgentUIChannel.resetRetryUiState()`
 resets only the attempt-scoped UI state (the streamed summary banner text + phase unlock), for **both**
-profiles. It must never touch the message history: the retry's wire is re-projected from the channel
-(`compaction.onConfig`), so dropping rows there restarts the exploration instead of resuming it — the
-subagent-only version of this reset is what made a `task` re-explore after a network drop.
+profiles. It may drop exactly ONE row: the failed attempt's trailing **text-only** assistant message —
+the prefix the retry re-streams, which would otherwise be duplicated into the answered turn, the
+session file and every later wire. Two shapes must survive, and the retry's wire depends on it (it is
+re-projected from the channel by `compaction.onConfig`): a **tool-bearing** row (the progress the retry
+resumes from) and a row that **predates the run** (a wake turn's previous answer, or a stale retry on a
+fresh transcript — deleting it would rewrite the user's transcript). History loss of the tool-bearing
+kind is what made a `task` re-explore after a network drop.
 Terminal non-abort failures still call `failRun()`, but only to trim the **panel**: the run reaches
 the shared finalization (so the parent gets `incomplete: true` + the fault in the summary) instead of
 rethrowing out of `runSubagent` — a dead `task` used to surface as a bare tool error with no flags.

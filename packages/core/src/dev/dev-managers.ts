@@ -86,7 +86,7 @@ export {
   buildProjectInstructionsSection,
 } from "../agent/turn-context/prompt-builder.js";
 export {
-  buildSystemPromptWithTurnContext,
+  systemPromptsFromFrozen,
   buildFrozenSystemPrompt,
 } from "../agent/prompt/frozen-system-prompt.js";
 export { createPromptCacheMiddleware } from "../managers/middleware/prompt-cache-middleware.js";

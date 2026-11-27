@@ -436,4 +436,23 @@ registerCoreEnv({
   assert.equal(aborted.getStatus(), "error", "a failure may replace an abort (the newer fact wins)");
 }
 
+// ---------------------------------------------------------------------------
+// 6. `compacting` is a LEASE state, not a projection a legacy writer may invent
+// ---------------------------------------------------------------------------
+// Every recovery path is lease-preconditioned: `stop()` has no run to interrupt, `/compact` cannot
+// supersede without an active lease, and `isParkedStatus("compacting")` is false. A write that named
+// the phase without a claim therefore produced an agent nothing could un-stick except `/new`.
+{
+  const manager = new AgentManager();
+  const agent = await manager.createManagedAgent({ name: "legacy-compacting", model: "test-model" });
+
+  agent.setStatus("running");
+  agent.setStatus("compacting");
+  assert.notEqual(agent.getStatus(), "compacting", "a bare `compacting` write is refused (no lease could end it)");
+
+  // The sanctioned writer: the controller already claimed the lease before publishing the phase.
+  agent.setStatus("compacting", "compaction-start");
+  assert.equal(agent.getStatus(), "compacting", "the lease-owning writer still works");
+}
+
 console.log("managed-agent-state validation passed");

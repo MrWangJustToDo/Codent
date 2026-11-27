@@ -14,6 +14,10 @@
  *
  * A per-tool pattern may end in `*`: `interceptorMatches` treats a trailing `*` as a prefix match,
  * so `tool:before:*` and `tool:before:run_*` are both legitimate registrations.
+ *
+ * The `*` must be LAST. `interceptorMatches` has no other wildcard form, so `tool:before:*_command`
+ * used to pass this check and then never match anything — the same silent fail-open this module
+ * exists to prevent, one layer down.
  */
 
 /** Hooks that are a single fixed name (no per-tool suffix). */
@@ -26,13 +30,22 @@ export type ToolInterceptorFamily = "tool:before" | "tool:after" | "tool:error";
 
 export type InterceptorHook = StaticInterceptorHook | `${ToolInterceptorFamily}:${string}`;
 
-const TOOL_HOOK_PATTERN = /^tool:(?:before|after|error):.+$/;
+const TOOL_HOOK_PATTERN = /^tool:(?:before|after|error):/;
 
 /** Whether `value` names a hook the runtime dispatches (the runtime arm of {@link InterceptorHook}). */
 export function isInterceptorHook(value: string): value is InterceptorHook {
-  return (STATIC_INTERCEPTOR_HOOKS as readonly string[]).includes(value) || TOOL_HOOK_PATTERN.test(value);
+  if ((STATIC_INTERCEPTOR_HOOKS as readonly string[]).includes(value)) return true;
+  const prefix = TOOL_HOOK_PATTERN.exec(value);
+  if (!prefix) return false;
+  const suffix = value.slice(prefix[0].length);
+  if (suffix.length === 0) return false;
+  // `interceptorMatches` only understands a TRAILING `*` (prefix match). A `*` anywhere else would
+  // register a handler that can never fire — a silent fail-open for a `tool:before:*` guard.
+  const body = suffix.endsWith("*") ? suffix.slice(0, -1) : suffix;
+  return !body.includes("*");
 }
 
 /** Human-readable list for a refusal message. */
 export const INTERCEPTOR_HOOK_HELP =
-  "before_agent_start, session:bootstrap, session:shutdown, or tool:before|after|error:<tool name>";
+  "before_agent_start, session:bootstrap, session:shutdown, or tool:before|after|error:<tool name> " +
+  "(a per-tool name may be a `prefix*` pattern; the `*` must be LAST)";

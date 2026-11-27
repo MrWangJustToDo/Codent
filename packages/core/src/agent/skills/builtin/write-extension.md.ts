@@ -232,7 +232,8 @@ const off = ctx.registerInterceptor("tool:after:edit_file", async (event, ctx) =
 only meant to observe.
 
 Hook names support a \`prefix:*\` wildcard: \`tool:before:*\` observes **every** tool call.
-Match is on the literal prefix, so \`tool:before:run_*\` works too.
+Match is on the literal prefix, so \`tool:before:run_*\` works too — but the \`*\` must be the LAST
+character. \`tool:before:*_command\` is refused, because a wildcard anywhere else could never match.
 An unknown hook name is refused at registration (the runtime logs a warning naming the valid hooks)
 rather than registering a handler that can never run.
 
@@ -244,6 +245,10 @@ rather than registering a handler that can never run.
 | \`tool:before:<name>\` | \`{ toolName, args, sessionId? }\` — \`sessionId\` is the disk session that owns the call (the parent session for a subagent) and is **omitted** when the host has no session store yet. Set \`event.skip = true\` to cancel (add \`event.reason\` to explain), or \`event.modifiedArgs = …\` to rewrite the arguments. The rewrite is **refused** for approval-gated tools and for \`task\`: their approval/safety decision (or the pre-forked child) was already made from the original arguments, so the call runs unchanged and the refusal is logged. |
 | \`tool:after:<name>\` | \`{ toolName, args, result, durationMs }\`. Set \`event.payload.modifiedResult = …\` to replace the result the model receives. |
 | \`tool:error:<name>\` | \`{ toolName, args, error }\`. Observe-only; use it to log or alert. |
+
+In all three per-tool hooks \`args\` is the **parsed** argument object (the same shape \`tool:before\`
+sees), not the raw JSON string. Only a truncated argument payload arrives as the original string —
+there is nothing parseable to hand you.
 
 ### \`ctx.events.observe(type, handler)\` — react to what happened
 
@@ -338,7 +343,7 @@ with the message — so declare display here rather than in the host.
 | Field | Effect |
 |---|---|
 | \`text(output)\` | The one string the call shows. In compact display it is one clamped line **and the row is kept** — keep it short and single-line. |
-| \`category\` | Fold bucket: \`reads\` \\| \`edits\` \\| \`searches\` \\| \`commands\` \\| \`tasks\` \\| \`other\`. |
+| \`category\` | Fold bucket **and safety declaration**: \`reads\` \\| \`edits\` \\| \`searches\` \\| \`commands\` \\| \`tasks\` \\| \`other\`. Plan mode withholds \`edits\`, and treats a tool with **no category** as editing (fail closed) — a tool that writes the workspace must declare \`edits\`, and a read-only tool should declare its real category or it is withheld while planning. |
 | \`label(input)\` | Short text after the count in a folded summary (a filename, a query). Without it the row is just \`my_tool ×2\`. |
 | \`summary(output)\` | Header text, e.g. \`3 matches\`. |
 | \`keepRow\` | Never fold this row (structured / interactive results). |

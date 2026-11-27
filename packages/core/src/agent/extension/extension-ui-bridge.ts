@@ -111,8 +111,24 @@ export function createExtensionUiBridge(options: ExtensionUiBridgeOptions): Exte
   };
 
   const contextUnsubs: Array<() => void> = [];
+  // Broadcast delivery is `self → ancestors`, so a CHILD agent's `agent:state` / `session:usage` /
+  // `session:mode` arrive here too, and without a filter the parent pushed an identical context frame
+  // every throttle window for the whole life of a delegated task (the snapshot is read from the
+  // parent's retained values, so the payload never changed). The scope id IS the agent id — the
+  // scope's own events carry it — which is why this needs no injected owner id: a standalone bus is
+  // its own scope, so its events pass the same test.
+  const { scopeId } = bus;
   for (const type of ["agent:state", "session:usage", "session:mode"] as const) {
-    contextUnsubs.push(bus.on(type, () => scheduleContextPush(), { replay: false }));
+    contextUnsubs.push(
+      bus.on(
+        type,
+        (event) => {
+          if (event.agentId !== scopeId) return;
+          scheduleContextPush();
+        },
+        { replay: false }
+      )
+    );
   }
 
   return {

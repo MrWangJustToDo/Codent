@@ -36,6 +36,14 @@ export {
 } from "./agent/extension/tool-before-hook.js";
 export { classifyShell, isShellParsable } from "./agent/tools/builtin/shell/safety/command-parser.js";
 export { tokenizeCommandString } from "./agent/tools/builtin/shell/safety/command-tokenizer.js";
+// The runtime arm of the interceptor hook set: a hook that passes here but cannot match is a silent
+// fail-open for a `tool:before:*` guard, so the grammar (including wildcard position) is asserted
+// together with the matcher it is written for.
+export { isInterceptorHook } from "./agent/extension/interceptor-hooks.js";
+export { interceptorMatches } from "./agent/agent-event-bus/agent-event-bus.js";
+// The extension UI bridge's owner filter: a subscription that forgets `agentId` pushes an identical
+// context frame for every delegated child event, which is invisible except as traffic.
+export { createExtensionUiBridge } from "./agent/extension/extension-ui-bridge.js";
 export { walkTree, formatAsTree } from "./agent/tools/builtin/fs/tree-tool.js";
 // Tool factories for behavioural validators. These live here (not in the published entry) so a
 // validator can exercise the real tool code with a stubbed CoreEnv — the alternative is testing

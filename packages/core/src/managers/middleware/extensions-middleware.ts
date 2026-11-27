@@ -5,6 +5,7 @@ import { isAbortError, isCancelledOutputMarker } from "../../runtime-types/abort
 import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
 import { isExtensionDeniedOutput } from "../../runtime-types/tool-denial.js";
 import { errorMessage } from "../../utils/errors.js";
+import { parseToolArguments } from "../../utils/parse-tool-arguments.js";
 
 import type { ExtensionRunner } from "../../agent/extension/runner.js";
 import type { ToolAfterEvent } from "../../agent/extension/types.js";
@@ -189,7 +190,11 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
           type: eventType,
           payload: {
             toolName: info.toolName,
-            args: info.toolCall.function.arguments,
+            // Parsed, like `tool:before`'s `args`. The raw JSON string used to arrive here, so an
+            // extension reading `event.payload.args.path` got `undefined` from `tool:after` and an
+            // object from `tool:before`. A truncated argument payload stays the raw string, which is
+            // the only information available for it.
+            args: parseToolArguments(info.toolCall.function.arguments),
             // Interceptors observe a DETACHED copy when one is listening: a tool result is stored
             // on the channel (and persisted to the session log) immediately afterwards, so an
             // in-place edit of the "shared mutable" payload used to rewrite durable history. The
@@ -214,7 +219,11 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
           type: `tool:error:${info.toolName}`,
           payload: {
             toolName: info.toolName,
-            args: info.toolCall.function.arguments,
+            // Parsed, like `tool:before`'s `args`. The raw JSON string used to arrive here, so an
+            // extension reading `event.payload.args.path` got `undefined` from `tool:after` and an
+            // object from `tool:before`. A truncated argument payload stays the raw string, which is
+            // the only information available for it.
+            args: parseToolArguments(info.toolCall.function.arguments),
             error: errorMessage(info.error),
           },
           defaultReturn: undefined,

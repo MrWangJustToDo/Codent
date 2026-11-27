@@ -19,7 +19,7 @@ import {
   SPECIALIZED_EVENT_LOG_TYPES,
 } from "../dist/dev.mjs";
 
-import { createLogCapture, waitFor } from "./helpers/log-capture.mjs";
+import { createLogCapture, sleep, waitFor } from "./helpers/log-capture.mjs";
 
 const capture = await createLogCapture("event-log-bridge");
 const { log, readEntries } = capture;
@@ -422,6 +422,19 @@ const preforkStart = entries.find(
 );
 assert.match(preforkStart.message, /^Tool start: task \(pre-fork\)/, "the eager start is labelled");
 
+// A per-subagent failure row carries its task binding in the MESSAGE, not only in `data`: the suffix
+// is what lets a human (and a task-scoped filter) pair it with the `task` call without a lookup.
+entries = await emitAndRead({
+  type: "subagent:progress-summary-error",
+  ts: Date.now(),
+  agentId: "agent-1",
+  payload: { subagentId: "sub-7", parentAgentId: "agent-1", parentTaskToolCallId: "task-9", error: "boom" },
+});
+const summaryError = entries.find((entry) => entry.event === "subagent:progress-summary-error");
+assert.ok(summaryError);
+assert.match(summaryError.message, /\[task task-9\]/, "the failure row names the task it belongs to");
+assert.match(summaryError.message, /boom/, "…and keeps the error");
+
 console.log("bridged entries persisted to JSONL sink: OK");
 console.log("payload summarization (bytes+preview, no eventType): OK");
 console.log("memory debug streams silent: OK");
@@ -445,6 +458,46 @@ console.log("approval request + resolution bridged: OK");
   policyBus.emit("compaction:auto-complete", { tokensBefore: 1, tokensAfter: 0 });
   policyCapture.log.flushSync();
   assert.equal((await policyCapture.readEntries()).length, before, "explicit false suppresses custom-handler events");
+}
+
+// The `session:mcp` content-hash dedupe is level-aware in BOTH directions. Consuming the signature
+// before the level check made `AGENT_LOG_LEVEL=warn` swallow these rows for good (`entry()` filters
+// per line and cannot undo a stamp); remembering only "the level at write time" then duplicated every
+// row already written when the level changed. The memo records the LEVELS actually emitted.
+{
+  const levelCapture = await createLogCapture("event-log-bridge-mcp-level");
+  const levelBus = createAgentEventBus();
+  bridgeTelemetryToAgentLog(levelBus, () => levelCapture.log);
+  const snapshot = {
+    configLoadedFrom: "/tmp/.agents/mcp.json",
+    servers: [{ name: "srv", status: "connected", transport: "stdio", toolCount: 2 }],
+  };
+  const mcpRows = async () =>
+    (await levelCapture.readEntries()).filter((entry) => entry.event === "session:mcp").length;
+
+  // `warn` hides every row this snapshot produces, so nothing is written…
+  levelCapture.log.setMinLevel("warn");
+  levelBus.emit("session:mcp", snapshot);
+  await sleep(80);
+  assert.equal(await mcpRows(), 0, "a level that hides every row writes nothing");
+
+  // …and lowering it to `info` must emit them, i.e. the hidden pass must not consume the fact.
+  levelCapture.log.setMinLevel("info");
+  levelBus.emit("session:mcp", snapshot);
+  await waitFor(mcpRows, (count) => count > 0);
+  const atInfo = await mcpRows();
+  assert.ok(atInfo > 0, "a level change re-evaluates the snapshot instead of swallowing it");
+
+  // The same snapshot at the same level is not repeated.
+  levelBus.emit("session:mcp", snapshot);
+  await sleep(80);
+  assert.equal(await mcpRows(), atInfo, "the same snapshot at the same level is not logged twice");
+
+  // A level change that reveals nothing new must not duplicate the rows already written.
+  levelCapture.log.setMinLevel("debug");
+  levelBus.emit("session:mcp", snapshot);
+  await sleep(120);
+  assert.equal(await mcpRows(), atInfo, "a level change that reveals no new row does not duplicate");
 }
 
 // The rule table's `"specialized"` marker and the handler map are one fact stated twice (the table

@@ -20,6 +20,17 @@ export function isToolCallPart(part: { type?: string }): part is ToolCallPart {
 }
 
 /**
+ * Whether a part is any tool part (`tool-call` or `tool-result`).
+ *
+ * The distinction matters for "does this assistant row carry progress?": a row can hold a
+ * `tool-result` without a call (the restore/deny/incomplete passes write them that way), and treating
+ * only `tool-call` as progress made such a row look like discarded text.
+ */
+export function isToolPart(part: { type?: string }): boolean {
+  return part.type === "tool-call" || part.type === "tool-result";
+}
+
+/**
  * The LAST part carrying this tool-call id — the live call.
  *
  * Provider ids are request-scoped and reused (`call_0`), so the transcript routinely holds several

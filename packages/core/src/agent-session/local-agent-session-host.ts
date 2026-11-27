@@ -396,10 +396,15 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
 
   async destroy(agentId: string): Promise<void> {
     // Cascade: drop cached sessions for the agent and any children (the manager
-    // already removes them from its registry). Child sessions expose their
-    // parent via snapshot.parentId.
+    // already removes them from its registry).
     for (const [id, entry] of [...this.sessions.entries()]) {
-      const parentId = entry.getSnapshot().parentId;
+      // `parentId` is identity, not presentation. `getSnapshot()` builds the whole UI projection —
+      // a transcript copy, subagent summaries, jobs and the tool catalog — for one constant field,
+      // and this loop runs for every cached session on every switch/new/delete. A ROOT agent's
+      // `parentId` is `undefined`, so `?? snapshot` would pay the full projection for the one entry
+      // that is always present; only an entry the manager no longer holds needs the fallback.
+      const agent = this.manager.getAgent(id);
+      const parentId = agent ? agent.parentId : entry.getSnapshot().parentId;
       if (id === agentId || parentId === agentId) {
         this.sessions.delete(id);
         // Release the handle's bus subscription with it. `destroyAgent` clears the agent scope,

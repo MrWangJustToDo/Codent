@@ -775,7 +775,9 @@ const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> =
     level: "warn",
     category: "system",
     formatMessage: (event) =>
-      `Progress summary failed for subagent ${p(event).subagentId ?? event.agentId}: ${p(event).error ?? "unknown"}`,
+      `Progress summary failed for subagent ${p(event).subagentId ?? event.agentId}:${taskBindingSuffix(p(event))} ${
+        p(event).error ?? "unknown"
+      }`,
   },
   "subagent:destroyed": {
     level: "info",

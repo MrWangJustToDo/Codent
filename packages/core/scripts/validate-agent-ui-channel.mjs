@@ -353,7 +353,7 @@ assert.equal(monoSnap.pendingLine, "line6");
 unsubMono();
 
 // ============================================================================
-// resetRetryUiState keeps the message history, rolls summary phase back, clears hub text
+// resetRetryUiState keeps tool-bearing history, rolls summary phase back, clears hub text
 // ============================================================================
 
 const retryHub = new AgentStreamHub();
@@ -422,8 +422,9 @@ await retryChannel.consumeRun({
     };
     // Simulate the retry-time UI reset (as runStreamWithRecovery does before a restart retry).
     retryChannel.resetRetryUiState();
-    // The history is the wire: what the dead attempt already did must survive the reset, or the
-    // retry re-explores from the prompt. (Subagent-only history loss is the bug this guards.)
+    // The TOOL-BEARING history is the wire: what the dead attempt already did must survive the reset,
+    // or the retry re-explores from the prompt. (Subagent-only tool-history loss is the bug this
+    // guards; an unanswered TEXT prefix is the one row the reset may drop.)
     assert.equal(retryChannel.getMessages()[0].role, "user");
     assert.equal(retryChannel.getMessages().length, 2, "the attempt's history is kept (prompt + in-flight assistant)");
     assert.ok(
@@ -482,37 +483,6 @@ assert.equal(retrySnap.status, "ended");
 assert.equal(retrySnap.pendingLine, "C".repeat(80));
 // consumeRun finally ends the hub and unlocks phase; live phase is only meaningful mid-run
 unsubRetry();
-
-// resetRetryUiState drops NO messages — not even assistant rows. The channel history is the wire
-// (`compaction.onConfig` re-projects from it every attempt), so a subagent that already explored
-// keeps that exploration across a retry instead of restarting from its prompt.
-const tcRetryChannel = new AgentUIChannel({
-  initialMessages: [
-    {
-      id: "tc-msg",
-      role: "user",
-      parts: [{ type: "text", content: "<ctx kind=current_date>\nnow\n</ctx>" }],
-      createdAt: new Date(),
-    },
-    {
-      id: "prompt-msg",
-      role: "user",
-      parts: [{ type: "text", content: "find the test framework" }],
-      createdAt: new Date(),
-    },
-    {
-      id: "assistant-tc",
-      role: "assistant",
-      parts: [{ type: "text", content: "partial work" }],
-      createdAt: new Date(),
-    },
-  ],
-});
-tcRetryChannel.resetRetryUiState();
-assert.equal(tcRetryChannel.getMessages().length, 3, "the retry reset drops no message at all");
-assert.equal(tcRetryChannel.getMessages()[0].parts[0].content, "<ctx kind=current_date>\nnow\n</ctx>");
-assert.equal(tcRetryChannel.getMessages()[1].parts[0].content, "find the test framework");
-assert.equal(tcRetryChannel.getMessages()[2].parts[0].content, "partial work");
 
 // failRun keeps the seeded prompt (+ optional error message) and clears summary state
 const failChannel = new AgentUIChannel({
