@@ -2,7 +2,7 @@ import { Box, Text } from "ink";
 
 import { COLORS } from "../theme/colors.js";
 
-import type { TodoItem, TodoPriority, TodoStatus } from "@codent/core";
+import type { TodoItem, TodoStatus } from "@codent/core";
 
 // ============================================================================
 // Visual constants
@@ -38,12 +38,6 @@ const STATUS_ICONS: Record<TodoStatus, string> = {
   completed: "[✓]",
 };
 
-const PRIORITY_LABELS: Record<TodoPriority, string | null> = {
-  high: "HIGH",
-  medium: null,
-  low: "low",
-};
-
 // ============================================================================
 // Types
 // ============================================================================
@@ -61,7 +55,6 @@ export interface TodoToolOutputViewProps {
 const TodoRow = ({ item, stepIndex, showStep }: { item: TodoItem; stepIndex: number; showStep: boolean }) => {
   const icon = STATUS_ICONS[item.status];
   const color = statusColor(item.status);
-  const priorityLabel = PRIORITY_LABELS[item.priority];
 
   return (
     <Box flexDirection="row" gap={1}>
@@ -78,13 +71,6 @@ const TodoRow = ({ item, stepIndex, showStep }: { item: TodoItem; stepIndex: num
       <Text color={color} wrap="wrap">
         {item.content}
       </Text>
-      {priorityLabel && (
-        <Box flexShrink={0}>
-          <Text color={item.priority === "high" ? COLORS.danger : COLORS.muted} dimColor>
-            [{priorityLabel}]
-          </Text>
-        </Box>
-      )}
     </Box>
   );
 };
@@ -104,6 +90,10 @@ function isPlanTodoSource(source?: string | null): boolean {
  * Rich todo list renderer for the `todo` tool output.
  *
  * Plan-sourced lists (`source=plan`) get step numbers.
+ *
+ * Priority is deliberately NOT rendered: it is the agent's scheduling input (and the todo tool's
+ * model-facing formatter carries it), not a fact the user needs beside every row. Status already
+ * owns the row's colour, so a `[HIGH]` tag only competed with it for attention.
  */
 export const TodoToolOutputView = ({ items, source }: TodoToolOutputViewProps) => {
   if (items.length === 0) return null;
